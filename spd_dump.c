@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <ctype.h> // tolower
+#include <math.h>
 
 #ifndef LIBUSB_DETACH
 /* detach the device from crappy kernel drivers */
@@ -988,7 +989,7 @@ static uint64_t str_to_size(const char *str) {
 int main(int argc, char **argv) {
 	spdio_t *io = NULL; int ret, i;
 	int wait = 30 * REOPEN_FREQ;
-	int fdl_loaded = 0, exec_addr = 0;
+	int fdl_loaded = 0, exec_addr = 0, nand_id = 0x15;
 	uint32_t ram_addr = ~0u;
 	int keep_charge = 1, end_data = 1, blk_size = 0, disable_transcode = 1;
 	char execfile[40];
@@ -1202,6 +1203,15 @@ int main(int argc, char **argv) {
 			}
 			argc -= 2; argv += 2;
 
+		} else if (!strcmp(argv[1], "nand_id")) {
+			FILE* fi;
+			if (argc <= 2) ERR_EXIT("nand_id id\n");
+			else{
+				nand_id = strtol(argv[2], NULL, 0);
+				DBG_LOG("current nand_id is 0x%x\n", nand_id);
+			}
+			argc -= 2; argv += 2;
+
 		} else if (!strcmp(argv[1], "read_flash")) {
 			const char *fn; uint64_t addr, offset, size;
 			if (argc <= 5) ERR_EXIT("bad command\n");
@@ -1243,7 +1253,23 @@ int main(int argc, char **argv) {
 
 			name = argv[2];
 			offset = str_to_size(argv[3]);
-			size = str_to_size(argv[4]);
+			if (memcmp(argv[4], "ubi", 3)) size = str_to_size(argv[4]);
+			else {
+				char* end;
+				uint64_t n;
+				uint8_t id0, id1, id2;
+				id0 = (uint8_t)pow(2, nand_id & 3); //page size
+				id1 = 32 / (uint8_t)pow(2, (nand_id >> 2) & 3); //spare area size
+				id2 = 64 * (uint8_t)pow(2, (nand_id >> 4) & 3); //block size
+				n = strtoull(&argv[4][3], &end, 0);
+				if (*end) {
+					char suffix = tolower(*end);
+					if (suffix != 'm') ERR_EXIT("only support mb as unit\n");
+					int block = n * (1024 / id2) + n * (1024 / id2) / (512 / id1) + 1;
+					size = 1024 * (id2 - 2 * id0) * block;
+				}
+				else size = n;
+			}
 			fn = argv[5];
 			if (offset + size < offset)
 				ERR_EXIT("64-bit limit reached\n");
@@ -1344,6 +1370,7 @@ int main(int argc, char **argv) {
 			DBG_LOG("fdl FILE addr\n");
 			DBG_LOG("exec\n");
 			DBG_LOG("read_part part_name offset size FILE\n");
+			DBG_LOG("(read ubifs on nand) read_part system 0 ubi40m system.bin\n");
 			DBG_LOG("write_part part_name FILE\n");
 			DBG_LOG("erase_part part_name\n");
 			DBG_LOG("partition_list FILE\n");
@@ -1352,6 +1379,7 @@ int main(int argc, char **argv) {
 			DBG_LOG("poweroff\n");
 			DBG_LOG("timeout ms\n");
 			DBG_LOG("blk_size byte\n\tmax is 65535\n");
+			DBG_LOG("nand_id id\n");
 			DBG_LOG("disable_transcode\n");
 			DBG_LOG("keep_charge {0,1}\n");
 			DBG_LOG("end_data {0,1}\n");
