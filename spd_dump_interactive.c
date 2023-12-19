@@ -984,12 +984,36 @@ static uint64_t str_to_size(const char *str) {
 	return n << shl;
 }
 
+static uint64_t str_to_size_ubi(const char* str, int *nand_info) {
+	if (memcmp(str, "ubi", 3)) return str_to_size(str);
+	else {
+		char* end;
+		uint64_t n;
+		n = strtoull(&str[3], &end, 0);
+		if (*end) {
+			char suffix = tolower(*end);
+			if (suffix == 'm')
+			{
+				int block = n * (1024 / nand_info[2]) + n * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1;
+				return 1024 * (nand_info[2] - 2 * nand_info[0]) * block;
+			}
+			else
+			{
+				DBG_LOG("only support mb as unit, will not treat kb/gb as ubifs size\n");
+				return str_to_size(&str[3]);
+			}
+		}
+		else return n;
+	}
+}
+
 #define REOPEN_FREQ 2
 
 int main(int argc, char **argv) {
 	spdio_t *io = NULL; int ret, i;
 	int wait = 30 * REOPEN_FREQ;
 	int fdl1_loaded = 0, fdl2_loaded = 0, argcount = 0, exec_addr = 0, stage = -1, nand_id = 0x15;
+	int nand_info[3];
 	uint32_t ram_addr = ~0u;
 	int keep_charge = 1, end_data = 1, blk_size = 0, disable_transcode = 1;
 	char *temp;
@@ -1047,6 +1071,9 @@ int main(int argc, char **argv) {
 	io->endp_out = endpoints[1];
 #else
 	call_Initialize(io->handle, (DWORD)ret);
+	nand_info[0] = (uint8_t)pow(2, nand_id & 3); //page size
+	nand_info[1] = 32 / (uint8_t)pow(2, (nand_id >> 2) & 3); //spare area size
+	nand_info[2] = 64 * (uint8_t)pow(2, (nand_id >> 4) & 3); //block size
 #endif
 	io->flags |= FLAGS_TRANSCODE;
 
@@ -1253,9 +1280,11 @@ int main(int argc, char **argv) {
 			DBG_LOG("current exec_addr is 0x%x\n", exec_addr);
 
 		} else if (!strcmp(str2[1], "nand_id")) {
-			FILE* fi;
 			if (argcount > 2) {
 				nand_id = strtol(str2[2], NULL, 0);
+				nand_info[0] = (uint8_t)pow(2, nand_id & 3); //page size
+				nand_info[1] = 32 / (uint8_t)pow(2, (nand_id >> 2) & 3); //spare area size
+				nand_info[2] = 64 * (uint8_t)pow(2, (nand_id >> 4) & 3); //block size
 			}
 			DBG_LOG("current nand_id is 0x%x\n", nand_id);
 
@@ -1296,24 +1325,8 @@ int main(int argc, char **argv) {
 			if (argcount <= 5) { DBG_LOG("read_part part_name offset size FILE\n");continue; }
 
 			name = str2[2];
-			offset = str_to_size(str2[3]);
-			if (memcmp(str2[4], "ubi", 3)) size = str_to_size(str2[4]);
-			else {
-				char* end;
-				uint64_t n;
-				uint8_t id0, id1, id2;
-				id0 = (uint8_t)pow(2, nand_id & 3); //page size
-				id1 = 32 / (uint8_t)pow(2, (nand_id >> 2) & 3); //spare area size
-				id2 = 64 * (uint8_t)pow(2, (nand_id >> 4) & 3); //block size
-				n = strtoull(&str2[4][3], &end, 0);
-				if (*end) {
-					char suffix = tolower(*end);
-					if (suffix != 'm') { DBG_LOG("only support mb as unit\n");continue; }
-					int block = n * (1024 / id2) + n * (1024 / id2) / (512 / id1) + 1;
-					size = 1024 * (id2 - 2 * id0) * block;
-				}
-				else size = n;
-			}
+			offset = str_to_size_ubi(str2[3], nand_info);
+			size = str_to_size_ubi(str2[4], nand_info);
 			fn = str2[5];
 			if (offset + size < offset)
 				{ DBG_LOG("64-bit limit reached\n");continue; }
