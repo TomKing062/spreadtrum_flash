@@ -1067,5 +1067,12 @@ void get_Da_Info(spdio_t * io)
 		}
 		else memcpy(&Da_Info, io->raw_buf, sizeof(Da_Info));
 	}
+	FILE* fp;
+	fp = fopen("StorageType", "w");
+	if (Da_Info.dwStorageType == 0x101) fprintf(fp, "nand");
+	else if (Da_Info.dwStorageType == 0x102) fprintf(fp, "emmc");
+	else if (Da_Info.dwStorageType == 0x103) fprintf(fp, "ufs");
+	else fprintf(fp, "unknown");
+	fclose(fp);
 	DBG_LOG("FDL2: incompatible partition\n");
 }
