@@ -154,6 +154,8 @@ void find_endpoints(libusb_device_handle* dev_handle, int result[2]) {
 
 #define RECV_BUF_LEN 1024
 
+DA_INFO_T Da_Info;
+
 spdio_t* spdio_init(int flags) {
 	uint8_t* p; spdio_t* io;
 
@@ -319,6 +321,7 @@ int recv_msg(spdio_t* io) {
 
 	len = io->recv_len;
 	pos = io->recv_pos;
+	memset(io->recv_buf, 0, 8);
 	for (;;) {
 		if (pos >= len) {
 #if USE_LIBUSB
@@ -518,6 +521,7 @@ unsigned dump_flash(spdio_t* io,
 		encode_msg(io, BSL_CMD_READ_FLASH, data, 4 * 3);
 		send_msg(io);
 		ret = recv_msg(io);
+		if (!ret) ERR_EXIT("timeout reached\n");
 		if ((ret = recv_type(io)) != BSL_REP_READ_FLASH) {
 			DBG_LOG("unexpected response (0x%04x)\n", ret);
 			break;
@@ -554,6 +558,7 @@ unsigned dump_mem(spdio_t* io,
 		encode_msg(io, BSL_CMD_READ_FLASH, data, sizeof(data));
 		send_msg(io);
 		ret = recv_msg(io);
+		if (!ret) ERR_EXIT("timeout reached\n");
 		if ((ret = recv_type(io)) != BSL_REP_READ_FLASH) {
 			DBG_LOG("unexpected response (0x%04x)\n", ret);
 			break;
@@ -630,6 +635,7 @@ uint64_t dump_partition(spdio_t* io,
 		encode_msg(io, BSL_CMD_READ_MIDST, data, mode64 ? 12 : 8);
 		send_msg(io);
 		ret = recv_msg(io);
+		if (!ret) ERR_EXIT("timeout reached\n");
 		if ((ret = recv_type(io)) != BSL_REP_READ_FLASH) {
 			DBG_LOG("unexpected response (0x%04x)\n", ret);
 			break;
@@ -664,7 +670,8 @@ uint64_t read_pactime(spdio_t* io) {
 	WRITE32_LE(data + 1, offset);
 	encode_msg(io, BSL_CMD_READ_MIDST, data, sizeof(data));
 	send_msg(io);
-	recv_msg(io);
+	ret = recv_msg(io);
+	if (!ret) ERR_EXIT("timeout reached\n");
 	if ((ret = recv_type(io)) != BSL_REP_READ_FLASH)
 		ERR_EXIT("unexpected response (0x%04x)\n", ret);
 	n = READ16_BE(io->raw_buf + 2);
@@ -746,7 +753,8 @@ void partition_list(spdio_t* io, const char* fn) {
 
 	encode_msg(io, BSL_CMD_READ_PARTITION, NULL, 0);
 	send_msg(io);
-	recv_msg(io);
+	ret = recv_msg(io);
+	if (!ret) ERR_EXIT("timeout reached\n");
 	ret = recv_type(io);
 	if (ret != BSL_REP_READ_PARTITION)
 		ERR_EXIT("unexpected response (0x%04x)\n", ret);
@@ -907,10 +915,9 @@ void load_nv_partition(spdio_t* io, const char* name,
 			tmp[0] = 0;
 			tmp[1] = 0;
 			memcpy(tmp, mem + memOffset + len, sizeof(tmp));
-			uint16_t itemSize = tmp[1];
 
 			len += sizeof(tmp);
-			len += sizeof(char) * itemSize;
+			len += tmp[1];
 
 			uint32_t doffset = ((len + 3) & 0xFFFFFFFC) - len;
 			len += doffset;
@@ -986,7 +993,8 @@ int64_t find_partition_size(spdio_t* io, const char* name) {
 
 		encode_msg(io, BSL_CMD_READ_MIDST, data, sizeof(data));
 		send_msg(io);
-		recv_msg(io);
+		ret = recv_msg(io);
+		if (!ret) ERR_EXIT("timeout reached\n");
 		ret = recv_type(io);
 		if (ret != BSL_REP_READ_FLASH) continue;
 		offset = n64 + (1 << 20);
@@ -1037,4 +1045,27 @@ uint64_t str_to_size_ubi(const char* str, int* nand_info) {
 		}
 		else return n;
 	}
+}
+
+void get_Da_Info(spdio_t * io)
+{
+	if (io->raw_len > 6) {
+		if (0x7477656e == *(uint32_t*)(io->raw_buf + 4)) {
+			int len = 8;
+			uint16_t tmp[2];
+			while (len + 2 < io->raw_len)
+			{
+				tmp[0] = 0;
+				tmp[1] = 0;
+				memcpy(tmp, io->raw_buf + len, sizeof(tmp));
+
+				len += sizeof(tmp);
+				if (tmp[0] == 0) Da_Info.bDisableHDLC = *(uint32_t*)(io->raw_buf + len);
+				else if (tmp[0] == 6) Da_Info.dwStorageType = *(uint32_t*)(io->raw_buf + len);
+				len += tmp[1];
+			}
+		}
+		else memcpy(&Da_Info, io->raw_buf, sizeof(Da_Info));
+	}
+	DBG_LOG("FDL2: incompatible partition\n");
 }

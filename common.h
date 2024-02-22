@@ -91,6 +91,17 @@ typedef struct {
 	int raw_len, enc_len, verbose, timeout;
 } spdio_t;
 
+typedef struct {
+	uint32_t   dwVersion;
+	uint32_t   bDisableHDLC;	//0: Enable hdl; 1:Disable hdl
+	uint8_t    bIsOldMemory;
+	uint8_t    bSupportRawData;
+	uint8_t    bReserve[2];
+	uint32_t   dwFlushSize;		//unit KB
+	uint32_t   dwStorageType;
+	uint32_t   dwReserve[59];	//Reserve
+}DA_INFO_T;
+
 void print_string(FILE* f, const void* src, size_t n);
 
 #if USE_LIBUSB
@@ -120,3 +131,4 @@ void load_nv_partition(spdio_t* io, const char* name, const char* fn, unsigned s
 int64_t find_partition_size(spdio_t *io, const char *name);
 uint64_t str_to_size(const char *str);
 uint64_t str_to_size_ubi(const char* str, int* nand_info);
+void get_Da_Info(spdio_t* io);

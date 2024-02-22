@@ -2,7 +2,6 @@
 #define HDLC_HEADER 0x7e
 #define HDLC_ESCAPE 0x7d
 #define FDL1_DUMP_MEM 0
-#define AUTO_DISABLE_TRANSCODE 0
 #define DEFAULT_NAND_ID 0x15
 #define NO_CONFIRM 0
 
