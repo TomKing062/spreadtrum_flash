@@ -315,7 +315,7 @@ int send_msg(spdio_t* io) {
 	return ret;
 }
 
-int recv_msg(spdio_t* io) {
+int recv_msg_orig(spdio_t* io) {
 	int a, pos, len, chk;
 	int esc = 0, nread = 0, head_found = 0, plen = 6;
 
@@ -411,6 +411,16 @@ int recv_msg(spdio_t* io) {
 	return nread;
 }
 
+int recv_msg(spdio_t* io) {
+	int ret;
+	ret = recv_msg_orig(io);
+	if (!ret) {
+		send_msg(io);
+		ret = recv_msg_orig(io);
+	}
+	return ret;
+}
+
 int recv_msg_timeout(spdio_t* io, int timeout) {
 	int old = io->timeout, ret;
 	io->timeout = old > timeout ? old : timeout;
@@ -420,7 +430,7 @@ int recv_msg_timeout(spdio_t* io, int timeout) {
 }
 
 unsigned recv_type(spdio_t* io) {
-	if (io->raw_len < 6) return -1;
+	//if (io->raw_len < 6) return -1;
 	return READ16_BE(io->raw_buf);
 }
 

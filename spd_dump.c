@@ -145,9 +145,9 @@ int main(int argc, char **argv) {
 					recv_msg(io);
 					if (recv_type(io) == BSL_REP_VER) break;
 					DBG_LOG("CHECK_BAUD FAIL\n");
-					i++;
-					if (i > 4) ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
+					if (i) ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
 					usleep(500000);
+					i++;
 				}
 				DBG_LOG("CHECK_BAUD FDL1\n");
 
