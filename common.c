@@ -152,7 +152,7 @@ void find_endpoints(libusb_device_handle* dev_handle, int result[2]) {
 }
 #endif
 
-#define RECV_BUF_LEN 1024
+#define RECV_BUF_LEN (0x8000)
 
 DA_INFO_T Da_Info;
 
@@ -444,11 +444,6 @@ void send_and_check(spdio_t* io) {
 		ERR_EXIT("unexpected response (0x%04x)\n", ret);
 }
 
-#if NO_CONFIRM
-void check_confirm(const char* name) {
-	return;
-}
-#else
 void check_confirm(const char* name) {
 	char buf[4], c; int i;
 	printf("Answer \"yes\" to confirm the \"%s\" command: ", name);
@@ -461,7 +456,6 @@ void check_confirm(const char* name) {
 	} while (0);
 	ERR_EXIT("operation is not confirmed\n");
 }
-#endif
 
 uint8_t* loadfile(const char* fn, size_t* num, size_t extra) {
 	size_t n, j = 0; uint8_t* buf = 0;
@@ -620,6 +614,28 @@ void select_partition(spdio_t* io, const char* name,
 		sizeof(pkt.name) + (mode64 ? 16 : 4));
 }
 
+#define PROGRESS_BAR_WIDTH 40
+
+void print_progress_bar(float progress) {
+	static int completed0 = 0;
+	if (completed0 == PROGRESS_BAR_WIDTH) completed0 = 0;
+	int completed = PROGRESS_BAR_WIDTH * progress;
+	int remaining;
+	if (completed != completed0)
+	{
+		remaining = PROGRESS_BAR_WIDTH - completed;
+		printf("[");
+		for (int i = 0; i < completed; i++) {
+			printf("=");
+		}
+		for (int i = 0; i < remaining; i++) {
+			printf(" ");
+		}
+		printf("] %.1f%%\n", 100 * progress);
+	}
+	completed0 = completed;
+}
+
 uint64_t dump_partition(spdio_t* io,
 	const char* name, uint64_t start, uint64_t len,
 	const char* fn, unsigned step) {
@@ -655,6 +671,7 @@ uint64_t dump_partition(spdio_t* io,
 			ERR_EXIT("unexpected length\n");
 		if (fwrite(io->raw_buf + 4, 1, nread, fo) != nread)
 			ERR_EXIT("fwrite(dump) failed\n");
+		print_progress_bar((offset + nread - start) / (float)len);
 		offset += nread;
 		if (n != nread) break;
 	}
@@ -806,13 +823,11 @@ void repartition(spdio_t* io, const char* fn) {
 	uint8_t* buf = io->temp_buf;
 	int n = scan_xml_partitions(fn, buf, 0xffff);
 	// print_mem(stderr, io->temp_buf, n * 0x4c);
-	check_confirm("repartition");
 	encode_msg(io, BSL_CMD_REPARTITION, buf, n * 0x4c);
 	send_and_check(io);
 }
 
 void erase_partition(spdio_t* io, const char* name) {
-	check_confirm("erase partition");
 	select_partition(io, name, 0, 0, BSL_CMD_ERASE_FLASH);
 	send_and_check(io);
 }
@@ -832,7 +847,6 @@ void load_partition(spdio_t* io, const char* name,
 	DBG_LOG("file size : 0x%llx\n", (long long)len);
 
 	mode64 = len >> 32;
-	check_confirm("write partition");
 	select_partition(io, name, len, mode64, BSL_CMD_START_DATA);
 	send_and_check(io);
 
@@ -848,6 +862,7 @@ void load_partition(spdio_t* io, const char* name,
 			DBG_LOG("unexpected response (0x%04x)\n", ret);
 			break;
 		}
+		print_progress_bar((offset + n) / (float)len);
 	}
 	DBG_LOG("load_partition: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
@@ -952,7 +967,6 @@ void load_nv_partition(spdio_t* io, const char* name,
 	cs += (crc >> 8) & 0xff;
 	WRITE16_BE(mem, crc);
 
-	check_confirm("write partition");
 	{
 		struct {
 			uint16_t name[36];
@@ -1057,7 +1071,87 @@ uint64_t str_to_size_ubi(const char* str, int* nand_info) {
 	}
 }
 
-void get_Da_Info(spdio_t * io)
+typedef struct {
+	char name[36];
+	long long size;
+} partition_t;
+
+void dump_partitions(spdio_t* io, const char* fn, int* nand_info,int blk_size) {
+	partition_t partitions[128];
+	const char* part1 = "Partitions>";
+	char* src, * p;
+	int part1_len = strlen(part1), found = 0, stage = 0, ubi = 0;
+	size_t size = 0;
+
+	if (!memcmp(fn, "ubi", 3)) ubi = 1;
+	src = (char*)loadfile(fn, &size, 1);
+	if (!src) ERR_EXIT("loadfile failed\n");
+	src[size] = 0;
+	p = src;
+
+	for (;;) {
+		int i, a = *p++, n;
+		char c;
+
+		if (a == ' ' || a == '\t' || a == '\n' || a == '\r') continue;
+
+		if (a != '<') {
+			if (!a) break;
+			if (stage != 1) continue;
+			ERR_EXIT("xml: unexpected symbol\n");
+		}
+
+		if (!memcmp(p, "!--", 3)) {
+			p = strstr(p + 3, "--");
+			if (!p || !((p[-1] - '!') | (p[-2] - '<')) || p[2] != '>')
+				ERR_EXIT("xml: unexpected syntax\n");
+			p += 3;
+			continue;
+		}
+
+		if (stage != 1) {
+			stage += !memcmp(p, part1, part1_len);
+			if (stage > 2)
+				ERR_EXIT("xml: more than one partition lists\n");
+			p = strchr(p, '>');
+			if (!p) ERR_EXIT("xml: unexpected syntax\n");
+			p++;
+			continue;
+		}
+
+		if (*p == '/' && !memcmp(p + 1, part1, part1_len)) {
+			p = p + 1 + part1_len;
+			stage++;
+			continue;
+		}
+
+		i = sscanf(p, "Partition id=\"%35[^\"]\" size=\"%lli\"/%n%c", partitions[found].name, &partitions[found].size, &n, &c);
+		if (i != 3 || c != '>')
+			ERR_EXIT("xml: unexpected syntax\n");
+		p += n + 1;
+		found++;
+		if (found >= 128) break;
+	}
+	if (p - 1 != src + size) ERR_EXIT("xml: zero byte");
+	if (stage != 2) ERR_EXIT("xml: unexpected syntax\n");
+	free(src);
+
+	for (int i = 0; i < found; i++) {
+		printf("Partition %d: name=%s, size=%llim\n", i + 1, partitions[i].name, partitions[i].size);
+		char dfile[40] = { 0 };
+		sprintf(dfile, "%s.bin", partitions[i].name);
+		uint64_t realsize = partitions[i].size << 20;
+		if (strstr(partitions[i].name, "userdata")) continue;
+		else if (strstr(partitions[i].name, "fixnv") || strstr(partitions[i].name, "runtimenv")) realsize -= 0x200;
+		else if (ubi) {
+			int block = partitions[i].size * (1024 / nand_info[2]) + partitions[i].size * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1;
+			realsize = 1024 * (nand_info[2] - 2 * nand_info[0]) * block;
+		}
+		dump_partition(io, partitions[i].name, 0, realsize, dfile, blk_size);
+	}
+}
+
+void get_Da_Info(spdio_t* io)
 {
 	if (io->raw_len > 6) {
 		if (0x7477656e == *(uint32_t*)(io->raw_buf + 4)) {

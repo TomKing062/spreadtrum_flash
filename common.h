@@ -122,6 +122,7 @@ void send_file(spdio_t *io, const char *fn, uint32_t start_addr, int end_data, u
 unsigned dump_flash(spdio_t *io, uint32_t addr, uint32_t start, uint32_t len, const char *fn, unsigned step);
 unsigned dump_mem(spdio_t *io, uint32_t start, uint32_t len, const char *fn, unsigned step);
 uint64_t dump_partition(spdio_t *io, const char *name, uint64_t start, uint64_t len, const char *fn, unsigned step);
+void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size);
 uint64_t read_pactime(spdio_t *io);
 void partition_list(spdio_t *io, const char *fn);
 void repartition(spdio_t *io, const char *fn);
