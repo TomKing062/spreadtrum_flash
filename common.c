@@ -1169,7 +1169,7 @@ void get_Da_Info(spdio_t* io)
 				len += tmp[1];
 			}
 		}
-		else memcpy(&Da_Info, io->raw_buf, sizeof(Da_Info));
+		else memcpy(&Da_Info, io->raw_buf + 4, sizeof(Da_Info));
 	}
 	FILE* fp;
 	fp = fopen("StorageType", "w");
