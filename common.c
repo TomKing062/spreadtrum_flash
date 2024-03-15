@@ -1142,6 +1142,7 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info,int blk_size) {
 		sprintf(dfile, "%s.bin", partitions[i].name);
 		uint64_t realsize = partitions[i].size << 20;
 		if (strstr(partitions[i].name, "userdata")) continue;
+		else if (strstr(partitions[i].name, "splloader")) continue;
 		else if (strstr(partitions[i].name, "fixnv") || strstr(partitions[i].name, "runtimenv")) realsize -= 0x200;
 		else if (ubi) {
 			int block = partitions[i].size * (1024 / nand_info[2]) + partitions[i].size * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1;
@@ -1149,10 +1150,13 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info,int blk_size) {
 		}
 		dump_partition(io, partitions[i].name, 0, realsize, dfile, blk_size);
 	}
+	printf("Always backup splloader\n");
+	dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size);
 }
 
 void get_Da_Info(spdio_t* io)
 {
+	memset(&Da_Info, 0, sizeof(Da_Info));
 	if (io->raw_len > 6) {
 		if (0x7477656e == *(uint32_t*)(io->raw_buf + 4)) {
 			int len = 8;
@@ -1169,7 +1173,7 @@ void get_Da_Info(spdio_t* io)
 				len += tmp[1];
 			}
 		}
-		else memcpy(&Da_Info, io->raw_buf + 4, sizeof(Da_Info));
+		else memcpy(&Da_Info, io->raw_buf + 4, io->raw_len - 6);
 	}
 	FILE* fp;
 	fp = fopen("StorageType", "w");
