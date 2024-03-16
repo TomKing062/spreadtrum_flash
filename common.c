@@ -1156,7 +1156,6 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info,int blk_size) {
 
 void get_Da_Info(spdio_t* io)
 {
-	memset(&Da_Info, 0, sizeof(Da_Info));
 	if (io->raw_len > 6) {
 		if (0x7477656e == *(uint32_t*)(io->raw_buf + 4)) {
 			int len = 8;

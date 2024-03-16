@@ -290,6 +290,7 @@ int main(int argc, char **argv) {
 				DBG_LOG("FDL2 ALREADY LOADED, SKIP\n");
 				continue;
 			} else if (fdl1_loaded) {
+				memset(&Da_Info, 0, sizeof(Da_Info));
 				encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
 				send_msg(io);
 				// Feature phones respond immediately,
@@ -305,9 +306,13 @@ int main(int argc, char **argv) {
 				DBG_LOG("EXEC FDL2\n");
 				if (Da_Info.bDisableHDLC) {
 					encode_msg(io, BSL_CMD_DISABLE_TRANSCODE, NULL, 0);
-					send_and_check(io);
-					io->flags &= ~FLAGS_TRANSCODE;
-					DBG_LOG("DISABLE_TRANSCODE\n");
+					send_msg(io);
+					ret = recv_msg(io);
+					if (!ret) ERR_EXIT("timeout reached\n");
+					if (recv_type(io) == BSL_REP_ACK) {
+						io->flags &= ~FLAGS_TRANSCODE;
+						DBG_LOG("DISABLE_TRANSCODE\n");
+					}
 				}
 				if (nand_id == DEFAULT_NAND_ID) {
 					nand_info[0] = (uint8_t)pow(2, nand_id & 3); //page size
