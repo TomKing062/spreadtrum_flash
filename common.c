@@ -328,14 +328,13 @@ int recv_msg_orig(spdio_t* io) {
 			int err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &len, io->timeout);
 			if (err == LIBUSB_ERROR_NO_DEVICE)
 				ERR_EXIT("connection closed\n");
-			else if (err == LIBUSB_ERROR_TIMEOUT) break;
 			else if (err < 0)
-				ERR_EXIT("usb_recv failed : %s\n", libusb_error_name(err));
+			{ DBG_LOG("usb_recv failed : %s\n", libusb_error_name(err)); return 0; }
 #else
 			len = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout);
 #endif
 			if (len < 0)
-				ERR_EXIT("usb_recv failed, ret = %d\n", len);
+			{ DBG_LOG("usb_recv failed, ret = %d\n", len); return 0; }
 
 			if (io->verbose >= 2) {
 				DBG_LOG("recv (%d):\n", len);
@@ -348,12 +347,12 @@ int recv_msg_orig(spdio_t* io) {
 		if (io->flags & FLAGS_TRANSCODE) {
 			if (esc && a != (HDLC_HEADER ^ 0x20) &&
 				a != (HDLC_ESCAPE ^ 0x20))
-				ERR_EXIT("unexpected escaped byte (0x%02x)\n", a);
+			{ DBG_LOG("unexpected escaped byte (0x%02x)\n", a); return 0; }
 			if (a == HDLC_HEADER) {
 				if (!head_found) head_found = 1;
 				else if (!nread) continue;
 				else if (nread < plen)
-					ERR_EXIT("recieved message too short\n");
+				{ DBG_LOG("recieved message too short\n"); return 0; }
 				else break;
 			}
 			else if (a == HDLC_ESCAPE) {
@@ -362,7 +361,7 @@ int recv_msg_orig(spdio_t* io) {
 			else {
 				if (!head_found) continue;
 				if (nread >= plen)
-					ERR_EXIT("recieved message too long\n");
+				{ DBG_LOG("recieved message too long\n"); return 0; }
 				io->raw_buf[nread++] = a ^ esc;
 				esc = 0;
 			}
@@ -374,7 +373,7 @@ int recv_msg_orig(spdio_t* io) {
 			}
 			if (nread == plen) {
 				if (a != HDLC_HEADER)
-					ERR_EXIT("expected end of message\n");
+				{ DBG_LOG("expected end of message\n"); return 0; }
 				break;
 			}
 			io->raw_buf[nread++] = a;
@@ -390,10 +389,10 @@ int recv_msg_orig(spdio_t* io) {
 	if (!nread) return 0;
 
 	if (nread < 6)
-		ERR_EXIT("recieved message too short\n");
+	{ DBG_LOG("recieved message too short\n"); return 0; }
 
 	if (nread != plen)
-		ERR_EXIT("bad length (%d, expected %d)\n", nread, plen);
+	{ DBG_LOG("bad length (%d, expected %d)\n", nread, plen); return 0; }
 
 	if (io->flags & FLAGS_CRC16)
 		chk = spd_crc16(0, io->raw_buf, plen - 2);
