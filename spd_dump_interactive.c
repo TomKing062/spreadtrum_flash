@@ -15,6 +15,7 @@
 */
 #ifdef INTERACTIVE
 #include "common.h"
+#include "GITVER.h"
 #define REOPEN_FREQ 2
 
 extern DA_INFO_T Da_Info;
@@ -38,7 +39,7 @@ int main(int argc, char **argv) {
 #else
 	io->handle = createClass();
 #endif
-
+	printf("branch:%s, sha1:%s\n", GIT_VER, GIT_SHA1);
 	while (argc > 1) {
 		if (!strcmp(argv[1], "--wait")) {
 			if (argc <= 2) ERR_EXIT("bad option\n");

@@ -11,10 +11,14 @@ LIBS += -lusb-1.0
 endif
 
 .PHONY: all clean
-all: $(APPNAME) $(APPNAME2)
+all: GITVER.h $(APPNAME) $(APPNAME2)
 
 clean:
-	$(RM) $(APPNAME) $(APPNAME2)
+	$(RM) GITVER.h $(APPNAME) $(APPNAME2)
+
+GITVER.h:
+	echo "#define GIT_VER \"$(shell git rev-parse --abbrev-ref HEAD)\"" > GITVER.h
+	echo "#define GIT_SHA1 \"$(shell git rev-parse HEAD)\"" >> GITVER.h
 
 $(APPNAME): $(APPNAME).c common.c
 	$(CC) -s $(CFLAGS) -o $@ $^ $(LIBS)

@@ -28,6 +28,7 @@
   <ItemGroup>
     <ClInclude Include="BMPlatform.h" />
     <ClInclude Include="common.h" />
+    <ClInclude Include="GITVER.h" />
     <ClInclude Include="spd_cmd.h" />
     <ClInclude Include="Wrapper.h" />
   </ItemGroup>
@@ -108,6 +109,12 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
+    <PreBuildEvent>
+      <Command>for /f %%a in ('git rev-parse HEAD') do set GIT_SHA1=%%a
+for /f %%a in ('git rev-parse --abbrev-ref HEAD') do set GIT_VER=%%a
+echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
+echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
+    </PreBuildEvent>
     <PostBuildEvent>
       <Command>xcopy /y /d "$(SolutionDir)Channel9.dll" "$(TargetDir)"</Command>
     </PostBuildEvent>
@@ -127,6 +134,12 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
+    <PreBuildEvent>
+      <Command>for /f %%a in ('git rev-parse HEAD') do set GIT_SHA1=%%a
+for /f %%a in ('git rev-parse --abbrev-ref HEAD') do set GIT_VER=%%a
+echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
+echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
+    </PreBuildEvent>
     <PostBuildEvent>
       <Command>xcopy /y /d "$(SolutionDir)Channel9.dll" "$(TargetDir)"</Command>
     </PostBuildEvent>
@@ -142,6 +155,12 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
+    <PreBuildEvent>
+      <Command>for /f %%a in ('git rev-parse HEAD') do set GIT_SHA1=%%a
+for /f %%a in ('git rev-parse --abbrev-ref HEAD') do set GIT_VER=%%a
+echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
+echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
+    </PreBuildEvent>
     <PostBuildEvent>
       <Command>xcopy /y /d "$(SolutionDir)Channel9.dll" "$(TargetDir)"</Command>
     </PostBuildEvent>
@@ -161,6 +180,12 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
+    <PreBuildEvent>
+      <Command>for /f %%a in ('git rev-parse HEAD') do set GIT_SHA1=%%a
+for /f %%a in ('git rev-parse --abbrev-ref HEAD') do set GIT_VER=%%a
+echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
+echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
+    </PreBuildEvent>
     <PostBuildEvent>
       <Command>xcopy /y /d "$(SolutionDir)Channel9.dll" "$(TargetDir)"</Command>
     </PostBuildEvent>
