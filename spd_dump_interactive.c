@@ -230,7 +230,7 @@ int main(int argc, char **argv) {
 					recv_msg(io);
 					if (recv_type(io) == BSL_REP_VER) break;
 					DBG_LOG("CHECK_BAUD FAIL\n");
-					if (i == 1) {
+					if (exec_addr && i == 1) {
 						io->flags |= FLAGS_CRC16;
 						goto real_exec;
 					}
