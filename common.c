@@ -641,6 +641,8 @@ uint64_t dump_partition(spdio_t* io,
 	uint32_t n, nread, t32; uint64_t offset, n64;
 	int ret, mode64 = (start + len) >> 32;
 	FILE* fo;
+	int dump_retry = 0;
+	if (start == 0 && len == 0xFFFFFFFF) len = 0xFFFFFFFFFFFFFFFF;
 
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
 	send_and_check(io);
@@ -663,6 +665,13 @@ uint64_t dump_partition(spdio_t* io,
 		if (!ret) ERR_EXIT("timeout reached\n");
 		if ((ret = recv_type(io)) != BSL_REP_READ_FLASH) {
 			DBG_LOG("unexpected response (0x%04x)\n", ret);
+			if (offset > start && dump_retry == 0)
+			{
+				start = 0;
+				len = (offset + 0xFFFFF) & 0xFFFFFFFFFFF00000;
+				dump_retry++;
+				continue;
+			}
 			break;
 		}
 		nread = READ16_BE(io->raw_buf + 2);
