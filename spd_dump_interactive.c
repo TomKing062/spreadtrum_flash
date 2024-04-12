@@ -17,18 +17,19 @@
 #include "common.h"
 #include "GITVER.h"
 #define REOPEN_FREQ 2
-
+extern char savepath[1024];
 extern DA_INFO_T Da_Info;
+int m_bOpened = 0;
 int main(int argc, char **argv) {
-	spdio_t *io = NULL; int ret, i;
+	spdio_t *io = NULL; int ret, i, in_quote;
 	int wait = 30 * REOPEN_FREQ;
 	int fdl1_loaded = 0, fdl2_loaded = 0, argcount = 0, exec_addr = 0, stage = -1, nand_id = DEFAULT_NAND_ID;
 	int nand_info[3];
 	uint32_t ram_addr = ~0u;
-	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 0;
+	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 0, baudrate = 0;
 	char *temp;
-	char str1[1000];
-	char str2[10][100];
+	char str1[10240];
+	char str2[10][1024];
 	char execfile[40];
 
 	io = spdio_init(0);
@@ -38,6 +39,7 @@ int main(int argc, char **argv) {
 		ERR_EXIT("libusb_init failed: %s\n", libusb_error_name(ret));
 #else
 	io->handle = createClass();
+	call_Initialize(io->handle);
 #endif
 	printf("branch:%s, sha1:%s\n", GIT_VER, GIT_SHA1);
 	while (argc > 1) {
@@ -80,7 +82,7 @@ int main(int argc, char **argv) {
 	io->endp_in = endpoints[0];
 	io->endp_out = endpoints[1];
 #else
-	call_Initialize(io->handle, (DWORD)ret);
+	call_ConnectChannel(io->handle, (DWORD)ret);
 #endif
 	io->flags |= FLAGS_TRANSCODE;
 
@@ -138,6 +140,7 @@ int main(int argc, char **argv) {
 		memset(str1, 0, sizeof(str1));
 		memset(str2, 0, sizeof(str2));
 		argcount = 1;
+		in_quote = 0;
 
 		if (fdl2_loaded)
 			printf("FDL2 >");
@@ -151,8 +154,25 @@ int main(int argc, char **argv) {
 		temp = strtok(str1," ");
 		while(temp)
 		{
-			memcpy(str2[argcount++], temp, strlen(temp)+1);
-			temp = strtok(NULL," ");
+			if (temp[0] == '"')
+			{
+				in_quote = 1;
+				temp += 1;
+			}
+			else if (in_quote)
+			{
+				strcat(str2[argcount], " ");
+			}
+
+			if (temp[strlen(temp) - 1] == '"')
+			{
+				in_quote = 0;
+				temp[strlen(temp) - 1] = 0;
+			}
+
+			strcat(str2[argcount], temp);
+			if (!in_quote) argcount++;
+			temp = strtok(NULL, " ");
 		}
 
 		if (!strncmp(str2[1], "send", 3)) {
@@ -277,7 +297,17 @@ int main(int argc, char **argv) {
 				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
 				send_and_check(io);
 				DBG_LOG("CMD_CONNECT FDL1\n");
-
+#if !USE_LIBUSB
+				if (baudrate)
+				{
+					uint8_t data[4];
+					WRITE32_BE(data, baudrate);
+					encode_msg(io, BSL_CMD_CHANGE_BAUD, data, 4);
+					send_and_check(io);
+					DBG_LOG("CHANGE_BAUD FDL1 to %d\n", baudrate);
+					call_SetProperty(io->handle, 0, 100, (LPCVOID)&baudrate);
+				}
+#endif
 				if (keep_charge) {
 					encode_msg(io, BSL_CMD_KEEP_CHARGE, NULL, 0);
 					send_and_check(io);
@@ -322,6 +352,14 @@ int main(int argc, char **argv) {
 				}
 				fdl2_loaded = 1;
 			}
+#if !USE_LIBUSB
+		} else if (!strcmp(str2[1], "baudrate")) {
+			if (argcount > 2)  baudrate = strtol(str2[2], NULL, 0);
+			DBG_LOG("baudrate is %d\n", baudrate);
+#endif
+		} else if (!strcmp(str2[1], "path")) {
+			if (argcount > 2)  strcpy(savepath, str2[2]);;
+			DBG_LOG("save dir is %s\n", savepath);
 
 		} else if (!strcmp(str2[1], "exec_addr")) {
 			FILE* fi;
@@ -480,8 +518,8 @@ int main(int argc, char **argv) {
 			end_data = atoi(str2[2]);
 
 		} else if (!strcmp(str2[1], "reset")) {
-			if (!fdl2_loaded) {
-				DBG_LOG("FDL2 NOT READY\n");
+			if (!fdl1_loaded) {
+				DBG_LOG("FDL NOT READY\n");
 				continue;
 			}
 			encode_msg(io, BSL_CMD_NORMAL_RESET, NULL, 0);
@@ -489,8 +527,8 @@ int main(int argc, char **argv) {
 			break;
 
 		} else if (!strcmp(str2[1], "poweroff")) {
-			if (!fdl2_loaded) {
-				DBG_LOG("FDL2 NOT READY\n");
+			if (!fdl1_loaded) {
+				DBG_LOG("FDL NOT READY\n");
 				continue;
 			}
 			encode_msg(io, BSL_CMD_POWER_OFF, NULL, 0);
@@ -502,9 +540,13 @@ int main(int argc, char **argv) {
 			io->verbose = atoi(str2[2]);
 
 		} else if (strlen(str2[1])){
-			DBG_LOG("exec_addr [addr]\n");
+#if !USE_LIBUSB
+			DBG_LOG("baudrate [rate]\n\tbrom stage only\n");
+#endif
+			DBG_LOG("exec_addr [addr]\n\tbrom stage only\n");
 			DBG_LOG("fdl FILE addr\n");
 			DBG_LOG("exec\n");
+			DBG_LOG("path [save_location]\n\tfor read_part(s)/read_flash/read_mem\n");
 			DBG_LOG("read_part part_name offset size FILE\n");
 			DBG_LOG("(read ubi on nand) read_part system 0 ubi40m system.bin\n");
 			DBG_LOG("read_parts partition_list_file\n\t(ufs/emmc) read_parts part.xml\n\t(ubi) read_parts ubipart.xml\n");
@@ -516,7 +558,7 @@ int main(int argc, char **argv) {
 			DBG_LOG("poweroff\n");
 			DBG_LOG("timeout ms\n");
 			DBG_LOG("skip_confirm {0,1}\n");
-			DBG_LOG("blk_size byte\n\tmax is 65535\n");
+			DBG_LOG("blk_size byte\n\tfdl2 stage only, max is 65535\n");
 			DBG_LOG("nand_id [id]\n");
 			DBG_LOG("disable_transcode\n");
 			DBG_LOG("keep_charge {0,1}\n");

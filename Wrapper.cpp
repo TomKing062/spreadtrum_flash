@@ -12,9 +12,9 @@ void destroyClass(ClassHandle* handle) {
     delete handle;
 }
 
-BOOL call_Initialize(ClassHandle* handle, DWORD Port) {
+BOOL call_Initialize(ClassHandle* handle) {
     CBootModeOpr* obj = static_cast<CBootModeOpr*>(handle->obj);
-    return obj->Initialize(Port);
+    return obj->Initialize();
 }
 
 void call_Uninitialize(ClassHandle* handle) {
@@ -31,3 +31,24 @@ int call_Write(ClassHandle* handle, UCHAR* lpData, int iDataSize) {
     CBootModeOpr* obj = static_cast<CBootModeOpr*>(handle->obj);
     return obj->Write(lpData, iDataSize);
 }
+
+BOOL call_ConnectChannel(ClassHandle* handle, DWORD dwPort) {
+    CBootModeOpr* obj = static_cast<CBootModeOpr*>(handle->obj);
+    return obj->ConnectChannel(dwPort);
+}
+
+BOOL call_DisconnectChannel(ClassHandle* handle) {
+    CBootModeOpr* obj = static_cast<CBootModeOpr*>(handle->obj);
+    return obj->DisconnectChannel();
+}
+
+BOOL call_GetProperty(ClassHandle* handle, LONG lFlags, DWORD dwPropertyID, LPVOID pValue) {
+    CBootModeOpr* obj = static_cast<CBootModeOpr*>(handle->obj);
+    return obj->GetProperty(lFlags, dwPropertyID, pValue);
+}
+
+BOOL call_SetProperty(ClassHandle* handle, LONG lFlags, DWORD dwPropertyID, LPCVOID pValue) {
+    CBootModeOpr* obj = static_cast<CBootModeOpr*>(handle->obj);
+    return obj->SetProperty(lFlags, dwPropertyID, pValue);
+}
+

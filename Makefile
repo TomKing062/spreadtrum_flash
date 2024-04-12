@@ -11,7 +11,7 @@ LIBS += -lusb-1.0
 endif
 
 .PHONY: all clean
-all: GITVER.h $(APPNAME) $(APPNAME2)
+all: clean GITVER.h $(APPNAME) $(APPNAME2)
 
 clean:
 	$(RM) GITVER.h $(APPNAME) $(APPNAME2)

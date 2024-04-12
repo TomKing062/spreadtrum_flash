@@ -393,13 +393,14 @@ class  CBootModeOpr
 public:
     CBootModeOpr();
     ~CBootModeOpr();
-    BOOL   Initialize(DWORD dwPort);
+    BOOL   Initialize();
     void   Uninitialize();
     int Read(UCHAR* m_RecvData, int max_len, int dwTimeout);
     int Write(UCHAR* lpData, int iDataSize);
-private:
     BOOL   ConnectChannel(DWORD dwPort);
     BOOL   DisconnectChannel();
-    BOOL                m_bOpened;
+    BOOL   GetProperty(LONG lFlags, DWORD dwPropertyID, LPVOID pValue);
+    BOOL   SetProperty(LONG lFlags, DWORD dwPropertyID, LPCVOID pValue);
+private:
     ICommChannel*       m_pChannel;
 };

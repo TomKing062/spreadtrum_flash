@@ -154,6 +154,7 @@ void find_endpoints(libusb_device_handle* dev_handle, int result[2]) {
 
 #define RECV_BUF_LEN (0x8000)
 
+char savepath[1024] = { 0 };
 DA_INFO_T Da_Info;
 
 spdio_t* spdio_init(int flags) {
@@ -179,6 +180,7 @@ void spdio_free(spdio_t* io) {
 #if USE_LIBUSB
 	libusb_close(io->dev_handle);
 #else
+	call_DisconnectChannel(io->handle);
 	call_Uninitialize(io->handle);
 	destroyClass(io->handle);
 #endif
@@ -509,7 +511,13 @@ unsigned dump_flash(spdio_t* io,
 	const char* fn, unsigned step) {
 	uint32_t n, offset, nread;
 	int ret;
-	FILE* fo = fopen(fn, "wb");
+	FILE* fo;
+	if (savepath[0]) {
+		char fix_fn[2048];
+		sprintf(fix_fn, "%s/%s", savepath, fn);
+		fo = fopen(fix_fn, "wb");
+	}
+	else fo = fopen(fn, "wb");
 	if (!fo) ERR_EXIT("fopen(dump) failed\n");
 
 	for (offset = start; offset < start + len; ) {
@@ -546,7 +554,13 @@ unsigned dump_mem(spdio_t* io,
 	uint32_t start, uint32_t len, const char* fn, unsigned step) {
 	uint32_t n, offset, nread;
 	int ret;
-	FILE* fo = fopen(fn, "wb");
+	FILE* fo;
+	if (savepath[0]) {
+		char fix_fn[2048];
+		sprintf(fix_fn, "%s/%s", savepath, fn);
+		fo = fopen(fix_fn, "wb");
+	}
+	else fo = fopen(fn, "wb");
 	if (!fo) ERR_EXIT("fopen(dump) failed\n");
 
 	for (offset = start; offset < start + len; ) {
@@ -647,7 +661,12 @@ uint64_t dump_partition(spdio_t* io,
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
 	send_and_check(io);
 
-	fo = fopen(fn, "wb");
+	if (savepath[0]) {
+		char fix_fn[2048];
+		sprintf(fix_fn, "%s/%s", savepath, fn);
+		fo = fopen(fix_fn, "wb");
+	}
+	else fo = fopen(fn, "wb");
 	if (!fo) ERR_EXIT("fopen(dump) failed\n");
 
 	for (offset = start; (n64 = start + len - offset); ) {
