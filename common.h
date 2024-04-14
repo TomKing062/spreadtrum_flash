@@ -15,17 +15,29 @@
 #define LIBUSB_DETACH 1
 #endif
 
+#if _WIN32
+#include <Windows.h>
+#include <Dbt.h>
+#include <tchar.h>
+#define THRD_MESSAGE_EXIT WM_USER + 1
+DWORD WINAPI ThrdFunc(LPVOID lpParam);
+#if UNICODE
+#define my_strstr wcsstr
+#define my_strtol wcstol
+#else
+#define my_strstr strstr
+#define my_strtol strtol
+#endif
+#endif
 #if USE_LIBUSB
 #include <libusb-1.0/libusb.h>
 #include <unistd.h>
 #else
-#include <Windows.h>
 #include <setupapi.h>
 #include "Wrapper.h"
-#pragma comment(lib, "Setupapi.lib")
 #define fseeko _fseeki64
 #define ftello _ftelli64
-BOOL FindPort(DWORD* pPort);
+BOOL FindPort(void);
 void usleep(unsigned int us);
 #endif
 
@@ -86,6 +98,10 @@ typedef struct {
 	int endp_in, endp_out;
 #else
 	ClassHandle* handle;
+#endif
+#if _WIN32
+	DWORD iThread;
+	HANDLE hThread;
 #endif
 	int flags, recv_len, recv_pos;
 	int raw_len, enc_len, verbose, timeout;

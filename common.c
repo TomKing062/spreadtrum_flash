@@ -1,6 +1,7 @@
 #include "common.h"
 #if !USE_LIBUSB
-BOOL FindPort(DWORD* pPort)
+DWORD curPort = 0;
+BOOL FindPort(void)
 {
 	const char* USB_DL = "SPRD U2S Diag";
 	const GUID GUID_DEVCLASS_PORTS = { 0x4d36e978, 0xe325, 0x11ce,{0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18} };
@@ -28,7 +29,7 @@ BOOL FindPort(DWORD* pPort)
 			char portNum_str[4];
 			strncpy(portNum_str, result + strlen(USB_DL) + 5, 3);
 			portNum_str[3] = 0;
-			*pPort = (DWORD)strtol(portNum_str, NULL, 0);
+			curPort = (DWORD)strtol(portNum_str, NULL, 0);
 			break;
 		}
 
@@ -45,6 +46,8 @@ void usleep(unsigned int us)
 	Sleep(us / 1000);
 }
 #endif
+
+extern int m_bOpened;
 
 void print_mem(FILE* f, uint8_t* buf, size_t len) {
 	size_t i; int a, j, n;
@@ -161,8 +164,10 @@ spdio_t* spdio_init(int flags) {
 	uint8_t* p; spdio_t* io;
 
 	p = (uint8_t*)malloc(sizeof(spdio_t) + RECV_BUF_LEN + (4 + 0x10000 + 2) * 3 + 2);
-	io = (spdio_t*)p; p += sizeof(spdio_t);
+	io = (spdio_t*)p;
 	if (!p) ERR_EXIT("malloc failed\n");
+	memset(io, 0, sizeof(spdio_t));
+	p += sizeof(spdio_t);
 	io->flags = flags;
 	io->recv_len = 0;
 	io->recv_pos = 0;
@@ -177,8 +182,14 @@ spdio_t* spdio_init(int flags) {
 
 void spdio_free(spdio_t* io) {
 	if (!io) return;
+#if _WIN32
+	PostThreadMessage(io->iThread, THRD_MESSAGE_EXIT, 0, 0);
+	WaitForSingleObject(io->hThread, INFINITE);
+	CloseHandle(io->hThread);
+#endif
 #if USE_LIBUSB
 	libusb_close(io->dev_handle);
+	libusb_exit(NULL);
 #else
 	call_DisconnectChannel(io->handle);
 	call_Uninitialize(io->handle);
@@ -287,6 +298,12 @@ int send_msg(spdio_t* io) {
 	if (!io->enc_len)
 		ERR_EXIT("empty message\n");
 
+#if _WIN32
+	if (m_bOpened == -1) {
+		spdio_free(io);
+		ERR_EXIT("device removed, exiting...\n");
+	}
+#endif
 	if (io->verbose >= 2) {
 		DBG_LOG("send (%d):\n", io->enc_len);
 		print_mem(stderr, io->enc_buf, io->enc_len);
@@ -326,6 +343,12 @@ int recv_msg_orig(spdio_t* io) {
 	memset(io->recv_buf, 0, 8);
 	for (;;) {
 		if (pos >= len) {
+#if _WIN32
+			if (m_bOpened == -1) {
+				spdio_free(io);
+				ERR_EXIT("device removed, exiting...\n");
+			}
+#endif
 #if USE_LIBUSB
 			int err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &len, io->timeout);
 			if (err == LIBUSB_ERROR_NO_DEVICE)
@@ -656,7 +679,8 @@ uint64_t dump_partition(spdio_t* io,
 	int ret, mode64 = (start + len) >> 32;
 	FILE* fo;
 	int dump_retry = 0;
-	if (start == 0 && len == 0xFFFFFFFF) len = 0xFFFFFFFFFFFFFFFF;
+	if(strstr(name,"userdata") && len >= 0xFFFFFFFF) check_confirm("read userdata (on arm32 it overflows to 1024GB)");
+	if (start == 0 && len == 0xFFFFFFFF) len = len << 8;//max 1024GB
 
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
 	send_and_check(io);
@@ -1165,7 +1189,7 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info,int blk_size) {
 
 	for (int i = 0; i < found; i++) {
 		printf("Partition %d: name=%s, size=%llim\n", i + 1, partitions[i].name, partitions[i].size);
-		char dfile[40] = { 0 };
+		char dfile[40];
 		sprintf(dfile, "%s.bin", partitions[i].name);
 		uint64_t realsize = partitions[i].size << 20;
 		if (strstr(partitions[i].name, "userdata")) continue;
@@ -1210,3 +1234,123 @@ void get_Da_Info(spdio_t* io)
 	fclose(fp);
 	DBG_LOG("FDL2: incompatible partition\n");
 }
+
+#if _WIN32
+const _TCHAR CLASS_NAME[] = _T("Sample Window Class");
+
+HWND hWnd;
+
+LRESULT DeviceChange(UINT message, WPARAM wParam, LPARAM lParam)
+{
+	static BOOL interface_checked = FALSE;
+	if (DBT_DEVICEARRIVAL == wParam || DBT_DEVICEREMOVECOMPLETE == wParam)
+	{
+		PDEV_BROADCAST_HDR pHdr = (PDEV_BROADCAST_HDR)lParam;
+		PDEV_BROADCAST_DEVICEINTERFACE pDevInf;
+		PDEV_BROADCAST_PORT pDevPort;
+		switch (pHdr->dbch_devicetype)
+		{
+		case DBT_DEVTYP_DEVICEINTERFACE:
+			pDevInf = (PDEV_BROADCAST_DEVICEINTERFACE)pHdr;
+			if (my_strstr(pDevInf->dbcc_name, _T("VID_1782&PID_4D00"))) {
+#if USE_LIBUSB
+				if (DBT_DEVICEREMOVECOMPLETE == wParam) {
+					m_bOpened = -1;
+				}
+#else
+				interface_checked = TRUE;
+#endif
+			}
+			break;
+#if !USE_LIBUSB
+		case DBT_DEVTYP_PORT:
+			if (interface_checked) {
+				pDevPort = (PDEV_BROADCAST_PORT)pHdr;
+				DWORD changedPort = (DWORD)my_strtol(pDevPort->dbcp_name + 3, NULL, 0);
+				if (DBT_DEVICEARRIVAL == wParam)
+					if (!curPort) curPort = changedPort;
+					else printf("second port not supported\n");
+				else {
+					if (curPort == changedPort) {
+						m_bOpened = -1;
+					}
+				}
+			}
+			interface_checked = FALSE;
+			break;
+#endif
+		}
+	}
+	return 0;
+}
+
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	switch (message)
+	{
+	case WM_DEVICECHANGE:
+		return DeviceChange(message, wParam, lParam);
+	}
+
+	return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
+ATOM MyRegisterClass()
+{
+	WNDCLASS wc = { 0 };
+	wc.lpfnWndProc = WndProc;
+	wc.hInstance = GetModuleHandle(NULL);
+	wc.lpszClassName = CLASS_NAME;
+	return RegisterClass(&wc);
+}
+
+BOOL CreateMessageOnlyWindow()
+{
+	hWnd = CreateWindowEx(0, CLASS_NAME, _T(""), WS_OVERLAPPEDWINDOW,
+		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+		NULL,       // Parent window
+		NULL,       // Menu
+		GetModuleHandle(NULL),  // Instance handle
+		NULL        // Additional application data
+	);
+
+	return hWnd != NULL;
+}
+
+void RegisterDeviceNotify()
+{
+	HDEVNOTIFY hDevNotify;
+	DEV_BROADCAST_DEVICEINTERFACE NotificationFilter;
+#if USE_LIBUSB
+	const GUID GUID_DEVINTERFACE = { 0xa5dcbf10, 0x6530, 0x11d2, { 0x90, 0x1f, 0x00, 0xc0, 0x4f, 0xb9, 0x51, 0xed } };
+#else
+	const GUID GUID_DEVINTERFACE = { 0x86e0d1e0, 0x8089, 0x11d0, { 0x9c, 0xe4, 0x08, 0x00, 0x3e, 0x30, 0x1f, 0x73 } };
+#endif
+	ZeroMemory(&NotificationFilter, sizeof(NotificationFilter));
+	NotificationFilter.dbcc_size = sizeof(DEV_BROADCAST_DEVICEINTERFACE);
+	NotificationFilter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+	NotificationFilter.dbcc_classguid = GUID_DEVINTERFACE;
+	hDevNotify = RegisterDeviceNotification(hWnd, &NotificationFilter, DEVICE_NOTIFY_WINDOW_HANDLE);
+}
+
+DWORD WINAPI ThrdFunc(LPVOID lpParam)
+{
+	if (0 == MyRegisterClass())
+		return -1;
+
+	if (!CreateMessageOnlyWindow())
+		return -1;
+
+	RegisterDeviceNotify();
+
+	MSG msg;
+	while (GetMessage(&msg, NULL, 0, 0))
+	{
+		if (msg.message == THRD_MESSAGE_EXIT) break;
+		TranslateMessage(&msg);
+		DispatchMessage(&msg);
+	}
+
+	return 0;
+}
+#endif

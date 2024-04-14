@@ -28,9 +28,12 @@ int main(int argc, char **argv) {
 	uint32_t ram_addr = ~0u;
 	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 0, baudrate = 0;
 	char *temp;
-	char str1[10240];
-	char str2[10][1024];
+	char str1[3072];
+	char str2[8][384];
 	char execfile[40];
+#if !USE_LIBUSB
+	extern DWORD curPort;
+#endif
 
 	io = spdio_init(0);
 #if USE_LIBUSB
@@ -58,18 +61,23 @@ int main(int argc, char **argv) {
 		} else break;
 	}
 
+	DBG_LOG("Waiting for connection (%ds)\n", wait / REOPEN_FREQ);
+#if !USE_LIBUSB
+	FindPort();
+	io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
+	if (io->hThread == NULL) {
+		return -1;
+	}
+#endif
 	for (i = 0; ; i++) {
-		if (!i) DBG_LOG("Waiting for connection (%ds)\n", wait / REOPEN_FREQ);
 #if USE_LIBUSB
 		io->dev_handle = libusb_open_device_with_vid_pid(NULL, 0x1782, 0x4d00);
 		if (io->dev_handle) break;
 		if (i >= wait)
 			ERR_EXIT("libusb_open_device failed\n");
 #else
-		ret = 0;
-		FindPort(&ret);
-		if(io->verbose) DBG_LOG("CurTime: %.1f, CurPort: %d\n", (float)i / REOPEN_FREQ, ret);
-		if (ret) break;
+		if(io->verbose) DBG_LOG("CurTime: %.1f, CurPort: %d\n", (float)i / REOPEN_FREQ, curPort);
+		if (curPort) break;
 		if (i >= wait)
 			ERR_EXIT("find port failed\n");
 #endif
@@ -82,7 +90,15 @@ int main(int argc, char **argv) {
 	io->endp_in = endpoints[0];
 	io->endp_out = endpoints[1];
 #else
-	call_ConnectChannel(io->handle, (DWORD)ret);
+	call_ConnectChannel(io->handle, curPort);
+#endif
+#if _WIN32
+	if (io->hThread == NULL) {
+		io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
+		if (io->hThread == NULL) {
+			return -1;
+		}
+	}
 #endif
 	io->flags |= FLAGS_TRANSCODE;
 
@@ -565,12 +581,15 @@ int main(int argc, char **argv) {
 			DBG_LOG("end_data {0,1}\n");
 			DBG_LOG("verbose {0,1,2}\n");
 		}
+#if _WIN32
+		if (m_bOpened == -1) {
+			printf("device removed, exiting...\n");
+			break;
+		}
+#endif
 	}
 
 	spdio_free(io);
-#if USE_LIBUSB
-	libusb_exit(NULL);
-#endif
 	return 0;
 }
 #endif

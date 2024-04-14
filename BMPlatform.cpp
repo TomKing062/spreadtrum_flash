@@ -75,17 +75,12 @@ BOOL CBootModeOpr::Initialize()
 
 void CBootModeOpr::Uninitialize()
 {
-	if (m_pChannel)
-	{
-		if (g_theApp.m_pfReleaseChannel)
-			g_theApp.m_pfReleaseChannel(m_pChannel);
-		m_pChannel = NULL;
-	}
+	if (g_theApp.m_pfReleaseChannel) g_theApp.m_pfReleaseChannel(m_pChannel);
+	m_pChannel = NULL;
 }
 
 int CBootModeOpr::Read(UCHAR * m_RecvData, int max_len, int dwTimeout)
 {
-	if (!m_bOpened) return -1;
 	ULONGLONG tBegin;
 	ULONGLONG tCur;
 	tBegin = GetTickCount64();
@@ -103,7 +98,6 @@ int CBootModeOpr::Read(UCHAR * m_RecvData, int max_len, int dwTimeout)
 
 int CBootModeOpr::Write(UCHAR* lpData, int iDataSize)
 {
-	if (!m_bOpened) return -1;
 	return m_pChannel->Write(lpData, iDataSize);
 }
 
@@ -119,11 +113,6 @@ BOOL CBootModeOpr::SetProperty(LONG lFlags, DWORD dwPropertyID, LPCVOID pValue)
 
 BOOL CBootModeOpr::ConnectChannel(DWORD dwPort)
 {
-	if (m_pChannel == NULL)
-	{
-		return FALSE;
-	}
-
 	if(!dwPort) return FALSE;
 
 	CHANNEL_ATTRIBUTE ca;
@@ -139,17 +128,9 @@ BOOL CBootModeOpr::ConnectChannel(DWORD dwPort)
 
 BOOL CBootModeOpr::DisconnectChannel()
 {
-	if (m_pChannel == NULL)
-	{
-		return FALSE;
-	}
-
-	if (m_bOpened)
-	{
-		m_bOpened = 0;
-		//Log(_T("Disconnect Channel +++"));
-		m_pChannel->Close();
-		//Log(_T("Disconnect Channel ---"));
-	}
+	//Log(_T("Disconnect Channel +++"));
+	m_pChannel->Close();
+	//Log(_T("Disconnect Channel ---"));
+	m_bOpened = 0;
 	return TRUE;
 }
