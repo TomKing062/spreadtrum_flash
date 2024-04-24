@@ -17,7 +17,7 @@
 #include "common.h"
 #include "GITVER.h"
 #define REOPEN_FREQ 2
-extern char savepath[1024];
+extern char savepath[ARGC_LEN];
 extern DA_INFO_T Da_Info;
 int m_bOpened = 0;
 int main(int argc, char **argv) {
@@ -28,8 +28,8 @@ int main(int argc, char **argv) {
 	uint32_t ram_addr = ~0u;
 	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 0, baudrate = 0;
 	char *temp;
-	char str1[3072];
-	char str2[8][384];
+	char str1[ARGC_MAX * ARGC_LEN];
+	char str2[ARGC_MAX][ARGC_LEN];
 	char execfile[40];
 #if !USE_LIBUSB
 	extern DWORD curPort;
@@ -187,7 +187,10 @@ int main(int argc, char **argv) {
 			}
 
 			strcat(str2[argcount], temp);
-			if (!in_quote) argcount++;
+			if (!in_quote) {
+				argcount++;
+				if (argcount == ARGC_MAX) break;
+			}
 			temp = strtok(NULL, " ");
 		}
 
@@ -479,10 +482,15 @@ int main(int argc, char **argv) {
 			if (fi == NULL) { DBG_LOG("File does not exist.\n");continue; }
 			else fclose(fi);
 			if (!skip_confirm) check_confirm("write partition");
-			if (strstr(str2[2], "fixnv") || strstr(str2[2], "runtimenv"))
-				load_nv_partition(io, str2[2], str2[3], blk_size ? blk_size : 4096);
+			if (strstr(str2[2], "fixnv"))
+				load_nv_partition(io, str2[2], str2[3], 4096);
 			else
 				load_partition(io, str2[2], str2[3], blk_size ? blk_size : 4096);
+
+		} else if (!strcmp(str2[1], "write_parts")) {
+			if (argcount <= 2) { DBG_LOG("write_parts save_location\n");continue; }
+			if (!skip_confirm) check_confirm("write all partitions");
+			load_partitions(io, str2[2], blk_size ? blk_size : 4096);
 
 		} else if (!strcmp(str2[1], "read_pactime")) {
 			read_pactime(io);
@@ -567,6 +575,7 @@ int main(int argc, char **argv) {
 			DBG_LOG("(read ubi on nand) read_part system 0 ubi40m system.bin\n");
 			DBG_LOG("read_parts partition_list_file\n\t(ufs/emmc) read_parts part.xml\n\t(ubi) read_parts ubipart.xml\n");
 			DBG_LOG("write_part part_name FILE\n");
+			DBG_LOG("write_parts save_location\n\twrite all partitions dumped by read_parts");
 			DBG_LOG("erase_part part_name\n");
 			DBG_LOG("partition_list FILE\n");
 			DBG_LOG("repartition FILE\n");

@@ -3,6 +3,9 @@
 #define _GNU_SOURCE 1
 #define _FILE_OFFSET_BITS 64
 
+#define ARGC_MAX 8
+#define ARGC_LEN 384
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -28,6 +31,8 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam);
 #define my_strstr strstr
 #define my_strtol strtol
 #endif
+#else
+#include <dirent.h>
 #endif
 #if USE_LIBUSB
 #include <libusb-1.0/libusb.h>
@@ -145,6 +150,7 @@ void repartition(spdio_t *io, const char *fn);
 void erase_partition(spdio_t *io, const char *name);
 void load_partition(spdio_t *io, const char *name, const char *fn, unsigned step);
 void load_nv_partition(spdio_t* io, const char* name, const char* fn, unsigned step);
+void load_partitions(spdio_t* io, const char* path, int blk_size);
 int64_t find_partition_size(spdio_t *io, const char *name);
 uint64_t str_to_size(const char *str);
 uint64_t str_to_size_ubi(const char* str, int* nand_info);

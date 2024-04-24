@@ -157,7 +157,7 @@ void find_endpoints(libusb_device_handle* dev_handle, int result[2]) {
 
 #define RECV_BUF_LEN (0x8000)
 
-char savepath[1024] = { 0 };
+char savepath[ARGC_LEN] = { 0 };
 DA_INFO_T Da_Info;
 
 spdio_t* spdio_init(int flags) {
@@ -536,7 +536,7 @@ unsigned dump_flash(spdio_t* io,
 	int ret;
 	FILE* fo;
 	if (savepath[0]) {
-		char fix_fn[2048];
+		char fix_fn[1024];
 		sprintf(fix_fn, "%s/%s", savepath, fn);
 		fo = fopen(fix_fn, "wb");
 	}
@@ -892,6 +892,10 @@ void load_partition(spdio_t* io, const char* name,
 	fi = fopen(fn, "rb");
 	if (!fi) ERR_EXIT("fopen(load) failed\n");
 
+	uint8_t header[4], is_simg = 0;
+	if (fread(header, 1, 4, fi) != 4)
+		ERR_EXIT("fread(load) failed\n");
+	if (0xED26FF3A == *(uint32_t*)header) is_simg = 1;
 	fseeko(fi, 0, SEEK_END);
 	len = ftello(fi);
 	fseek(fi, 0, SEEK_SET);
@@ -907,7 +911,8 @@ void load_partition(spdio_t* io, const char* name,
 			ERR_EXIT("fread(load) failed\n");
 		encode_msg(io, BSL_CMD_MIDST_DATA, io->temp_buf, n);
 		send_msg(io);
-		ret = recv_msg_timeout(io, 15000);
+		if (is_simg) ret = recv_msg_timeout(io, 100000);
+		else ret = recv_msg_timeout(io, 15000);
 		if (!ret) ERR_EXIT("timeout reached\n");
 		if ((ret = recv_type(io)) != BSL_REP_ACK) {
 			DBG_LOG("unexpected response (0x%04x)\n", ret);
@@ -1127,7 +1132,7 @@ typedef struct {
 	long long size;
 } partition_t;
 
-void dump_partitions(spdio_t* io, const char* fn, int* nand_info,int blk_size) {
+void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) {
 	partition_t partitions[128];
 	const char* part1 = "Partitions>";
 	char* src, * p;
@@ -1185,7 +1190,6 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info,int blk_size) {
 	}
 	if (p - 1 != src + size) ERR_EXIT("xml: zero byte");
 	if (stage != 2) ERR_EXIT("xml: unexpected syntax\n");
-	free(src);
 
 	for (int i = 0; i < found; i++) {
 		printf("Partition %d: name=%s, size=%llim\n", i + 1, partitions[i].name, partitions[i].size);
@@ -1203,6 +1207,64 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info,int blk_size) {
 	}
 	printf("Always backup splloader\n");
 	dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size);
+
+	if (savepath[0]) {
+		printf("saving part table\n");
+		char fix_fn[1024];
+		sprintf(fix_fn, "%s/%s", savepath, fn);
+		FILE *fo = fopen(fix_fn, "wb");
+		fwrite(src, 1, size, fo);
+		fclose(fo);
+	}
+	free(src);
+}
+
+void load_partitions(spdio_t* io, const char* path, int blk_size) {
+	char* fn;
+#if _WIN32
+	char searchPath[ARGC_LEN];
+	snprintf(searchPath, ARGC_LEN, "%s\\*", path);
+
+	WIN32_FIND_DATAA findData;
+	HANDLE hFind = FindFirstFileA(searchPath, &findData);
+
+	if (hFind == INVALID_HANDLE_VALUE) {
+		printf("Error opening directory.\n");
+		return;
+	}
+	for (fn = findData.cFileName; FindNextFileA(hFind, &findData); fn = findData.cFileName)
+#else
+	DIR* dir;
+	struct dirent* entry;
+
+	if ((dir = opendir(path)) == NULL || (entry = readdir(dir)) == NULL) {
+		printf("Error opening directory.\n");
+		return;
+	}
+	for (fn = entry->d_name; entry = readdir(dir); fn = entry->d_name)
+#endif
+	{
+		if (strcmp(fn, ".") == 0
+			|| strcmp(fn, "..") == 0
+			|| strcmp(fn + strlen(fn) - 4, ".xml") == 0) {
+			continue;
+		}
+		char fix_fn[1024];
+		snprintf(fix_fn, sizeof(fix_fn), "%s/%s", path, fn);
+		char* dot = strrchr(fn, '.');
+		if (dot != NULL) *dot = '\0';
+		if (strstr(fn, "fixnv"))
+			load_nv_partition(io, fn, fix_fn, 4096);
+		else if (strstr(fn, "runtimenv"))
+			erase_partition(io, fn);
+		else
+			load_partition(io, fn, fix_fn, blk_size);
+	}
+#if _WIN32
+	FindClose(hFind);
+#else
+	closedir(dir);
+#endif
 }
 
 void get_Da_Info(spdio_t* io)

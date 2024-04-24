@@ -17,7 +17,7 @@
 #include "common.h"
 #include "GITVER.h"
 #define REOPEN_FREQ 2
-extern char savepath[1024];
+extern char savepath[ARGC_LEN];
 extern DA_INFO_T Da_Info;
 int m_bOpened = 0;
 int main(int argc, char **argv) {
@@ -385,11 +385,17 @@ int main(int argc, char **argv) {
 		} else if (!strcmp(argv[1], "write_part")) {
 			if (argc <= 3) ERR_EXIT("write_part part_name FILE\n");
 			if (!skip_confirm) check_confirm("write partition");
-			if (strstr(argv[2], "fixnv") || strstr(argv[2], "runtimenv"))
-				load_nv_partition(io, argv[2], argv[3], blk_size ? blk_size : 4096);
+			if (strstr(argv[2], "fixnv"))
+				load_nv_partition(io, argv[2], argv[3], 4096);
 			else
 				load_partition(io, argv[2], argv[3], blk_size ? blk_size : 4096);
 			argc -= 3; argv += 3;
+
+		} else if (!strcmp(argv[1], "write_parts")) {
+			if (argc <= 2) ERR_EXIT("write_parts save_location\n");
+			if (!skip_confirm) check_confirm("write all partitions");
+			load_partitions(io, argv[2], blk_size ? blk_size : 4096);
+			argc -= 2; argv += 2;
 
 		} else if (!strcmp(argv[1], "read_pactime")) {
 			read_pactime(io);
@@ -476,6 +482,7 @@ int main(int argc, char **argv) {
 			DBG_LOG("(read ubi on nand) read_part system 0 ubi40m system.bin\n");
 			DBG_LOG("read_parts partition_list_file\n\t(ufs/emmc) read_parts part.xml\n\t(ubi) read_parts ubipart.xml\n");
 			DBG_LOG("write_part part_name FILE\n");
+			DBG_LOG("write_parts save_location\n\twrite all partitions dumped by read_parts");
 			DBG_LOG("erase_part part_name\n");
 			DBG_LOG("partition_list FILE\n");
 			DBG_LOG("repartition FILE\n");
