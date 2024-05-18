@@ -117,7 +117,7 @@ echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
-      <Command>xcopy /y /d "$(SolutionDir)Channel9.dll" "$(TargetDir)"</Command>
+      <Command>xcopy /d /y Lib "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -143,7 +143,7 @@ echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
-      <Command>xcopy /y /d "$(SolutionDir)Channel9.dll" "$(TargetDir)"</Command>
+      <Command>xcopy /d /y Lib "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='InteractiveDebug|Win32'">
@@ -165,7 +165,7 @@ echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
-      <Command>xcopy /y /d "$(SolutionDir)Channel9.dll" "$(TargetDir)"</Command>
+      <Command>xcopy /d /y Lib "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='InteractiveRelease|Win32'">
@@ -191,7 +191,7 @@ echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
-      <Command>xcopy /y /d "$(SolutionDir)Channel9.dll" "$(TargetDir)"</Command>
+      <Command>xcopy /d /y Lib "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

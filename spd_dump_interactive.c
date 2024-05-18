@@ -92,14 +92,6 @@ int main(int argc, char **argv) {
 #else
 	call_ConnectChannel(io->handle, curPort);
 #endif
-#if _WIN32
-	if (io->hThread == NULL) {
-		io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
-		if (io->hThread == NULL) {
-			return -1;
-		}
-	}
-#endif
 	io->flags |= FLAGS_TRANSCODE;
 
 	// Required for smartphones.
@@ -117,18 +109,21 @@ int main(int argc, char **argv) {
 
 	switch (stage) {
 	case 0:
+		encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
+		if (send_and_check(io)) exit(1);
+		DBG_LOG("CMD_CONNECT bootrom\n");
 		break;
 	case 1:
 		io->flags &= ~FLAGS_CRC16;
+		encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
+		if (send_and_check(io)) exit(1);
+		DBG_LOG("CMD_CONNECT FDL1\n");
 		fdl1_loaded = 1;
 		break;
 	case 2:
 		io->flags &= ~FLAGS_CRC16;
 		encode_msg(io, BSL_CMD_DISABLE_TRANSCODE, NULL, 0);
-		send_msg(io);
-		ret = recv_msg(io);
-		if (!ret) ERR_EXIT("timeout reached\n");
-		if (recv_type(io) == BSL_REP_ACK) {
+		if (!send_and_check(io)) {
 			io->flags &= ~FLAGS_TRANSCODE;
 			DBG_LOG("DISABLE_TRANSCODE\n");
 		}
@@ -147,7 +142,7 @@ int main(int argc, char **argv) {
 		print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
 
 		encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
-		send_and_check(io);
+		if (send_and_check(io)) exit(1);
 		DBG_LOG("CMD_CONNECT bootrom\n");
 		break;
 	}
@@ -257,7 +252,7 @@ int main(int argc, char **argv) {
 				} else {
 					real_exec:
 					encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
-					send_and_check(io);
+					if (send_and_check(io)) exit(1);
 				}
 				DBG_LOG("EXEC FDL1\n");
 
@@ -314,7 +309,7 @@ int main(int argc, char **argv) {
 #endif
 
 				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
-				send_and_check(io);
+				if (send_and_check(io)) exit(1);
 				DBG_LOG("CMD_CONNECT FDL1\n");
 #if !USE_LIBUSB
 				if (baudrate)
@@ -322,15 +317,15 @@ int main(int argc, char **argv) {
 					uint8_t data[4];
 					WRITE32_BE(data, baudrate);
 					encode_msg(io, BSL_CMD_CHANGE_BAUD, data, 4);
-					send_and_check(io);
-					DBG_LOG("CHANGE_BAUD FDL1 to %d\n", baudrate);
-					call_SetProperty(io->handle, 0, 100, (LPCVOID)&baudrate);
+					if (!send_and_check(io)) {
+						DBG_LOG("CHANGE_BAUD FDL1 to %d\n", baudrate);
+						call_SetProperty(io->handle, 0, 100, (LPCVOID)&baudrate);
+					}
 				}
 #endif
 				if (keep_charge) {
 					encode_msg(io, BSL_CMD_KEEP_CHARGE, NULL, 0);
-					send_and_check(io);
-					DBG_LOG("KEEP_CHARGE FDL1\n");
+					if (!send_and_check(io)) DBG_LOG("KEEP_CHARGE FDL1\n");
 				}
 				fdl1_loaded = 1;
 			}
@@ -356,10 +351,7 @@ int main(int argc, char **argv) {
 				DBG_LOG("EXEC FDL2\n");
 				if (Da_Info.bDisableHDLC) {
 					encode_msg(io, BSL_CMD_DISABLE_TRANSCODE, NULL, 0);
-					send_msg(io);
-					ret = recv_msg(io);
-					if (!ret) ERR_EXIT("timeout reached\n");
-					if (recv_type(io) == BSL_REP_ACK) {
+					if (!send_and_check(io)) {
 						io->flags &= ~FLAGS_TRANSCODE;
 						DBG_LOG("DISABLE_TRANSCODE\n");
 					}
@@ -377,7 +369,7 @@ int main(int argc, char **argv) {
 			DBG_LOG("baudrate is %d\n", baudrate);
 #endif
 		} else if (!strcmp(str2[1], "path")) {
-			if (argcount > 2)  strcpy(savepath, str2[2]);;
+			if (argcount > 2) strcpy(savepath, str2[2]);
 			DBG_LOG("save dir is %s\n", savepath);
 
 		} else if (!strcmp(str2[1], "exec_addr")) {
@@ -518,8 +510,7 @@ int main(int argc, char **argv) {
 
 		} else if (!strcmp(str2[1], "disable_transcode")) {
 			encode_msg(io, BSL_CMD_DISABLE_TRANSCODE, NULL, 0);
-			send_and_check(io);
-			io->flags &= ~FLAGS_TRANSCODE;
+			if (!send_and_check(io)) io->flags &= ~FLAGS_TRANSCODE;
 
 		} else if (!strcmp(str2[1], "transcode")) {
 			unsigned a, f;
@@ -547,8 +538,7 @@ int main(int argc, char **argv) {
 				continue;
 			}
 			encode_msg(io, BSL_CMD_NORMAL_RESET, NULL, 0);
-			send_and_check(io);
-			break;
+			if (!send_and_check(io)) break;
 
 		} else if (!strcmp(str2[1], "poweroff")) {
 			if (!fdl1_loaded) {
@@ -556,8 +546,7 @@ int main(int argc, char **argv) {
 				continue;
 			}
 			encode_msg(io, BSL_CMD_POWER_OFF, NULL, 0);
-			send_and_check(io);
-			break;
+			if (!send_and_check(io)) break;
 
 		} else if (!strcmp(str2[1], "verbose")) {
 			if (argcount <= 2) { DBG_LOG("verbose {0,1,2}\n");continue; }

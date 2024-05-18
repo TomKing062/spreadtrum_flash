@@ -137,7 +137,7 @@ int send_msg(spdio_t *io);
 int recv_msg(spdio_t *io);
 int recv_msg_timeout(spdio_t *io, int timeout);
 unsigned recv_type(spdio_t *io);
-void send_and_check(spdio_t *io);
+int send_and_check(spdio_t* io);
 void check_confirm(const char* name);
 void send_file(spdio_t *io, const char *fn, uint32_t start_addr, int end_data, unsigned step);
 unsigned dump_flash(spdio_t *io, uint32_t addr, uint32_t start, uint32_t len, const char *fn, unsigned step);

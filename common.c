@@ -458,14 +458,17 @@ unsigned recv_type(spdio_t* io) {
 	return READ16_BE(io->raw_buf);
 }
 
-void send_and_check(spdio_t* io) {
+int send_and_check(spdio_t* io) {
 	int ret;
 	send_msg(io);
 	ret = recv_msg(io);
 	if (!ret) ERR_EXIT("timeout reached\n");
 	ret = recv_type(io);
-	if (ret != BSL_REP_ACK)
-		ERR_EXIT("unexpected response (0x%04x)\n", ret);
+	if (ret != BSL_REP_ACK) {
+		DBG_LOG("unexpected response (0x%04x)\n", ret);
+		return -1;
+	}
+	return 0;
 }
 
 void check_confirm(const char* name) {
@@ -511,14 +514,14 @@ void send_file(spdio_t* io, const char* fn,
 	WRITE32_BE(data + 1, size);
 
 	encode_msg(io, BSL_CMD_START_DATA, data, 4 * 2);
-	send_and_check(io);
+	if (send_and_check(io)) { free(mem); return; }
 
 	for (i = 0; i < size; i += n) {
 		n = size - i;
 		// n = spd_transcode_max(mem + i, size - i, 2048 - 2 - 6);
 		if (n > step) n = step;
 		encode_msg(io, BSL_CMD_MIDST_DATA, mem + i, n);
-		send_and_check(io);
+		if (send_and_check(io)) { free(mem); return; }
 	}
 	free(mem);
 
@@ -683,7 +686,7 @@ uint64_t dump_partition(spdio_t* io,
 	if (start == 0 && len == 0xFFFFFFFF) len = len << 8;//max 1024GB
 
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
-	send_and_check(io);
+	if (send_and_check(io)) return 0;
 
 	if (savepath[0]) {
 		char fix_fn[2048];
@@ -742,7 +745,7 @@ uint64_t read_pactime(spdio_t* io) {
 	unsigned long long time, unix;
 
 	select_partition(io, "miscdata", offset + len, 0, BSL_CMD_READ_START);
-	send_and_check(io);
+	if (send_and_check(io)) return 0;
 
 	WRITE32_LE(data, len);
 	WRITE32_LE(data + 1, offset);
@@ -834,11 +837,15 @@ void partition_list(spdio_t* io, const char* fn) {
 	ret = recv_msg(io);
 	if (!ret) ERR_EXIT("timeout reached\n");
 	ret = recv_type(io);
-	if (ret != BSL_REP_READ_PARTITION)
-		ERR_EXIT("unexpected response (0x%04x)\n", ret);
+	if (ret != BSL_REP_READ_PARTITION) {
+		DBG_LOG("unexpected response (0x%04x)\n", ret);
+		return;
+	}
 	size = READ16_BE(io->raw_buf + 2);
-	if (size % 0x4c)
-		ERR_EXIT("not divisible by struct size (0x%04x)\n", size);
+	if (size % 0x4c) {
+		DBG_LOG("not divisible by struct size (0x%04x)\n", size);
+		return;
+	}
 	n = size / 0x4c;
 	if (strcmp(fn, "-")) {
 		fo = fopen(fn, "wb");
@@ -903,7 +910,7 @@ void load_partition(spdio_t* io, const char* name,
 
 	mode64 = len >> 32;
 	select_partition(io, name, len, mode64, BSL_CMD_START_DATA);
-	send_and_check(io);
+	if (send_and_check(io)) { fclose(fi); return; }
 
 	for (offset = 0; (n64 = len - offset); offset += n) {
 		n = n64 > step ? step : n64;
@@ -986,7 +993,7 @@ void load_nv_partition(spdio_t* io, const char* name,
 		len = 0;
 
 		if (!output) ERR_EXIT("malloc failed\n");
-		if (*(uint32_t*)mem == 0x00004e56) memOffset = 0x200;;
+		if (*(uint32_t*)mem == 0x00004e56) memOffset = 0x200;
 
 		len += sizeof(uint32_t);
 
@@ -1035,7 +1042,7 @@ void load_nv_partition(spdio_t* io, const char* name,
 		WRITE32_LE(&pkt.cs, cs);
 		encode_msg(io, BSL_CMD_START_DATA, &pkt, sizeof(pkt));
 	}
-	send_and_check(io);
+	if (send_and_check(io)) { free(mem); return; }
 
 	for (offset = 0; (rsz = len - offset); offset += n) {
 		n = rsz > step ? step : rsz;
@@ -1061,7 +1068,7 @@ int64_t find_partition_size(spdio_t* io, const char* name) {
 	int ret, i, start = 47;
 
 	select_partition(io, name, 1ll << (start + 1), 1, BSL_CMD_READ_START);
-	send_and_check(io);
+	if (send_and_check(io)) return 0;
 
 	for (i = start; i >= 20; i--) {
 		uint32_t data[3];
@@ -1241,7 +1248,7 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		printf("Error opening directory.\n");
 		return;
 	}
-	for (fn = entry->d_name; entry = readdir(dir); fn = entry->d_name)
+	for (fn = entry->d_name; (entry = readdir(dir)); fn = entry->d_name)
 #endif
 	{
 		if (strcmp(fn, ".") == 0
@@ -1302,72 +1309,61 @@ const _TCHAR CLASS_NAME[] = _T("Sample Window Class");
 
 HWND hWnd;
 
-LRESULT DeviceChange(UINT message, WPARAM wParam, LPARAM lParam)
-{
-	static BOOL interface_checked = FALSE;
-	if (DBT_DEVICEARRIVAL == wParam || DBT_DEVICEREMOVECOMPLETE == wParam)
-	{
-		PDEV_BROADCAST_HDR pHdr = (PDEV_BROADCAST_HDR)lParam;
-		PDEV_BROADCAST_DEVICEINTERFACE pDevInf;
-		PDEV_BROADCAST_PORT pDevPort;
-		switch (pHdr->dbch_devicetype)
-		{
-		case DBT_DEVTYP_DEVICEINTERFACE:
-			pDevInf = (PDEV_BROADCAST_DEVICEINTERFACE)pHdr;
-			if (my_strstr(pDevInf->dbcc_name, _T("VID_1782&PID_4D00"))) {
-#if USE_LIBUSB
-				if (DBT_DEVICEREMOVECOMPLETE == wParam) {
-					m_bOpened = -1;
-				}
-#else
-				interface_checked = TRUE;
-#endif
-			}
-			break;
-#if !USE_LIBUSB
-		case DBT_DEVTYP_PORT:
-			if (interface_checked) {
-				pDevPort = (PDEV_BROADCAST_PORT)pHdr;
-				DWORD changedPort = (DWORD)my_strtol(pDevPort->dbcp_name + 3, NULL, 0);
-				if (DBT_DEVICEARRIVAL == wParam)
-					if (!curPort) curPort = changedPort;
-					else printf("second port not supported\n");
-				else {
-					if (curPort == changedPort) {
-						m_bOpened = -1;
-					}
-				}
-			}
-			interface_checked = FALSE;
-			break;
-#endif
-		}
-	}
-	return 0;
-}
-
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+	static BOOL interface_checked = FALSE;
 	switch (message)
 	{
 	case WM_DEVICECHANGE:
-		return DeviceChange(message, wParam, lParam);
+		if (DBT_DEVICEARRIVAL == wParam || DBT_DEVICEREMOVECOMPLETE == wParam)
+		{
+			PDEV_BROADCAST_HDR pHdr = (PDEV_BROADCAST_HDR)lParam;
+			PDEV_BROADCAST_DEVICEINTERFACE pDevInf;
+			PDEV_BROADCAST_PORT pDevPort;
+			switch (pHdr->dbch_devicetype)
+			{
+			case DBT_DEVTYP_DEVICEINTERFACE:
+				pDevInf = (PDEV_BROADCAST_DEVICEINTERFACE)pHdr;
+				if (my_strstr(pDevInf->dbcc_name, _T("VID_1782&PID_4D00"))) {
+#if USE_LIBUSB
+					if (DBT_DEVICEREMOVECOMPLETE == wParam) m_bOpened = -1;
+#else
+					interface_checked = TRUE;
+#endif
+				}
+				break;
+#if !USE_LIBUSB
+			case DBT_DEVTYP_PORT:
+				if (interface_checked) {
+					pDevPort = (PDEV_BROADCAST_PORT)pHdr;
+					DWORD changedPort = (DWORD)my_strtol(pDevPort->dbcp_name + 3, NULL, 0);
+					if (DBT_DEVICEARRIVAL == wParam)
+						if (!curPort) curPort = changedPort;
+						else
+							if (curPort != changedPort)
+								printf("second port not supported\n");
+					else
+						if (curPort == changedPort)
+							m_bOpened = -1;
+				}
+				interface_checked = FALSE;
+				break;
+#endif
+			}
+		}
 	}
 
 	return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
-ATOM MyRegisterClass()
+DWORD WINAPI ThrdFunc(LPVOID lpParam)
 {
 	WNDCLASS wc = { 0 };
 	wc.lpfnWndProc = WndProc;
 	wc.hInstance = GetModuleHandle(NULL);
 	wc.lpszClassName = CLASS_NAME;
-	return RegisterClass(&wc);
-}
+	if (0 == RegisterClass(&wc)) return -1;
 
-BOOL CreateMessageOnlyWindow()
-{
 	hWnd = CreateWindowEx(0, CLASS_NAME, _T(""), WS_OVERLAPPEDWINDOW,
 		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
 		NULL,       // Parent window
@@ -1375,12 +1371,8 @@ BOOL CreateMessageOnlyWindow()
 		GetModuleHandle(NULL),  // Instance handle
 		NULL        // Additional application data
 	);
+	if (hWnd==NULL) return -1;
 
-	return hWnd != NULL;
-}
-
-void RegisterDeviceNotify()
-{
 	HDEVNOTIFY hDevNotify;
 	DEV_BROADCAST_DEVICEINTERFACE NotificationFilter;
 #if USE_LIBUSB
@@ -1393,17 +1385,6 @@ void RegisterDeviceNotify()
 	NotificationFilter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
 	NotificationFilter.dbcc_classguid = GUID_DEVINTERFACE;
 	hDevNotify = RegisterDeviceNotification(hWnd, &NotificationFilter, DEVICE_NOTIFY_WINDOW_HANDLE);
-}
-
-DWORD WINAPI ThrdFunc(LPVOID lpParam)
-{
-	if (0 == MyRegisterClass())
-		return -1;
-
-	if (!CreateMessageOnlyWindow())
-		return -1;
-
-	RegisterDeviceNotify();
 
 	MSG msg;
 	while (GetMessage(&msg, NULL, 0, 0))

@@ -84,8 +84,7 @@ int main(int argc, char **argv) {
 					return -1;
 				}
 #endif
-				for (i = 0; ; i++) 
-				{
+				for (i = 0; ; i++) {
 #if USE_LIBUSB
 					io->dev_handle = libusb_open_device_with_vid_pid(NULL, 0x1782, 0x4d00);
 					if (io->dev_handle) break;
@@ -107,14 +106,6 @@ int main(int argc, char **argv) {
 				io->endp_out = endpoints[1];
 #else
 				call_ConnectChannel(io->handle, curPort);
-#endif
-#if _WIN32
-				if (io->hThread == NULL) {
-					io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
-					if (io->hThread == NULL) {
-						return -1;
-					}
-				}
 #endif
 				io->flags |= FLAGS_TRANSCODE;
 
@@ -142,7 +133,7 @@ int main(int argc, char **argv) {
 				print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
 
 				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
-				send_and_check(io);
+				if (send_and_check(io)) exit(1);
 				DBG_LOG("CMD_CONNECT bootrom\n");
 
 				send_file(io, fn, addr, end_data, 528);
@@ -153,7 +144,7 @@ int main(int argc, char **argv) {
 				} else {
 					real_exec:
 					encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
-					send_and_check(io);
+					if (send_and_check(io)) exit(1);
 				}
 				DBG_LOG("EXEC FDL1\n");
 
@@ -210,7 +201,7 @@ int main(int argc, char **argv) {
 #endif
 
 				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
-				send_and_check(io);
+				if (send_and_check(io)) exit(1);
 				DBG_LOG("CMD_CONNECT FDL1\n");
 #if !USE_LIBUSB
 				if (baudrate)
@@ -218,15 +209,15 @@ int main(int argc, char **argv) {
 					uint8_t data[4];
 					WRITE32_BE(data, baudrate);
 					encode_msg(io, BSL_CMD_CHANGE_BAUD, data, 4);
-					send_and_check(io);
-					DBG_LOG("CHANGE_BAUD FDL1 to %d\n", baudrate);
-					call_SetProperty(io->handle, 0, 100, (LPCVOID)&baudrate);
+					if (!send_and_check(io)) {
+						DBG_LOG("CHANGE_BAUD FDL1 to %d\n", baudrate);
+						call_SetProperty(io->handle, 0, 100, (LPCVOID)&baudrate);
+					}
 				}
 #endif
 				if (keep_charge) {
 					encode_msg(io, BSL_CMD_KEEP_CHARGE, NULL, 0);
-					send_and_check(io);
-					DBG_LOG("KEEP_CHARGE FDL1\n");
+					if (!send_and_check(io)) DBG_LOG("KEEP_CHARGE FDL1\n");
 				}
 			}
 
@@ -251,10 +242,7 @@ int main(int argc, char **argv) {
 				DBG_LOG("EXEC FDL2\n");
 				if (Da_Info.bDisableHDLC) {
 					encode_msg(io, BSL_CMD_DISABLE_TRANSCODE, NULL, 0);
-					send_msg(io);
-					ret = recv_msg(io);
-					if (!ret) ERR_EXIT("timeout reached\n");
-					if (recv_type(io) == BSL_REP_ACK) {
+					if (!send_and_check(io)) {
 						io->flags &= ~FLAGS_TRANSCODE;
 						DBG_LOG("DISABLE_TRANSCODE\n");
 					}
@@ -277,7 +265,7 @@ int main(int argc, char **argv) {
 #endif
 		} else if (!strcmp(argv[1], "path")) {
 			if (argc <= 2) ERR_EXIT("path save_location\n");
-			strcpy(savepath, argv[2]);;
+			strcpy(savepath, argv[2]);
 			DBG_LOG("save dir is %s\n", savepath);
 			argc -= 2; argv += 2;
 
@@ -427,8 +415,7 @@ int main(int argc, char **argv) {
 
 		} else if (!strcmp(argv[1], "disable_transcode")) {
 			encode_msg(io, BSL_CMD_DISABLE_TRANSCODE, NULL, 0);
-			send_and_check(io);
-			io->flags &= ~FLAGS_TRANSCODE;
+			if (!send_and_check(io)) io->flags &= ~FLAGS_TRANSCODE;
 			argc -= 1; argv += 1;
 
 		} else if (!strcmp(argv[1], "transcode")) {
@@ -457,12 +444,12 @@ int main(int argc, char **argv) {
 
 		} else if (!strcmp(argv[1], "reset")) {
 			encode_msg(io, BSL_CMD_NORMAL_RESET, NULL, 0);
-			send_and_check(io);
+			if (!send_and_check(io)) break;
 			argc -= 1; argv += 1;
 
 		} else if (!strcmp(argv[1], "poweroff")) {
 			encode_msg(io, BSL_CMD_POWER_OFF, NULL, 0);
-			send_and_check(io);
+			if (!send_and_check(io)) break;
 			argc -= 1; argv += 1;
 
 		} else if (!strcmp(argv[1], "verbose")) {
