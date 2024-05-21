@@ -113,6 +113,38 @@ typedef struct {
 } spdio_t;
 
 typedef struct {
+	char name[36];
+	long long size;
+} partition_t;
+
+#pragma pack(1)
+typedef struct {
+	uint8_t signature[8];
+	uint32_t revision;
+	uint32_t header_size;
+	uint32_t header_crc32;
+	int32_t reserved;
+	uint64_t current_lba;
+	uint64_t backup_lba;
+	uint64_t first_usable_lba;
+	uint64_t last_usable_lba;
+	uint8_t disk_guid[16];
+	uint64_t partition_entry_lba;
+	int32_t number_of_partition_entries;
+	uint32_t size_of_partition_entry;
+	uint32_t partition_entry_array_crc32;
+} efi_header;
+
+typedef struct {
+	uint8_t partition_type_guid[16];
+	uint8_t unique_partition_guid[16];
+	uint64_t starting_lba;
+	uint64_t ending_lba;
+	int64_t attributes;
+	uint8_t partition_name[72];
+} efi_entry;
+
+typedef struct {
 	uint32_t   dwVersion;
 	uint32_t   bDisableHDLC;	//0: Enable hdl; 1:Disable hdl
 	uint8_t    bIsOldMemory;
@@ -122,6 +154,7 @@ typedef struct {
 	uint32_t   dwStorageType;
 	uint32_t   dwReserve[59];	//Reserve
 }DA_INFO_T;
+#pragma pack()
 
 void print_string(FILE* f, const void* src, size_t n);
 
@@ -132,26 +165,26 @@ void find_endpoints(libusb_device_handle* dev_handle, int result[2]);
 spdio_t* spdio_init(int flags);
 void spdio_free(spdio_t* io);
 
-void encode_msg(spdio_t *io, int type, const void *data, size_t len);
-int send_msg(spdio_t *io);
-int recv_msg(spdio_t *io);
-int recv_msg_timeout(spdio_t *io, int timeout);
-unsigned recv_type(spdio_t *io);
+void encode_msg(spdio_t* io, int type, const void* data, size_t len);
+int send_msg(spdio_t* io);
+int recv_msg(spdio_t* io);
+int recv_msg_timeout(spdio_t* io, int timeout);
+unsigned recv_type(spdio_t* io);
 int send_and_check(spdio_t* io);
 void check_confirm(const char* name);
-void send_file(spdio_t *io, const char *fn, uint32_t start_addr, int end_data, unsigned step);
-unsigned dump_flash(spdio_t *io, uint32_t addr, uint32_t start, uint32_t len, const char *fn, unsigned step);
-unsigned dump_mem(spdio_t *io, uint32_t start, uint32_t len, const char *fn, unsigned step);
-uint64_t dump_partition(spdio_t *io, const char *name, uint64_t start, uint64_t len, const char *fn, unsigned step);
+void send_file(spdio_t* io, const char* fn, uint32_t start_addr, int end_data, unsigned step);
+unsigned dump_flash(spdio_t* io, uint32_t addr, uint32_t start, uint32_t len, const char* fn, unsigned step);
+unsigned dump_mem(spdio_t* io, uint32_t start, uint32_t len, const char* fn, unsigned step);
+uint64_t dump_partition(spdio_t* io, const char* name, uint64_t start, uint64_t len, const char* fn, unsigned step);
 void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size);
-uint64_t read_pactime(spdio_t *io);
-void partition_list(spdio_t *io, const char *fn);
-void repartition(spdio_t *io, const char *fn);
-void erase_partition(spdio_t *io, const char *name);
-void load_partition(spdio_t *io, const char *name, const char *fn, unsigned step);
+uint64_t read_pactime(spdio_t* io);
+partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr);
+void repartition(spdio_t* io, const char* fn);
+void erase_partition(spdio_t* io, const char* name);
+void load_partition(spdio_t* io, const char* name, const char* fn, unsigned step);
 void load_nv_partition(spdio_t* io, const char* name, const char* fn, unsigned step);
 void load_partitions(spdio_t* io, const char* path, int blk_size);
-int64_t find_partition_size(spdio_t *io, const char *name);
-uint64_t str_to_size(const char *str);
+int64_t find_partition_size(spdio_t* io, const char* name);
+uint64_t str_to_size(const char* str);
 uint64_t str_to_size_ubi(const char* str, int* nand_info);
 void get_Da_Info(spdio_t* io);

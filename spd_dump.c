@@ -28,6 +28,8 @@ int main(int argc, char **argv) {
 	uint32_t ram_addr = ~0u;
 	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 0, baudrate = 0;
 	char execfile[40];
+	int part_count = 0;
+	partition_t* ptable = NULL;
 #if !USE_LIBUSB
 	extern DWORD curPort;
 #endif
@@ -259,6 +261,7 @@ int main(int argc, char **argv) {
 			if (argc <= 2) ERR_EXIT("baudrate rate\n");
 			else {
 				baudrate = strtol(argv[2], NULL, 0);
+				if (fdl_loaded > 1) call_SetProperty(io->handle, 0, 100, (LPCVOID)&baudrate);
 				DBG_LOG("baudrate is %d\n", baudrate);
 			}
 			argc -= 2; argv += 2;
@@ -340,8 +343,33 @@ int main(int argc, char **argv) {
 			if (offset + size < offset)
 				ERR_EXIT("64-bit limit reached\n");
 			dump_partition(io, name, offset, size, fn,
-					blk_size ? blk_size : 4096);
+					blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 5; argv += 5;
+
+		} else if (!strcmp(argv[1], "r")) {
+			uint64_t realsize = 0;
+			const char* name = argv[2];
+			if (argc <= 2) ERR_EXIT("r all/part_name\n");
+			if (!part_count) ptable = partition_list(io, "partition.xml", &part_count);
+			if (!part_count) realsize = find_partition_size(io, argv[2]);
+			else if (!strcmp(argv[2], "all")) {
+				dump_partitions(io, "partition.xml", nand_info, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				argc -= 2; argv += 2;
+				continue;
+			}
+			else {
+				for (i = 0; i < part_count; i++)
+					if (!strcmp(argv[2], (*(ptable + i)).name)) {
+						realsize = (*(ptable + i)).size;
+						break;
+					}
+				if (i == part_count) ERR_EXIT("part not exist\n");
+			}
+			if (strstr(name, "fixnv") || strstr(name, "runtimenv")) realsize -= 0x200;
+			char dfile[40];
+			sprintf(dfile, "%s.bin", name);
+			dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			argc -= 2; argv += 2;
 
 		} else if (!strcmp(argv[1], "read_parts")) {
 			const char* fn; FILE* fi;
@@ -350,12 +378,12 @@ int main(int argc, char **argv) {
 			fi = fopen(fn, "r");
 			if (fi == NULL) ERR_EXIT("File does not exist.\n");
 			else fclose(fi);
-			dump_partitions(io, fn, nand_info, blk_size ? blk_size : 4096);
+			dump_partitions(io, fn, nand_info, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(argv[1], "partition_list")) {
 			if (argc <= 2) ERR_EXIT("partition_list FILE\n");
-			partition_list(io, argv[2]);
+			if (!part_count) ptable = partition_list(io, argv[2], &part_count);
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(argv[1], "repartition")) {
@@ -364,25 +392,25 @@ int main(int argc, char **argv) {
 			repartition(io, argv[2]);
 			argc -= 2; argv += 2;
 
-		} else if (!strcmp(argv[1], "erase_part")) {
+		} else if (!strcmp(argv[1], "erase_part") || !strcmp(argv[1], "e")) {
 			if (argc <= 2) ERR_EXIT("erase_part part_name\n");
 			if (!skip_confirm) check_confirm("erase partition");
 			erase_partition(io, argv[2]);
 			argc -= 2; argv += 2;
 
-		} else if (!strcmp(argv[1], "write_part")) {
+		} else if (!strcmp(argv[1], "write_part") || !strcmp(argv[1], "w")) {
 			if (argc <= 3) ERR_EXIT("write_part part_name FILE\n");
 			if (!skip_confirm) check_confirm("write partition");
 			if (strstr(argv[2], "fixnv"))
 				load_nv_partition(io, argv[2], argv[3], 4096);
 			else
-				load_partition(io, argv[2], argv[3], blk_size ? blk_size : 4096);
+				load_partition(io, argv[2], argv[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 3; argv += 3;
 
 		} else if (!strcmp(argv[1], "write_parts")) {
 			if (argc <= 2) ERR_EXIT("write_parts save_location\n");
 			if (!skip_confirm) check_confirm("write all partitions");
-			load_partitions(io, argv[2], blk_size ? blk_size : 4096);
+			load_partitions(io, argv[2], blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(argv[1], "read_pactime")) {
@@ -492,7 +520,7 @@ int main(int argc, char **argv) {
 		}
 #endif
 	}
-
+	free(ptable);
 	spdio_free(io);
 	return 0;
 }

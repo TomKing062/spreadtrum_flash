@@ -828,52 +828,143 @@ int scan_xml_partitions(const char* fn, uint8_t* buf, size_t buf_size) {
 	return found;
 }
 
-void partition_list(spdio_t* io, const char* fn) {
-	unsigned size, i, n; char name[37];
-	int ret; FILE* fo = NULL; uint8_t* p;
+#define SECTOR_SIZE 512
+#define MAX_SECTORS 32
 
-	encode_msg(io, BSL_CMD_READ_PARTITION, NULL, 0);
-	send_msg(io);
-	ret = recv_msg(io);
-	if (!ret) ERR_EXIT("timeout reached\n");
-	ret = recv_type(io);
-	if (ret != BSL_REP_READ_PARTITION) {
-		DBG_LOG("unexpected response (0x%04x)\n", ret);
-		return;
+int gpt_info(partition_t* ptable, const char* fn_pgpt, const char* fn_xml, int* part_count_ptr) {
+	FILE* fp = fopen(fn_pgpt, "rb");
+	if (fp == NULL) {
+		return -1;
 	}
-	size = READ16_BE(io->raw_buf + 2);
-	if (size % 0x4c) {
-		DBG_LOG("not divisible by struct size (0x%04x)\n", size);
-		return;
+	efi_header header;
+	int bytes_read;
+	uint8_t buffer[SECTOR_SIZE];
+	int sector_index = 0;
+	int found = 0;
+
+	while (sector_index < MAX_SECTORS) {
+		bytes_read = fread(buffer, 1, SECTOR_SIZE, fp);
+		if (bytes_read != SECTOR_SIZE) {
+			fclose(fp);
+			return -1;
+		}
+		if (memcmp(buffer, "EFI PART", 8) == 0) {
+			memcpy(&header, buffer, sizeof(header));
+			found = 1;
+			break;
+		}
+		sector_index++;
 	}
-	n = size / 0x4c;
-	if (strcmp(fn, "-")) {
-		fo = fopen(fn, "wb");
-		if (!fo) ERR_EXIT("fopen failed\n");
-		fprintf(fo, "<Partitions>\n");
+
+	if (found == 0) {
+		fclose(fp);
+		return -1;
 	}
-	int divisor = 10;
-	DBG_LOG("detecting sector size\n");
-	p = io->raw_buf + 4;
-	for (i = 0; i < n; i++, p += 0x4c) {
-		size = READ32_LE(p + 0x48);
-		while (!(size >> divisor)) divisor--;
+	int real_SECTOR_SIZE = SECTOR_SIZE * sector_index;
+	efi_entry* entries = malloc(header.number_of_partition_entries * sizeof(efi_entry));
+	if (entries == NULL) {
+		fclose(fp);
+		return -1;
 	}
-	p = io->raw_buf + 4;
-	for (i = 0; i < n; i++, p += 0x4c) {
-		ret = copy_from_wstr(name, 36, (uint16_t*)p);
-		if (ret) ERR_EXIT("bad partition name\n");
-		size = READ32_LE(p + 0x48);
-		DBG_LOG("[%d] %s, %u (%u)\n", i, name, size >> divisor, size);
-		if (fo) {
-			fprintf(fo, "    <Partition id=\"%s\" size=\"", name);
-			if (i + 1 == n) fprintf(fo, "0x%x\"/>\n", ~0);
-			else fprintf(fo, "%u\"/>\n", size >> divisor);
+	fseek(fp, header.partition_entry_lba * real_SECTOR_SIZE, SEEK_SET);
+	bytes_read = fread(entries, 1, header.number_of_partition_entries * sizeof(efi_entry), fp);
+	if (bytes_read != (int)(header.number_of_partition_entries * sizeof(efi_entry)))
+		printf("only read %d/%d\n", bytes_read, (int)(header.number_of_partition_entries * sizeof(efi_entry)));
+	FILE* fo = fopen(fn_xml, "wb");
+	fprintf(fo, "<Partitions>\n");
+	int n = 0;
+	for (int i = 0; i < header.number_of_partition_entries; i++) {
+		efi_entry entry = *(entries + i);
+		if (entry.starting_lba == 0 && entry.ending_lba == 0) {
+			n = i;
+			break;
 		}
 	}
-	if (fo) {
-		fprintf(fo, "</Partitions>\n");
-		fclose(fo);
+	for (int i = 0; i < n; i++) {
+		efi_entry entry = *(entries + i);
+		copy_from_wstr((*(ptable + i)).name, 36, (uint16_t*)entry.partition_name);
+		uint64_t lba_count = entry.ending_lba - entry.starting_lba + 1;
+		(*(ptable + i)).size = lba_count * real_SECTOR_SIZE;
+		printf("%3d %36s %lldMB\n", i, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
+		fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(ptable + i)).name);
+		if (i + 1 == n) fprintf(fo, "0x%x\"/>\n", ~0);
+		else fprintf(fo, "%lld\"/>\n", ((*(ptable + i)).size >> 20));
+	}
+	fprintf(fo, "</Partitions>");
+	fclose(fo);
+	free(entries);
+	fclose(fp);
+	*part_count_ptr = n;
+	return 0;
+}
+
+partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
+	long long size;
+	unsigned i, n = 0;
+	int ret; FILE* fo = NULL; uint8_t* p;
+	int gpt_failed = 1;
+	partition_t* ptable = malloc(128 * sizeof(partition_t));
+	if (ptable == NULL) return NULL;
+	
+	printf("Reading Partition List\n");
+	if (32 * 1024 == dump_partition(io, "user_partition", 0, 32 * 1024, "pgpt.bin", 4096))
+		gpt_failed = gpt_info(ptable, "pgpt.bin", fn, part_count_ptr);
+	if (gpt_failed) {
+		encode_msg(io, BSL_CMD_READ_PARTITION, NULL, 0);
+		send_msg(io);
+		ret = recv_msg(io);
+		if (!ret) ERR_EXIT("timeout reached\n");
+		ret = recv_type(io);
+		if (ret != BSL_REP_READ_PARTITION){
+			DBG_LOG("unexpected response (0x%04x)\n", ret);
+			free(ptable);
+			return NULL;
+		}
+		size = READ16_BE(io->raw_buf + 2);
+		if (size % 0x4c) {
+			DBG_LOG("not divisible by struct size (0x%04llx)\n", size);
+			free(ptable);
+			return NULL;
+		}
+		n = size / 0x4c;
+		if (strcmp(fn, "-")) {
+			fo = fopen(fn, "wb");
+			if (!fo) ERR_EXIT("fopen failed\n");
+			fprintf(fo, "<Partitions>\n");
+		}
+		int divisor = 10;
+		DBG_LOG("detecting sector size\n");
+		p = io->raw_buf + 4;
+		for (i = 0; i < n; i++, p += 0x4c) {
+			size = READ32_LE(p + 0x48);
+			while (!(size >> divisor)) divisor--;
+		}
+		p = io->raw_buf + 4;
+		for (i = 0; i < n; i++, p += 0x4c) {
+			ret = copy_from_wstr((*(ptable + i)).name, 36, (uint16_t*)p);
+			if (ret) ERR_EXIT("bad partition name\n");
+			size = READ32_LE(p + 0x48);
+			(*(ptable + i)).size = (size << 20) >> divisor;
+			printf("%3d %36s %lldMB\n", i, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
+			if (fo) {
+				fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(ptable + i)).name);
+				if (i + 1 == n) fprintf(fo, "0x%x\"/>\n", ~0);
+				else fprintf(fo, "%lld\"/>\n", ((*(ptable + i)).size >> 20));
+			}
+		}
+		if (fo) {
+			fprintf(fo, "</Partitions>\n");
+			fclose(fo);
+		}
+		*part_count_ptr = n;
+	}
+	if (*part_count_ptr) {
+		printf("Total number of partitions: %d\n", *part_count_ptr);
+		return ptable;
+	}
+	else {
+		free(ptable);
+		return NULL;
 	}
 }
 
@@ -1134,11 +1225,6 @@ uint64_t str_to_size_ubi(const char* str, int* nand_info) {
 	}
 }
 
-typedef struct {
-	char name[36];
-	long long size;
-} partition_t;
-
 void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) {
 	partition_t partitions[128];
 	const char* part1 = "Partitions>";
@@ -1337,14 +1423,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 				if (interface_checked) {
 					pDevPort = (PDEV_BROADCAST_PORT)pHdr;
 					DWORD changedPort = (DWORD)my_strtol(pDevPort->dbcp_name + 3, NULL, 0);
-					if (DBT_DEVICEARRIVAL == wParam)
+					if (DBT_DEVICEARRIVAL == wParam) {
 						if (!curPort) curPort = changedPort;
-						else
-							if (curPort != changedPort)
-								printf("second port not supported\n");
-					else
-						if (curPort == changedPort)
-							m_bOpened = -1;
+						else if (curPort != changedPort) printf("second port not supported\n");
+					}
+					else if (curPort == changedPort) m_bOpened = -1;
 				}
 				interface_checked = FALSE;
 				break;

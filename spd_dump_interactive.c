@@ -31,6 +31,8 @@ int main(int argc, char **argv) {
 	char str1[ARGC_MAX * ARGC_LEN];
 	char str2[ARGC_MAX][ARGC_LEN];
 	char execfile[40];
+	int part_count = 0;
+	partition_t* ptable = NULL;
 #if !USE_LIBUSB
 	extern DWORD curPort;
 #endif
@@ -356,6 +358,8 @@ int main(int argc, char **argv) {
 						DBG_LOG("DISABLE_TRANSCODE\n");
 					}
 				}
+				if (Da_Info.dwStorageType == 0x102 || Da_Info.dwStorageType == 0x103) 
+					ptable = partition_list(io, "partition.xml", &part_count);
 				if (nand_id == DEFAULT_NAND_ID) {
 					nand_info[0] = (uint8_t)pow(2, nand_id & 3); //page size
 					nand_info[1] = 32 / (uint8_t)pow(2, (nand_id >> 2) & 3); //spare area size
@@ -365,7 +369,11 @@ int main(int argc, char **argv) {
 			}
 #if !USE_LIBUSB
 		} else if (!strcmp(str2[1], "baudrate")) {
-			if (argcount > 2)  baudrate = strtol(str2[2], NULL, 0);
+			if (argcount > 2)
+			{
+				baudrate = strtol(str2[2], NULL, 0);
+				if (fdl2_loaded) call_SetProperty(io->handle, 0, 100, (LPCVOID)&baudrate);
+			}
 			DBG_LOG("baudrate is %d\n", baudrate);
 #endif
 		} else if (!strcmp(str2[1], "path")) {
@@ -425,6 +433,12 @@ int main(int argc, char **argv) {
 			name = str2[2];
 			find_partition_size(io, name);
 
+		} else if (!strcmp(str2[1], "p") || !strcmp(str2[1], "print")) {
+			if (part_count)
+				for (i = 0; i < part_count; i++) {
+					printf("%3d %36s %lldMB\n", i, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
+				}
+
 		} else if (!strcmp(str2[1], "read_part")) {
 			const char *name, *fn; uint64_t offset, size;
 			if (argcount <= 5) { DBG_LOG("read_part part_name offset size FILE\n(read ubi on nand) read_part system 0 ubi40m system.bin\n");continue; }
@@ -436,7 +450,36 @@ int main(int argc, char **argv) {
 			if (offset + size < offset)
 				{ DBG_LOG("64-bit limit reached\n");continue; }
 			dump_partition(io, name, offset, size, fn,
-					blk_size ? blk_size : 4096);
+					blk_size ? blk_size : DEFAULT_BLK_SIZE);
+
+		} else if (!strcmp(str2[1], "r")) {
+			uint64_t realsize = 0;
+			const char* name = str2[2];
+			if (argcount <= 2) { DBG_LOG("r all/part_name/part_id\n"); continue; }
+			if (!part_count) ptable = partition_list(io, "partition.xml", &part_count);
+			if (!part_count) realsize = find_partition_size(io, str2[2]);
+			else if (isdigit(str2[2][0])) {
+				i = atoi(str2[2]);
+				if (i >= part_count) { DBG_LOG("part not exist\n"); continue; }
+				name = (*(ptable + i)).name;
+				realsize = (*(ptable + i)).size;
+			}
+			else if (!strcmp(str2[2], "all")) {
+				dump_partitions(io, "partition.xml", nand_info, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				continue;
+			}
+			else {
+				for (i = 0; i < part_count; i++)
+					if (!strcmp(str2[2], (*(ptable + i)).name)) {
+						realsize = (*(ptable + i)).size;
+						break;
+					}
+				if (i == part_count) { DBG_LOG("part not exist\n"); continue; }
+			}
+			if (strstr(name, "fixnv") || strstr(name, "runtimenv")) realsize -= 0x200;
+			char dfile[40];
+			sprintf(dfile, "%s.bin", name);
+			dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 
 		} else if (!strcmp(str2[1], "read_parts")) {
 			const char* fn; FILE* fi;
@@ -445,11 +488,12 @@ int main(int argc, char **argv) {
 			fi = fopen(fn, "r");
 			if (fi == NULL) { DBG_LOG("File does not exist.\n"); continue; }
 			else fclose(fi);
-			dump_partitions(io, fn, nand_info, blk_size ? blk_size : 4096);
+			dump_partitions(io, fn, nand_info, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 
 		} else if (!strcmp(str2[1], "partition_list")) {
 			if (argcount <= 2) { DBG_LOG("partition_list FILE\n");continue; }
-			partition_list(io, str2[2]);
+			if (part_count) { DBG_LOG("partition_list shouldn't run twice\n"); continue; }
+			ptable = partition_list(io, str2[2], &part_count);
 
 		} else if (!strcmp(str2[1], "repartition")) {
 			const char *fn;FILE *fi;
@@ -461,28 +505,45 @@ int main(int argc, char **argv) {
 			if (!skip_confirm) check_confirm("repartition");
 			repartition(io, str2[2]);
 
-		} else if (!strcmp(str2[1], "erase_part")) {
-			if (argcount <= 2) { DBG_LOG("erase_part part_name\n");continue; }
+		} else if (!strcmp(str2[1], "erase_part") || !strcmp(str2[1], "e")) {
+			if (argcount <= 2) { DBG_LOG("erase_part part_name_or_id\n");continue; }
+			i = -1;
+			if (isdigit(str2[2][0])) {
+				if (part_count) i = atoi(str2[2]);
+				else { DBG_LOG("gpt table is empty\n"); continue; }
+				if (i >= part_count) { DBG_LOG("part not exist\n"); continue; }
+			}
 			if (!skip_confirm) check_confirm("erase partition");
-			erase_partition(io, str2[2]);
+			if (i > -1) erase_partition(io, (*(ptable + i)).name);
+			else erase_partition(io, str2[2]);
 
-		} else if (!strcmp(str2[1], "write_part")) {
+		} else if (!strcmp(str2[1], "write_part") || !strcmp(str2[1], "w")) {
 			const char *fn;FILE *fi;
-			if (argcount <= 3) { DBG_LOG("write_part part_name FILE\n");continue; }
+			if (argcount <= 3) { DBG_LOG("write_part part_name_or_id FILE\n");continue; }
 			fn = str2[3];
 			fi = fopen(fn, "r");
 			if (fi == NULL) { DBG_LOG("File does not exist.\n");continue; }
 			else fclose(fi);
+			i = -1;
+			if (isdigit(str2[2][0])) {
+				if (part_count) i = atoi(str2[2]);
+				else { DBG_LOG("gpt table is empty\n"); continue; }
+				if (i >= part_count) { DBG_LOG("part not exist\n"); continue; }
+			}
 			if (!skip_confirm) check_confirm("write partition");
-			if (strstr(str2[2], "fixnv"))
-				load_nv_partition(io, str2[2], str2[3], 4096);
-			else
-				load_partition(io, str2[2], str2[3], blk_size ? blk_size : 4096);
+			if (i > -1) {
+				if (strstr((*(ptable + i)).name, "fixnv")) load_nv_partition(io, (*(ptable + i)).name, str2[3], 4096);
+				else load_partition(io, (*(ptable + i)).name, str2[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			}
+			else {
+				if (strstr(str2[2], "fixnv")) load_nv_partition(io, str2[2], str2[3], 4096);
+				else load_partition(io, str2[2], str2[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			}
 
 		} else if (!strcmp(str2[1], "write_parts")) {
 			if (argcount <= 2) { DBG_LOG("write_parts save_location\n");continue; }
 			if (!skip_confirm) check_confirm("write all partitions");
-			load_partitions(io, str2[2], blk_size ? blk_size : 4096);
+			load_partitions(io, str2[2], blk_size ? blk_size : DEFAULT_BLK_SIZE);
 
 		} else if (!strcmp(str2[1], "read_pactime")) {
 			read_pactime(io);
@@ -586,7 +647,7 @@ int main(int argc, char **argv) {
 		}
 #endif
 	}
-
+	free(ptable);
 	spdio_free(io);
 	return 0;
 }
