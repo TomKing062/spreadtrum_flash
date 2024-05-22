@@ -339,6 +339,8 @@ int main(int argc, char **argv) {
 			name = argv[2];
 			offset = str_to_size_ubi(argv[3], nand_info);
 			size = str_to_size_ubi(argv[4], nand_info);
+			if (0xffffffff == size) size = find_partition_size(io, name);
+			if (!size) { DBG_LOG("unable to get part size of %s\n", name); argc -= 5; argv += 5; continue; }
 			fn = argv[5];
 			if (offset + size < offset)
 				ERR_EXIT("64-bit limit reached\n");
@@ -351,7 +353,10 @@ int main(int argc, char **argv) {
 			const char* name = argv[2];
 			if (argc <= 2) ERR_EXIT("r all/part_name\n");
 			if (!part_count) ptable = partition_list(io, "partition.xml", &part_count);
-			if (!part_count) realsize = find_partition_size(io, argv[2]);
+			if (!part_count) {
+				realsize = find_partition_size(io, argv[2]);
+				if (!realsize) { DBG_LOG("unable to get part size of %s\n", name); argc -= 2; argv += 2; continue; }
+			}
 			else if (!strcmp(argv[2], "all")) {
 				dump_partitions(io, "partition.xml", nand_info, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				argc -= 2; argv += 2;
@@ -492,12 +497,15 @@ int main(int argc, char **argv) {
 			DBG_LOG("exec_addr addr\n\tbrom stage only\n");
 			DBG_LOG("fdl FILE addr\n");
 			DBG_LOG("exec\n");
-			DBG_LOG("path save_location\n\tfor read_part(s)/read_flash/read_mem\n");
+			DBG_LOG("path save_location\n\tfor r/read_part(s)/read_flash/read_mem\n");
+			DBG_LOG("r all/part_name\n");
+			DBG_LOG("w part_name FILE\n");
+			DBG_LOG("e part_name\n");
 			DBG_LOG("read_part part_name offset size FILE\n");
 			DBG_LOG("(read ubi on nand) read_part system 0 ubi40m system.bin\n");
 			DBG_LOG("read_parts partition_list_file\n\t(ufs/emmc) read_parts part.xml\n\t(ubi) read_parts ubipart.xml\n");
 			DBG_LOG("write_part part_name FILE\n");
-			DBG_LOG("write_parts save_location\n\twrite all partitions dumped by read_parts");
+			DBG_LOG("write_parts save_location\n\twrite all partitions dumped by read_parts\n");
 			DBG_LOG("erase_part part_name\n");
 			DBG_LOG("partition_list FILE\n");
 			DBG_LOG("repartition FILE\n");

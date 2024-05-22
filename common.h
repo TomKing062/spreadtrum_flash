@@ -184,7 +184,7 @@ void erase_partition(spdio_t* io, const char* name);
 void load_partition(spdio_t* io, const char* name, const char* fn, unsigned step);
 void load_nv_partition(spdio_t* io, const char* name, const char* fn, unsigned step);
 void load_partitions(spdio_t* io, const char* path, int blk_size);
-int64_t find_partition_size(spdio_t* io, const char* name);
+uint64_t find_partition_size(spdio_t* io, const char* name);
 uint64_t str_to_size(const char* str);
 uint64_t str_to_size_ubi(const char* str, int* nand_info);
 void get_Da_Info(spdio_t* io);

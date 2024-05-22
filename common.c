@@ -681,9 +681,7 @@ uint64_t dump_partition(spdio_t* io,
 	uint32_t n, nread, t32; uint64_t offset, n64;
 	int ret, mode64 = (start + len) >> 32;
 	FILE* fo;
-	int dump_retry = 0;
-	if(strstr(name,"userdata") && len >= 0xFFFFFFFF) check_confirm("read userdata (on arm32 it overflows to 1024GB)");
-	if (start == 0 && len == 0xFFFFFFFF) len = len << 8;//max 1024GB
+	if(strstr(name,"userdata")) check_confirm("read userdata");
 
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
 	if (send_and_check(io)) return 0;
@@ -711,13 +709,6 @@ uint64_t dump_partition(spdio_t* io,
 		if (!ret) ERR_EXIT("timeout reached\n");
 		if ((ret = recv_type(io)) != BSL_REP_READ_FLASH) {
 			DBG_LOG("unexpected response (0x%04x)\n", ret);
-			if (offset > start && dump_retry == 0)
-			{
-				start = 0;
-				len = (offset + 0xFFFFF) & 0xFFFFFFFFFFF00000;
-				dump_retry++;
-				continue;
-			}
 			break;
 		}
 		nread = READ16_BE(io->raw_buf + 2);
@@ -1154,9 +1145,34 @@ void load_nv_partition(spdio_t* io, const char* name,
 	send_and_check(io);
 }
 
-int64_t find_partition_size(spdio_t* io, const char* name) {
-	uint32_t t32; uint64_t n64; long long offset = 0;
+void find_partition_size_new(spdio_t* io, const char* name, unsigned long long *offset_ptr) {
+	int ret;
+	char* name_tmp = malloc(strlen(name) + 5 + 1);
+	if (name_tmp == NULL) return;
+	sprintf(name_tmp, "%s_size", name);
+	select_partition(io, name_tmp, 0x1000, 0, BSL_CMD_READ_START);
+	free(name_tmp);
+	if (send_and_check(io)) return;
+
+	uint32_t data[2] = { 0x1000,0 };
+	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
+	send_msg(io);
+	ret = recv_msg(io);
+	if (!ret) ERR_EXIT("timeout reached\n");
+	if (recv_type(io) == BSL_REP_READ_FLASH) {
+		ret = sscanf((char *)(io->raw_buf + 4), "size:%*[^:]: 0x%llx", offset_ptr);
+		DBG_LOG("partition_size_device: %s, 0x%llx\n", name, *offset_ptr);
+	}
+	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	send_and_check(io);
+}
+
+uint64_t find_partition_size(spdio_t* io, const char* name) {
+	uint32_t t32; uint64_t n64; unsigned long long offset = 0;
 	int ret, i, start = 47;
+
+	find_partition_size_new(io, name, &offset);
+	if (offset) return offset;
 
 	select_partition(io, name, 1ll << (start + 1), 1, BSL_CMD_READ_START);
 	if (send_and_check(io)) return 0;
@@ -1177,7 +1193,7 @@ int64_t find_partition_size(spdio_t* io, const char* name) {
 		if (ret != BSL_REP_READ_FLASH) continue;
 		offset = n64 + (1 << 20);
 	}
-	DBG_LOG("partition_size: %s, 0x%llx\n", name, offset);
+	DBG_LOG("partition_size_pc: %s, 0x%llx\n", name, offset);
 	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
 	send_and_check(io);
 	return offset;

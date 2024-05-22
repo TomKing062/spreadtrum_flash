@@ -446,6 +446,8 @@ int main(int argc, char **argv) {
 			name = str2[2];
 			offset = str_to_size_ubi(str2[3], nand_info);
 			size = str_to_size_ubi(str2[4], nand_info);
+			if (0xffffffff == size) size = find_partition_size(io, name);
+			if (!size) { DBG_LOG("unable to get part size of %s\n", name); continue; }
 			fn = str2[5];
 			if (offset + size < offset)
 				{ DBG_LOG("64-bit limit reached\n");continue; }
@@ -457,7 +459,10 @@ int main(int argc, char **argv) {
 			const char* name = str2[2];
 			if (argcount <= 2) { DBG_LOG("r all/part_name/part_id\n"); continue; }
 			if (!part_count) ptable = partition_list(io, "partition.xml", &part_count);
-			if (!part_count) realsize = find_partition_size(io, str2[2]);
+			if (!part_count) {
+				realsize = find_partition_size(io, str2[2]);
+				if (!realsize) { DBG_LOG("unable to get part size of %s\n", name); continue; }
+			}
 			else if (isdigit(str2[2][0])) {
 				i = atoi(str2[2]);
 				if (i >= part_count) { DBG_LOG("part not exist\n"); continue; }
@@ -506,7 +511,7 @@ int main(int argc, char **argv) {
 			repartition(io, str2[2]);
 
 		} else if (!strcmp(str2[1], "erase_part") || !strcmp(str2[1], "e")) {
-			if (argcount <= 2) { DBG_LOG("erase_part part_name_or_id\n");continue; }
+			if (argcount <= 2) { DBG_LOG("erase_part part_name/part_id\n");continue; }
 			i = -1;
 			if (isdigit(str2[2][0])) {
 				if (part_count) i = atoi(str2[2]);
@@ -519,7 +524,7 @@ int main(int argc, char **argv) {
 
 		} else if (!strcmp(str2[1], "write_part") || !strcmp(str2[1], "w")) {
 			const char *fn;FILE *fi;
-			if (argcount <= 3) { DBG_LOG("write_part part_name_or_id FILE\n");continue; }
+			if (argcount <= 3) { DBG_LOG("write_part part_name/part_id FILE\n");continue; }
 			fn = str2[3];
 			fi = fopen(fn, "r");
 			if (fi == NULL) { DBG_LOG("File does not exist.\n");continue; }
@@ -620,13 +625,16 @@ int main(int argc, char **argv) {
 			DBG_LOG("exec_addr [addr]\n\tbrom stage only\n");
 			DBG_LOG("fdl FILE addr\n");
 			DBG_LOG("exec\n");
-			DBG_LOG("path [save_location]\n\tfor read_part(s)/read_flash/read_mem\n");
+			DBG_LOG("path [save_location]\n\tfor r/read_part(s)/read_flash/read_mem\n");
+			DBG_LOG("r all/part_name/part_id\n");
+			DBG_LOG("w part_name/part_id FILE\n");
+			DBG_LOG("e part_name/part_id\n");
 			DBG_LOG("read_part part_name offset size FILE\n");
 			DBG_LOG("(read ubi on nand) read_part system 0 ubi40m system.bin\n");
 			DBG_LOG("read_parts partition_list_file\n\t(ufs/emmc) read_parts part.xml\n\t(ubi) read_parts ubipart.xml\n");
-			DBG_LOG("write_part part_name FILE\n");
-			DBG_LOG("write_parts save_location\n\twrite all partitions dumped by read_parts");
-			DBG_LOG("erase_part part_name\n");
+			DBG_LOG("write_part part_name/part_id FILE\n");
+			DBG_LOG("write_parts save_location\n\twrite all partitions dumped by read_parts\n");
+			DBG_LOG("erase_part part_name/part_id\n");
 			DBG_LOG("partition_list FILE\n");
 			DBG_LOG("repartition FILE\n");
 			DBG_LOG("reset\n");
