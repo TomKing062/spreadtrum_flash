@@ -823,7 +823,13 @@ int scan_xml_partitions(const char* fn, uint8_t* buf, size_t buf_size) {
 #define MAX_SECTORS 32
 
 int gpt_info(partition_t* ptable, const char* fn_pgpt, const char* fn_xml, int* part_count_ptr) {
-	FILE* fp = fopen(fn_pgpt, "rb");
+	FILE* fp;
+	if (savepath[0]) {
+		char fix_fn[1024];
+		sprintf(fix_fn, "%s/%s", savepath, fn_pgpt);
+		fp = fopen(fix_fn, "rb");
+	}
+	else fp = fopen(fn_pgpt, "rb");
 	if (fp == NULL) {
 		return -1;
 	}
@@ -1150,11 +1156,11 @@ void find_partition_size_new(spdio_t* io, const char* name, unsigned long long *
 	char* name_tmp = malloc(strlen(name) + 5 + 1);
 	if (name_tmp == NULL) return;
 	sprintf(name_tmp, "%s_size", name);
-	select_partition(io, name_tmp, 0x1000, 0, BSL_CMD_READ_START);
+	select_partition(io, name_tmp, 0x80, 0, BSL_CMD_READ_START);
 	free(name_tmp);
 	if (send_and_check(io)) return;
 
-	uint32_t data[2] = { 0x1000,0 };
+	uint32_t data[2] = { 0x80,0 };
 	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
 	send_msg(io);
 	ret = recv_msg(io);
@@ -1366,6 +1372,8 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 			load_nv_partition(io, fn, fix_fn, 4096);
 		else if (strstr(fn, "runtimenv"))
 			erase_partition(io, fn);
+		else if (strstr(fn, "pgpt"))
+			continue;
 		else
 			load_partition(io, fn, fix_fn, blk_size);
 	}
