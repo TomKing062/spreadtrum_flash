@@ -19,6 +19,7 @@
 #define REOPEN_FREQ 2
 extern char savepath[ARGC_LEN];
 extern DA_INFO_T Da_Info;
+int gpt_failed = 1;
 int m_bOpened = 0;
 int main(int argc, char **argv) {
 	spdio_t *io = NULL; int ret, i;
@@ -352,7 +353,7 @@ int main(int argc, char **argv) {
 			uint64_t realsize = 0;
 			const char* name = argv[2];
 			if (argc <= 2) ERR_EXIT("r all/part_name\n");
-			if (!part_count) ptable = partition_list(io, "partition.xml", &part_count);
+			if (gpt_failed == 1) ptable = partition_list(io, "partition.xml", &part_count);
 			if (!part_count) {
 				realsize = find_partition_size(io, argv[2]);
 				if (!realsize) { DBG_LOG("unable to get part size of %s\n", name); argc -= 2; argv += 2; continue; }
@@ -370,7 +371,6 @@ int main(int argc, char **argv) {
 					}
 				if (i == part_count) ERR_EXIT("part not exist\n");
 			}
-			if (strstr(name, "fixnv") || strstr(name, "runtimenv")) realsize -= 0x200;
 			char dfile[40];
 			sprintf(dfile, "%s.bin", name);
 			dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
@@ -388,7 +388,7 @@ int main(int argc, char **argv) {
 
 		} else if (!strcmp(argv[1], "partition_list")) {
 			if (argc <= 2) ERR_EXIT("partition_list FILE\n");
-			if (!part_count) ptable = partition_list(io, argv[2], &part_count);
+			if (gpt_failed == 1) ptable = partition_list(io, argv[2], &part_count);
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(argv[1], "repartition")) {
@@ -406,7 +406,7 @@ int main(int argc, char **argv) {
 		} else if (!strcmp(argv[1], "write_part") || !strcmp(argv[1], "w")) {
 			if (argc <= 3) ERR_EXIT("write_part part_name FILE\n");
 			if (!skip_confirm) check_confirm("write partition");
-			if (strstr(argv[2], "fixnv"))
+			if (strstr(argv[2], "fixnv1"))
 				load_nv_partition(io, argv[2], argv[3], 4096);
 			else
 				load_partition(io, argv[2], argv[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);

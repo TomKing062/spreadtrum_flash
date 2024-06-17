@@ -681,7 +681,29 @@ uint64_t dump_partition(spdio_t* io,
 	uint32_t n, nread, t32; uint64_t offset, n64;
 	int ret, mode64 = (start + len) >> 32;
 	FILE* fo;
-	if(strstr(name,"userdata")) check_confirm("read userdata");
+	if (strstr(name, "userdata")) check_confirm("read userdata");
+	if (strstr(name, "fixnv") || strstr(name, "runtimenv"))
+	{
+		char* name_tmp = malloc(strlen(name) + 1);
+		if (name_tmp == NULL) return 0;
+		sprintf(name_tmp, "%s", name);
+		char* dot = strrchr(name_tmp, '1');
+		if (dot != NULL) *dot = '2';
+		select_partition(io, name_tmp, 8, 0, BSL_CMD_READ_START);
+		free(name_tmp);
+		if (send_and_check(io)) return 0;
+
+		uint32_t data[2] = { 8,0 };
+		encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
+		send_msg(io);
+		ret = recv_msg(io);
+		if (!ret) ERR_EXIT("timeout reached\n");
+		if (recv_type(io) != BSL_REP_READ_FLASH) return 0;
+		len = 0x200 + *(uint32_t*)(io->raw_buf + 8);
+		DBG_LOG("nv length: 0x%llx\n", (long long)len);
+		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		send_and_check(io);
+	}
 
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
 	if (send_and_check(io)) return 0;
@@ -895,11 +917,11 @@ int gpt_info(partition_t* ptable, const char* fn_pgpt, const char* fn_xml, int* 
 	return 0;
 }
 
+extern int gpt_failed;
 partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 	long long size;
 	unsigned i, n = 0;
 	int ret; FILE* fo = NULL; uint8_t* p;
-	int gpt_failed = 1;
 	partition_t* ptable = malloc(128 * sizeof(partition_t));
 	if (ptable == NULL) return NULL;
 	
@@ -954,6 +976,7 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 			fclose(fo);
 		}
 		*part_count_ptr = n;
+		gpt_failed = 0;
 	}
 	if (*part_count_ptr) {
 		printf("Total number of partitions: %d\n", *part_count_ptr);
@@ -983,6 +1006,8 @@ void load_partition(spdio_t* io, const char* name,
 	uint64_t offset, len, n64;
 	unsigned mode64, n; int ret;
 	FILE* fi;
+
+	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
 
 	fi = fopen(fn, "rb");
 	if (!fi) ERR_EXIT("fopen(load) failed\n");
@@ -1177,6 +1202,7 @@ uint64_t find_partition_size(spdio_t* io, const char* name) {
 	uint32_t t32; uint64_t n64; unsigned long long offset = 0;
 	int ret, i, start = 47;
 
+	if (strstr(name, "fixnv") || strstr(name, "runtimenv")) return 1;
 	find_partition_size_new(io, name, &offset);
 	if (offset) return offset;
 
@@ -1313,7 +1339,6 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) 
 		uint64_t realsize = partitions[i].size << 20;
 		if (strstr(partitions[i].name, "userdata")) continue;
 		else if (strstr(partitions[i].name, "splloader")) continue;
-		else if (strstr(partitions[i].name, "fixnv") || strstr(partitions[i].name, "runtimenv")) realsize -= 0x200;
 		else if (ubi) {
 			int block = partitions[i].size * (1024 / nand_info[2]) + partitions[i].size * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1;
 			realsize = 1024 * (nand_info[2] - 2 * nand_info[0]) * block;
@@ -1368,10 +1393,8 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		snprintf(fix_fn, sizeof(fix_fn), "%s/%s", path, fn);
 		char* dot = strrchr(fn, '.');
 		if (dot != NULL) *dot = '\0';
-		if (strstr(fn, "fixnv"))
+		if (strstr(fn, "fixnv1"))
 			load_nv_partition(io, fn, fix_fn, 4096);
-		else if (strstr(fn, "runtimenv"))
-			erase_partition(io, fn);
 		else if (strstr(fn, "pgpt"))
 			continue;
 		else

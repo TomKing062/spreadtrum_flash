@@ -19,6 +19,7 @@
 #define REOPEN_FREQ 2
 extern char savepath[ARGC_LEN];
 extern DA_INFO_T Da_Info;
+int gpt_failed = 1;
 int m_bOpened = 0;
 int main(int argc, char **argv) {
 	spdio_t *io = NULL; int ret, i, in_quote;
@@ -458,7 +459,7 @@ int main(int argc, char **argv) {
 			uint64_t realsize = 0;
 			const char* name = str2[2];
 			if (argcount <= 2) { DBG_LOG("r all/part_name/part_id\n"); continue; }
-			if (!part_count) ptable = partition_list(io, "partition.xml", &part_count);
+			if (gpt_failed == 1) ptable = partition_list(io, "partition.xml", &part_count);
 			if (!part_count) {
 				realsize = find_partition_size(io, str2[2]);
 				if (!realsize) { DBG_LOG("unable to get part size of %s\n", name); continue; }
@@ -481,7 +482,6 @@ int main(int argc, char **argv) {
 					}
 				if (i == part_count) { DBG_LOG("part not exist\n"); continue; }
 			}
-			if (strstr(name, "fixnv") || strstr(name, "runtimenv")) realsize -= 0x200;
 			char dfile[40];
 			sprintf(dfile, "%s.bin", name);
 			dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
@@ -497,7 +497,7 @@ int main(int argc, char **argv) {
 
 		} else if (!strcmp(str2[1], "partition_list")) {
 			if (argcount <= 2) { DBG_LOG("partition_list FILE\n");continue; }
-			if (part_count) { DBG_LOG("partition_list shouldn't run twice\n"); continue; }
+			if (gpt_failed < 1) { DBG_LOG("partition_list shouldn't run twice\n"); continue; }
 			ptable = partition_list(io, str2[2], &part_count);
 
 		} else if (!strcmp(str2[1], "repartition")) {
@@ -537,11 +537,11 @@ int main(int argc, char **argv) {
 			}
 			if (!skip_confirm) check_confirm("write partition");
 			if (i > -1) {
-				if (strstr((*(ptable + i)).name, "fixnv")) load_nv_partition(io, (*(ptable + i)).name, str2[3], 4096);
+				if (strstr((*(ptable + i)).name, "fixnv1")) load_nv_partition(io, (*(ptable + i)).name, str2[3], 4096);
 				else load_partition(io, (*(ptable + i)).name, str2[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			}
 			else {
-				if (strstr(str2[2], "fixnv")) load_nv_partition(io, str2[2], str2[3], 4096);
+				if (strstr(str2[2], "fixnv1")) load_nv_partition(io, str2[2], str2[3], 4096);
 				else load_partition(io, str2[2], str2[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			}
 
