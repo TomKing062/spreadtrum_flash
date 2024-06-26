@@ -682,7 +682,7 @@ uint64_t dump_partition(spdio_t* io,
 	int ret, mode64 = (start + len) >> 32;
 	FILE* fo;
 	if (strstr(name, "userdata")) check_confirm("read userdata");
-	if (strstr(name, "fixnv") || strstr(name, "runtimenv"))
+	else if (strstr(name, "fixnv") || strstr(name, "runtimenv"))
 	{
 		char* name_tmp = malloc(strlen(name) + 1);
 		if (name_tmp == NULL) return 0;
@@ -699,8 +699,12 @@ uint64_t dump_partition(spdio_t* io,
 		ret = recv_msg(io);
 		if (!ret) ERR_EXIT("timeout reached\n");
 		if (recv_type(io) != BSL_REP_READ_FLASH) return 0;
-		len = 0x200 + *(uint32_t*)(io->raw_buf + 8);
-		DBG_LOG("nv length: 0x%llx\n", (long long)len);
+		if (*(uint32_t*)(io->raw_buf + 4) == 0x00004e56)
+		{
+			if (dot != NULL) len = *(uint32_t*)(io->raw_buf + 8);
+			else len = 0x200 + *(uint32_t*)(io->raw_buf + 8);
+			DBG_LOG("nv length: 0x%llx\n", (long long)len);
+		}
 		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
 		send_and_check(io);
 	}
@@ -914,6 +918,8 @@ int gpt_info(partition_t* ptable, const char* fn_pgpt, const char* fn_xml, int* 
 	free(entries);
 	fclose(fp);
 	*part_count_ptr = n;
+	printf("standard gpt table saved to pgpt.bin\n");
+	printf("skip saving sprd partition list packet\n");
 	return 0;
 }
 
@@ -945,6 +951,16 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 			free(ptable);
 			return NULL;
 		}
+		FILE* fpkt;
+		if (savepath[0]) {
+			char fix_fn[1024];
+			sprintf(fix_fn, "%s/sprdpart.bin", savepath);
+			fpkt = fopen(fix_fn, "wb");
+		}
+		else fpkt = fopen("sprdpart.bin", "wb");
+		if (!fpkt) ERR_EXIT("fopen failed\n");
+		fwrite(io->raw_buf + 4, 1, size, fpkt);
+		fclose(fpkt);
 		n = size / 0x4c;
 		if (strcmp(fn, "-")) {
 			fo = fopen(fn, "wb");
@@ -976,9 +992,12 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 			fclose(fo);
 		}
 		*part_count_ptr = n;
+		printf("unable to get standard gpt table\n");
+		printf("sprd partition list packet saved to sprdpart.bin\n");
 		gpt_failed = 0;
 	}
 	if (*part_count_ptr) {
+		printf("partition list saved to partition.xml\n");
 		printf("Total number of partitions: %d\n", *part_count_ptr);
 		return ptable;
 	}
@@ -1395,7 +1414,7 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		if (dot != NULL) *dot = '\0';
 		if (strstr(fn, "fixnv1"))
 			load_nv_partition(io, fn, fix_fn, 4096);
-		else if (strstr(fn, "pgpt"))
+		else if (strstr(fn, "pgpt") || strstr(fn, "sprdpart"))
 			continue;
 		else
 			load_partition(io, fn, fix_fn, blk_size);

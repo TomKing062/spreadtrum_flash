@@ -460,23 +460,26 @@ int main(int argc, char **argv) {
 			const char* name = str2[2];
 			if (argcount <= 2) { DBG_LOG("r all/part_name/part_id\n"); continue; }
 			if (gpt_failed == 1) ptable = partition_list(io, "partition.xml", &part_count);
-			if (!part_count) {
-				realsize = find_partition_size(io, str2[2]);
+			if (strstr(name, "splloader")) {
+				realsize = 256 * 1024;
+			}
+			else if (!part_count) {
+				realsize = find_partition_size(io, name);
 				if (!realsize) { DBG_LOG("unable to get part size of %s\n", name); continue; }
 			}
-			else if (isdigit(str2[2][0])) {
-				i = atoi(str2[2]);
+			else if (isdigit(name[0])) {
+				i = atoi(name);
 				if (i >= part_count) { DBG_LOG("part not exist\n"); continue; }
 				name = (*(ptable + i)).name;
 				realsize = (*(ptable + i)).size;
 			}
-			else if (!strcmp(str2[2], "all")) {
+			else if (!strcmp(name, "all")) {
 				dump_partitions(io, "partition.xml", nand_info, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				continue;
 			}
 			else {
 				for (i = 0; i < part_count; i++)
-					if (!strcmp(str2[2], (*(ptable + i)).name)) {
+					if (!strcmp(name, (*(ptable + i)).name)) {
 						realsize = (*(ptable + i)).size;
 						break;
 					}
@@ -561,7 +564,7 @@ int main(int argc, char **argv) {
 
 		} else if (!strcmp(str2[1], "skip_confirm")) {
 			if (argcount <= 2) { DBG_LOG("skip_confirm {0,1}\n"); continue; }
-			skip_confirm = strtol(str2[2], NULL, 0);
+			skip_confirm = atoi(str2[2]);
 
 		} else if (!strcmp(str2[1], "chip_uid")) {
 			encode_msg(io, BSL_CMD_READ_CHIP_UID, NULL, 0);
@@ -620,7 +623,7 @@ int main(int argc, char **argv) {
 
 		} else if (strlen(str2[1])){
 #if !USE_LIBUSB
-			DBG_LOG("baudrate [rate]\n\tbrom stage only\n");
+			DBG_LOG("baudrate [rate]\n");
 #endif
 			DBG_LOG("exec_addr [addr]\n\tbrom stage only\n");
 			DBG_LOG("fdl FILE addr\n");
