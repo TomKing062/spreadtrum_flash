@@ -435,10 +435,12 @@ int main(int argc, char **argv) {
 			find_partition_size(io, name);
 
 		} else if (!strcmp(str2[1], "p") || !strcmp(str2[1], "print")) {
-			if (part_count)
+			if (part_count) {
+				printf("  0 %36s 256KB\n", "splloader");
 				for (i = 0; i < part_count; i++) {
-					printf("%3d %36s %lldMB\n", i, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
+					printf("%3d %36s %lldMB\n", i + 1, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
 				}
+			}
 
 		} else if (!strcmp(str2[1], "read_part")) {
 			const char *name, *fn; uint64_t offset, size;
@@ -469,9 +471,15 @@ int main(int argc, char **argv) {
 			}
 			else if (isdigit(name[0])) {
 				i = atoi(name);
-				if (i >= part_count) { DBG_LOG("part not exist\n"); continue; }
-				name = (*(ptable + i)).name;
-				realsize = (*(ptable + i)).size;
+				if (i > part_count) { DBG_LOG("part not exist\n"); continue; }
+				if (i == 0) {
+					name = "splloader";
+					realsize = 256 * 1024;
+				}
+				else {
+					name = (*(ptable + i - 1)).name;
+					realsize = (*(ptable + i - 1)).size;
+				}
 			}
 			else if (!strcmp(name, "all")) {
 				dump_partitions(io, "partition.xml", nand_info, blk_size ? blk_size : DEFAULT_BLK_SIZE);

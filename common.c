@@ -903,12 +903,13 @@ int gpt_info(partition_t* ptable, const char* fn_pgpt, const char* fn_xml, int* 
 			break;
 		}
 	}
+	printf("  0 %36s 256KB\n", "splloader");
 	for (int i = 0; i < n; i++) {
 		efi_entry entry = *(entries + i);
 		copy_from_wstr((*(ptable + i)).name, 36, (uint16_t*)entry.partition_name);
 		uint64_t lba_count = entry.ending_lba - entry.starting_lba + 1;
 		(*(ptable + i)).size = lba_count * real_SECTOR_SIZE;
-		printf("%3d %36s %lldMB\n", i, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
+		printf("%3d %36s %lldMB\n", i + 1, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
 		fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(ptable + i)).name);
 		if (i + 1 == n) fprintf(fo, "0x%x\"/>\n", ~0);
 		else fprintf(fo, "%lld\"/>\n", ((*(ptable + i)).size >> 20));
@@ -975,12 +976,13 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 			while (!(size >> divisor)) divisor--;
 		}
 		p = io->raw_buf + 4;
+		printf("  0 %36s 256KB\n", "splloader");
 		for (i = 0; i < n; i++, p += 0x4c) {
 			ret = copy_from_wstr((*(ptable + i)).name, 36, (uint16_t*)p);
 			if (ret) ERR_EXIT("bad partition name\n");
 			size = READ32_LE(p + 0x48);
 			(*(ptable + i)).size = (size << 20) >> divisor;
-			printf("%3d %36s %lldMB\n", i, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
+			printf("%3d %36s %lldMB\n", i + 1, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
 			if (fo) {
 				fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(ptable + i)).name);
 				if (i + 1 == n) fprintf(fo, "0x%x\"/>\n", ~0);
@@ -1059,11 +1061,10 @@ void load_partition(spdio_t* io, const char* name,
 		}
 		print_progress_bar((offset + n) / (float)len);
 	}
-	DBG_LOG("load_partition: %s, target: 0x%llx, written: 0x%llx\n",
-		name, (long long)len, (long long)offset);
 	fclose(fi);
 	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
-	send_and_check(io);
+	if(!send_and_check(io)) DBG_LOG("load_partition: %s, target: 0x%llx, written: 0x%llx\n",
+		name, (long long)len, (long long)offset);
 }
 
 unsigned short const crc16_table[256] = {
@@ -1188,11 +1189,10 @@ void load_nv_partition(spdio_t* io, const char* name,
 			break;
 		}
 	}
-	DBG_LOG("load_nv_partition: %s, target: 0x%llx, written: 0x%llx\n",
-		name, (long long)len, (long long)offset);
 	free(mem);
 	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
-	send_and_check(io);
+	if(!send_and_check(io)) DBG_LOG("load_nv_partition: %s, target: 0x%llx, written: 0x%llx\n",
+		name, (long long)len, (long long)offset);
 }
 
 void find_partition_size_new(spdio_t* io, const char* name, unsigned long long *offset_ptr) {
@@ -1392,6 +1392,8 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		return;
 	}
 	for (fn = findData.cFileName; FindNextFileA(hFind, &findData); fn = findData.cFileName)
+	{
+		if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
 #else
 	DIR* dir;
 	struct dirent* entry;
@@ -1401,13 +1403,11 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		return;
 	}
 	for (fn = entry->d_name; (entry = readdir(dir)); fn = entry->d_name)
-#endif
 	{
-		if (strcmp(fn, ".") == 0
-			|| strcmp(fn, "..") == 0
-			|| strcmp(fn + strlen(fn) - 4, ".xml") == 0) {
-			continue;
-		}
+		if (entry->d_type == DT_DIR) continue;
+#endif
+		size_t len = strlen(fn);
+		if (len >= 4 && strcmp(fn + len - 4, ".xml") == 0) continue;
 		char fix_fn[1024];
 		snprintf(fix_fn, sizeof(fix_fn), "%s/%s", path, fn);
 		char* dot = strrchr(fn, '.');
