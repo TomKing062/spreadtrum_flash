@@ -1357,18 +1357,20 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) 
 		sprintf(dfile, "%s.bin", partitions[i].name);
 		uint64_t realsize = partitions[i].size << 20;
 		if (strstr(partitions[i].name, "userdata")) continue;
-		else if (strstr(partitions[i].name, "splloader")) continue;
+		else if (strstr(partitions[i].name, "splloader")) realsize = 256 * 1024;
+		else if (0xffffffff == partitions[i].size) {
+			realsize = find_partition_size(io, partitions[i].name);
+			if (!realsize) { DBG_LOG("unable to get part size of %s\n", partitions[i].name); continue; }
+		}
 		else if (ubi) {
 			int block = partitions[i].size * (1024 / nand_info[2]) + partitions[i].size * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1;
 			realsize = 1024 * (nand_info[2] - 2 * nand_info[0]) * block;
 		}
 		dump_partition(io, partitions[i].name, 0, realsize, dfile, blk_size);
 	}
-	printf("Always backup splloader\n");
-	dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size);
 
 	if (savepath[0]) {
-		printf("saving part table\n");
+		printf("saving dump list\n");
 		char fix_fn[1024];
 		sprintf(fix_fn, "%s/%s", savepath, fn);
 		FILE *fo = fopen(fix_fn, "wb");

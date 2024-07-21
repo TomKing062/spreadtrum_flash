@@ -361,8 +361,24 @@ int main(int argc, char **argv) {
 				realsize = find_partition_size(io, name);
 				if (!realsize) { DBG_LOG("unable to get part size of %s\n", name); argc -= 2; argv += 2; continue; }
 			}
+			else if (!strcmp(name, "preset_modem")) {
+				for (i = 0; i < part_count; i++)
+					if (0 == strncmp("l_", (*(ptable + i)).name, 2) || 0 == strncmp("nr_", (*(ptable + i)).name, 3)) {
+						char dfile[40];
+						sprintf(dfile, "%s.bin", (*(ptable + i)).name);
+						dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+					}
+				argc -= 2; argv += 2;
+				continue;
+			}
 			else if (!strcmp(name, "all")) {
-				dump_partitions(io, "partition.xml", nand_info, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				for (i = 0; i < part_count; i++)
+				{
+					char dfile[40];
+					sprintf(dfile, "%s.bin", (*(ptable + i)).name);
+					dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				}
 				argc -= 2; argv += 2;
 				continue;
 			}

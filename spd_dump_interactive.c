@@ -192,9 +192,9 @@ int main(int argc, char **argv) {
 			temp = strtok(NULL, " ");
 		}
 
-		if (!strncmp(str2[1], "send", 3)) {
+		if (!strncmp(str2[1], "send", 4)) {
 			const char* fn; uint32_t addr = 0; char* end; FILE* fi;
-			if (argcount <= 3) { DBG_LOG("fdl FILE addr\n"); continue; }
+			if (argcount <= 3) { DBG_LOG("send FILE addr\n"); continue; }
 
 			fn = str2[2];
 			fi = fopen(fn, "r");
@@ -481,8 +481,23 @@ int main(int argc, char **argv) {
 					realsize = (*(ptable + i - 1)).size;
 				}
 			}
+			else if (!strcmp(name, "preset_modem")) {
+				for (i = 0; i < part_count; i++)
+					if (0 == strncmp("l_", (*(ptable + i)).name, 2) || 0 == strncmp("nr_", (*(ptable + i)).name, 3)) {
+						char dfile[40];
+						sprintf(dfile, "%s.bin", (*(ptable + i)).name);
+						dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+					}
+				continue;
+			}
 			else if (!strcmp(name, "all")) {
-				dump_partitions(io, "partition.xml", nand_info, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				for (i = 0; i < part_count; i++)
+				{
+						char dfile[40];
+						sprintf(dfile, "%s.bin", (*(ptable + i)).name);
+						dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				}
 				continue;
 			}
 			else {
