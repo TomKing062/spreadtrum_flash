@@ -401,6 +401,7 @@ public:
     BOOL   DisconnectChannel();
     BOOL   GetProperty(LONG lFlags, DWORD dwPropertyID, LPVOID pValue);
     BOOL   SetProperty(LONG lFlags, DWORD dwPropertyID, LPCVOID pValue);
+    void   Clear();
 private:
     ICommChannel*       m_pChannel;
 };

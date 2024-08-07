@@ -426,7 +426,7 @@ int recv_msg_orig(spdio_t* io) {
 
 	a = READ16_BE(io->raw_buf + plen - 2);
 	if (a != chk)
-		ERR_EXIT("bad checksum (0x%04x, expected 0x%04x)\n", a, chk);
+	{ DBG_LOG("bad checksum (0x%04x, expected 0x%04x)\n", a, chk); return 0; }
 
 	if (io->verbose == 1)
 		DBG_LOG("recv: type = 0x%02x, size = %d\n",
@@ -437,10 +437,18 @@ int recv_msg_orig(spdio_t* io) {
 
 int recv_msg(spdio_t* io) {
 	int ret;
-	ret = recv_msg_orig(io);
-	if (!ret) {
-		send_msg(io);
+	for (;;) {
 		ret = recv_msg_orig(io);
+		if (!ret) {
+#if !USE_LIBUSB
+			call_Clear(io->handle);
+#endif
+			send_msg(io);
+			ret = recv_msg_orig(io);
+		}
+		if (recv_type(io) != BSL_REP_LOG) break;
+		DBG_LOG("BSL_REP_LOG: ");
+		print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
 	}
 	return ret;
 }

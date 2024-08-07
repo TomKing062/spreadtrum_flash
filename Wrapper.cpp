@@ -52,3 +52,7 @@ BOOL call_SetProperty(ClassHandle* handle, LONG lFlags, DWORD dwPropertyID, LPCV
     return obj->SetProperty(lFlags, dwPropertyID, pValue);
 }
 
+void call_Clear(ClassHandle* handle) {
+    CBootModeOpr* obj = static_cast<CBootModeOpr*>(handle->obj);
+    obj->Clear();
+}

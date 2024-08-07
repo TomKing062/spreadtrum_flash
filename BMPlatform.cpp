@@ -134,3 +134,8 @@ BOOL CBootModeOpr::DisconnectChannel()
 	m_bOpened = 0;
 	return TRUE;
 }
+
+void CBootModeOpr::Clear()
+{
+	m_pChannel->Clear();
+}

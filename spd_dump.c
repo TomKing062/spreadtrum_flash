@@ -26,8 +26,7 @@ int main(int argc, char **argv) {
 	int wait = 30 * REOPEN_FREQ;
 	int fdl_loaded = 0, exec_addr = 0, nand_id = DEFAULT_NAND_ID;
 	int nand_info[3];
-	uint32_t ram_addr = ~0u;
-	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 0, baudrate = 0;
+	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 0, baudrate = 0, highspeed = 0;
 	char execfile[40];
 	int part_count = 0;
 	partition_t* ptable = NULL;
@@ -59,21 +58,11 @@ int main(int argc, char **argv) {
 
 	while (argc > 1) {
 		if (!strncmp(argv[1], "fdl", 3)) {
-			const char *fn; uint32_t addr = 0; char *end;
+			const char *fn; uint32_t addr = 0;
 			if (argc <= 3) ERR_EXIT("fdl FILE addr\n");
 
 			fn = argv[2];
-			end = argv[3];
-			if (!memcmp(end, "ram", 3)) {
-				int a = end[3];
-				if (a != '+' && a)
-					ERR_EXIT("bad command args\n");
-				if (ram_addr == ~0u)
-					ERR_EXIT("ram address is unknown\n");
-				end += 3; addr = ram_addr;
-			}
-			addr += strtoll(end, &end, 0);
-			if (*end) ERR_EXIT("bad command args\n");
+			addr = strtoll(argv[3], NULL, 0);
 
 			if (fdl_loaded) {
 				send_file(io, fn, addr, end_data,
@@ -134,18 +123,19 @@ int main(int argc, char **argv) {
 
 				DBG_LOG("BSL_REP_VER: ");
 				print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+				if (strstr((char*)(io->raw_buf + 4), "SPRD4")) { exec_addr = 0; fdl_loaded = 2; }
 
 				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
 				if (send_and_check(io)) exit(1);
 				DBG_LOG("CMD_CONNECT bootrom\n");
 
 				send_file(io, fn, addr, end_data, 528);
+				if (addr == 0x5500 || addr == 0x65000800) highspeed = 1;
 
 				i = 0;
 				if (exec_addr) {
 					send_file(io, execfile, exec_addr, 0, 528);
 				} else {
-					real_exec:
 					encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
 					if (send_and_check(io)) exit(1);
 				}
@@ -160,10 +150,6 @@ int main(int argc, char **argv) {
 					recv_msg(io);
 					if (recv_type(io) == BSL_REP_VER) break;
 					DBG_LOG("CHECK_BAUD FAIL\n");
-					if (exec_addr && i == 1) {
-						io->flags |= FLAGS_CRC16;
-						goto real_exec;
-					}
 					if (i == 2) ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
 					usleep(500000);
 					i++;
@@ -250,6 +236,7 @@ int main(int argc, char **argv) {
 						DBG_LOG("DISABLE_TRANSCODE\n");
 					}
 				}
+				if (highspeed || Da_Info.dwStorageType == 0x103) blk_size = 0xff00;
 				if (nand_id == DEFAULT_NAND_ID) {
 					nand_info[0] = (uint8_t)pow(2, nand_id & 3); //page size
 					nand_info[1] = 32 / (uint8_t)pow(2, (nand_id >> 2) & 3); //spare area size
@@ -276,15 +263,15 @@ int main(int argc, char **argv) {
 		} else if (!strcmp(argv[1], "exec_addr")) {
 			FILE* fi;
 			if (argc <= 2) ERR_EXIT("exec_addr addr\n");
-			else {
+			else if (0 == fdl_loaded) {
 				exec_addr = strtol(argv[2], NULL, 0);
 				memset(execfile, 0, sizeof(execfile));
 				sprintf(execfile, "custom_exec_no_verify_%x.bin", exec_addr);
 				fi = fopen(execfile, "r");
 				if (fi == NULL) ERR_EXIT("%s does not exist.\n", execfile);
 				else fclose(fi);
-				DBG_LOG("current exec_addr is 0x%x\n", exec_addr);
 			}
+			DBG_LOG("current exec_addr is 0x%x\n", exec_addr);
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(argv[1], "nand_id")) {
