@@ -153,7 +153,28 @@ typedef struct {
 	uint32_t   dwFlushSize;		//unit KB
 	uint32_t   dwStorageType;
 	uint32_t   dwReserve[59];	//Reserve
-}DA_INFO_T;
+} DA_INFO_T;
+
+typedef struct {
+	uint8_t priority : 4;
+	uint8_t tries_remaining : 3;
+	uint8_t successful_boot : 1;
+	uint8_t verity_corrupted : 1;
+	uint8_t reserved : 7;
+} slot_metadata;
+
+typedef struct {
+	char slot_suffix[4];
+	uint32_t magic;
+	uint8_t version;
+	uint8_t nb_slot : 3;
+	uint8_t recovery_tries_remaining : 3;
+	uint8_t merge_status : 3;
+	uint8_t reserved0[1];
+	slot_metadata slot_info[4];
+	uint8_t reserved1[8];
+	uint32_t crc32_le;
+} bootloader_control;
 #pragma pack()
 
 void print_string(FILE* f, const void* src, size_t n);
@@ -188,3 +209,4 @@ uint64_t find_partition_size(spdio_t* io, const char* name);
 uint64_t str_to_size(const char* str);
 uint64_t str_to_size_ubi(const char* str, int* nand_info);
 void get_Da_Info(spdio_t* io);
+void select_ab(spdio_t* io);

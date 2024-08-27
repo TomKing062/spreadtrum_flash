@@ -435,17 +435,20 @@ int recv_msg_orig(spdio_t* io) {
 	return nread;
 }
 
+extern int fdl2_executed;
 int recv_msg(spdio_t* io) {
 	int ret;
 	for (;;) {
 		ret = recv_msg_orig(io);
-		if (!ret) {
+		// only retry in fdl2 stage
+		if ((!ret) && fdl2_executed) {
 #if !USE_LIBUSB
 			call_Clear(io->handle);
 #endif
 			send_msg(io);
 			ret = recv_msg_orig(io);
 		}
+		if (!ret) break;
 		if (recv_type(io) != BSL_REP_LOG) break;
 		DBG_LOG("BSL_REP_LOG: ");
 		print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
@@ -689,7 +692,7 @@ uint64_t dump_partition(spdio_t* io,
 	uint32_t n, nread, t32; uint64_t offset, n64;
 	int ret, mode64 = (start + len) >> 32;
 	FILE* fo;
-	if (strstr(name, "userdata")) check_confirm("read userdata");
+	if (!memcmp(name, "userdata", 8)) check_confirm("read userdata");
 	else if (strstr(name, "fixnv") || strstr(name, "runtimenv"))
 	{
 		char* name_tmp = malloc(strlen(name) + 1);
@@ -856,6 +859,7 @@ int scan_xml_partitions(const char* fn, uint8_t* buf, size_t buf_size) {
 #define SECTOR_SIZE 512
 #define MAX_SECTORS 32
 
+extern int selected_ab;
 int gpt_info(partition_t* ptable, const char* fn_pgpt, const char* fn_xml, int* part_count_ptr) {
 	FILE* fp;
 	if (savepath[0]) {
@@ -921,6 +925,10 @@ int gpt_info(partition_t* ptable, const char* fn_pgpt, const char* fn_xml, int* 
 		fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(ptable + i)).name);
 		if (i + 1 == n) fprintf(fo, "0x%x\"/>\n", ~0);
 		else fprintf(fo, "%lld\"/>\n", ((*(ptable + i)).size >> 20));
+		if (!selected_ab) {
+			size_t namelen = strlen((*(ptable + i)).name);
+			if (namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_a")) selected_ab = 1;
+		}
 	}
 	fprintf(fo, "</Partitions>");
 	fclose(fo);
@@ -941,6 +949,7 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 	if (ptable == NULL) return NULL;
 	
 	printf("Reading Partition List\n");
+	if (selected_ab < 0) select_ab(io);
 	if (32 * 1024 == dump_partition(io, "user_partition", 0, 32 * 1024, "pgpt.bin", 4096))
 		gpt_failed = gpt_info(ptable, "pgpt.bin", fn, part_count_ptr);
 	if (gpt_failed) {
@@ -996,6 +1005,10 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 				if (i + 1 == n) fprintf(fo, "0x%x\"/>\n", ~0);
 				else fprintf(fo, "%lld\"/>\n", ((*(ptable + i)).size >> 20));
 			}
+			if (!selected_ab) {
+				size_t namelen = strlen((*(ptable + i)).name);
+				if (namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_a")) selected_ab = 1;
+			}
 		}
 		if (fo) {
 			fprintf(fo, "</Partitions>\n");
@@ -1006,6 +1019,9 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 		printf("sprd partition list packet saved to sprdpart.bin\n");
 		gpt_failed = 0;
 	}
+	if (selected_ab == 2) DBG_LOG("device is using slot b\n");
+	else if (selected_ab == 1) DBG_LOG("device is using slot a\n");
+	else DBG_LOG("device didn't use VAB\n");
 	if (*part_count_ptr) {
 		printf("partition list saved to partition.xml\n");
 		printf("Total number of partitions: %d\n", *part_count_ptr);
@@ -1062,7 +1078,10 @@ void load_partition(spdio_t* io, const char* name,
 		send_msg(io);
 		if (is_simg) ret = recv_msg_timeout(io, 100000);
 		else ret = recv_msg_timeout(io, 15000);
-		if (!ret) ERR_EXIT("timeout reached\n");
+		if (!ret) {
+			if (n == n64) ERR_EXIT("signature verification of \"%s\" failed or timeout reached\n", name);
+			else ERR_EXIT("timeout reached\n");
+		}
 		if ((ret = recv_type(io)) != BSL_REP_ACK) {
 			DBG_LOG("unexpected response (0x%04x)\n", ret);
 			break;
@@ -1229,7 +1248,14 @@ uint64_t find_partition_size(spdio_t* io, const char* name) {
 	uint32_t t32; uint64_t n64; unsigned long long offset = 0;
 	int ret, i, start = 47;
 
-	if (strstr(name, "fixnv") || strstr(name, "runtimenv")) return 1;
+	if (strstr(name, "fixnv") || strstr(name, "runtimenv")) {
+		if (selected_ab > 0) {
+			size_t namelen = strlen(name);
+			if (0 == strcmp(name + namelen - 2, "_a") || 0 == strcmp(name + namelen - 2, "_b")) return 1;
+			return 0;
+		}
+		return 1;
+	}
 	find_partition_size_new(io, name, &offset);
 	if (offset) return offset;
 
@@ -1364,8 +1390,8 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) 
 		char dfile[40];
 		sprintf(dfile, "%s.bin", partitions[i].name);
 		uint64_t realsize = partitions[i].size << 20;
-		if (strstr(partitions[i].name, "userdata")) continue;
-		else if (strstr(partitions[i].name, "splloader")) realsize = 256 * 1024;
+		if (!memcmp(partitions[i].name, "userdata", 8)) continue;
+		else if (!memcmp(partitions[i].name, "splloader",9)) realsize = 256 * 1024;
 		else if (0xffffffff == partitions[i].size) {
 			realsize = find_partition_size(io, partitions[i].name);
 			if (!realsize) { DBG_LOG("unable to get part size of %s\n", partitions[i].name); continue; }
@@ -1424,7 +1450,7 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		if (dot != NULL) *dot = '\0';
 		if (strstr(fn, "fixnv1"))
 			load_nv_partition(io, fn, fix_fn, 4096);
-		else if (strstr(fn, "pgpt") || strstr(fn, "sprdpart"))
+		else if (!memcmp(fn, "pgpt", 4) || !memcmp(fn, "sprdpart", 8))
 			continue;
 		else
 			load_partition(io, fn, fix_fn, blk_size);
@@ -1464,6 +1490,40 @@ void get_Da_Info(spdio_t* io)
 	else fprintf(fp, "unknown");
 	fclose(fp);
 	DBG_LOG("FDL2: incompatible partition\n");
+}
+
+int ab_compare_slots(const slot_metadata* a, const slot_metadata* b)
+{
+	if (a->priority != b->priority)
+		return b->priority - a->priority;
+	if (a->successful_boot != b->successful_boot)
+		return b->successful_boot - a->successful_boot;
+	if (a->tries_remaining != b->tries_remaining)
+		return b->tries_remaining - a->tries_remaining;
+	return 0;
+}
+
+void select_ab(spdio_t* io)
+{
+	bootloader_control* abc = NULL;
+	int ret;
+
+	select_partition(io, "misc", 0x820, 0, BSL_CMD_READ_START);
+	if (send_and_check(io)) { selected_ab = 0; return; }
+
+	uint32_t data[2] = { 0x20,0x800 };
+	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
+	send_msg(io);
+	ret = recv_msg(io);
+	if (!ret) ERR_EXIT("timeout reached\n");
+	if (recv_type(io) == BSL_REP_READ_FLASH) abc = (bootloader_control*)(io->raw_buf + 4);
+	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	send_and_check(io);
+
+	if (abc == NULL) { selected_ab = 0; return; }
+	if (abc->nb_slot != 2) { selected_ab = 0; return; }
+	if (ab_compare_slots(&abc->slot_info[1], &abc->slot_info[0]) < 0) selected_ab = 2;
+	else selected_ab = 1;
 }
 
 #if _WIN32

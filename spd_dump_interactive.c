@@ -21,10 +21,12 @@ extern char savepath[ARGC_LEN];
 extern DA_INFO_T Da_Info;
 int gpt_failed = 1;
 int m_bOpened = 0;
+int fdl2_executed = 0;
+int selected_ab = -1;
 int main(int argc, char **argv) {
 	spdio_t *io = NULL; int ret, i, in_quote;
 	int wait = 30 * REOPEN_FREQ;
-	int fdl1_loaded = 0, fdl2_executed = 0, argcount = 0, exec_addr = 0, stage = -1, nand_id = DEFAULT_NAND_ID;
+	int fdl1_loaded = 0, argcount = 0, exec_addr = 0, stage = -1, nand_id = DEFAULT_NAND_ID;
 	int nand_info[3];
 	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 0, baudrate = 0, highspeed = 0;
 	char *temp;
@@ -142,7 +144,7 @@ int main(int argc, char **argv) {
 
 		DBG_LOG("BSL_REP_VER: ");
 		print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
-		if (strstr((char*)(io->raw_buf + 4), "SPRD4")) { exec_addr = 0; fdl1_loaded = -1; fdl2_executed = -1; }
+		if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) { exec_addr = 0; fdl1_loaded = -1; fdl2_executed = -1; }
 
 		encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
 		if (send_and_check(io)) exit(1);
@@ -415,30 +417,58 @@ int main(int argc, char **argv) {
 
 		} else if (!strcmp(str2[1], "read_part")) {
 			const char *name, *fn; uint64_t offset, size;
+			uint64_t realsize = 0;
+			char name_ab[36];
+			int use_input_name = 1;
 			if (argcount <= 5) { DBG_LOG("read_part part_name offset size FILE\n(read ubi on nand) read_part system 0 ubi40m system.bin\n");continue; }
 
 			name = str2[2];
+			if (selected_ab < 0) select_ab(io);
+			realsize = find_partition_size(io, name);
+			if (!realsize) {
+				if (selected_ab > 0) {
+					sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
+					realsize = find_partition_size(io, name_ab);
+					use_input_name = 0;
+				}
+				if (!realsize) {
+					DBG_LOG("unable to get part size of %s\n", name);
+					argc -= 5; argv += 5;
+					continue;
+				}
+			}
 			offset = str_to_size_ubi(str2[3], nand_info);
 			size = str_to_size_ubi(str2[4], nand_info);
-			if (0xffffffff == size) size = find_partition_size(io, name);
-			if (!size) { DBG_LOG("unable to get part size of %s\n", name); continue; }
+			if (0xffffffff == size) size = realsize;
 			fn = str2[5];
 			if (offset + size < offset)
 				{ DBG_LOG("64-bit limit reached\n");continue; }
-			dump_partition(io, name, offset, size, fn,
-					blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			if (use_input_name) dump_partition(io, name, offset, size, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			else dump_partition(io, name_ab, offset, size, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 
 		} else if (!strcmp(str2[1], "r")) {
 			uint64_t realsize = 0;
 			const char* name = str2[2];
+			char name_ab[36];
+			int use_input_name = 1;
 			if (argcount <= 2) { DBG_LOG("r all/part_name/part_id\n"); continue; }
 			if (gpt_failed == 1) ptable = partition_list(io, "partition.xml", &part_count);
-			if (strstr(name, "splloader")) {
+			if (selected_ab > 0) sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
+			if (!memcmp(name, "splloader", 9)) {
 				realsize = 256 * 1024;
 			}
 			else if (!part_count) {
 				realsize = find_partition_size(io, name);
-				if (!realsize) { DBG_LOG("unable to get part size of %s\n", name); continue; }
+				if (!realsize) {
+					if (selected_ab > 0) {
+						realsize = find_partition_size(io, name_ab);
+						use_input_name = 0;
+					}
+					if (!realsize) {
+						DBG_LOG("unable to get part size of %s\n", name);
+						continue;
+					}
+				}
 			}
 			else if (isdigit(name[0])) {
 				i = atoi(name);
@@ -472,16 +502,23 @@ int main(int argc, char **argv) {
 				continue;
 			}
 			else {
-				for (i = 0; i < part_count; i++)
+				for (i = 0; i < part_count; i++) {
 					if (!strcmp(name, (*(ptable + i)).name)) {
 						realsize = (*(ptable + i)).size;
 						break;
 					}
+					if (!strcmp(name_ab, (*(ptable + i)).name)) {
+						realsize = (*(ptable + i)).size;
+						use_input_name = 0;
+						break;
+					}
+				}
 				if (i == part_count) { DBG_LOG("part not exist\n"); continue; }
 			}
 			char dfile[40];
 			sprintf(dfile, "%s.bin", name);
-			dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			if (use_input_name) dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			else dump_partition(io, name_ab, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 
 		} else if (!strcmp(str2[1], "read_parts")) {
 			const char* fn; FILE* fi;
@@ -508,38 +545,77 @@ int main(int argc, char **argv) {
 			repartition(io, str2[2]);
 
 		} else if (!strcmp(str2[1], "erase_part") || !strcmp(str2[1], "e")) {
+			uint64_t realsize = 0;
+			const char* name = str2[2];
+			char name_ab[36];
+			int use_input_name = 1;
 			if (argcount <= 2) { DBG_LOG("erase_part part_name/part_id\n");continue; }
+			if (selected_ab < 0) select_ab(io);
 			i = -1;
-			if (isdigit(str2[2][0])) {
-				if (part_count) i = atoi(str2[2]);
+			if (isdigit(name[0])) {
+				if (part_count) i = atoi(name);
 				else { DBG_LOG("gpt table is empty\n"); continue; }
-				if (i >= part_count) { DBG_LOG("part not exist\n"); continue; }
+				if (i > part_count) { DBG_LOG("part not exist\n"); continue; }
 			}
 			if (!skip_confirm) check_confirm("erase partition");
-			if (i > -1) erase_partition(io, (*(ptable + i)).name);
-			else erase_partition(io, str2[2]);
+			if (i == 0) erase_partition(io, "splloader");
+			else if (i > 0) erase_partition(io, (*(ptable + i - 1)).name);
+			else {
+				realsize = find_partition_size(io, name);
+				if (!realsize) {
+					if (selected_ab > 0) {
+						sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
+						realsize = find_partition_size(io, name_ab);
+						use_input_name = 0;
+					}
+					if (!realsize) { DBG_LOG("part not exist\n"); continue; }
+				}
+				if(use_input_name) erase_partition(io, name);
+				else erase_partition(io, name_ab);
+			}
 
 		} else if (!strcmp(str2[1], "write_part") || !strcmp(str2[1], "w")) {
 			const char *fn;FILE *fi;
+			uint64_t realsize = 0;
+			const char* name = str2[2];
+			char name_ab[36];
+			int use_input_name = 1;
 			if (argcount <= 3) { DBG_LOG("write_part part_name/part_id FILE\n");continue; }
 			fn = str2[3];
 			fi = fopen(fn, "r");
 			if (fi == NULL) { DBG_LOG("File does not exist.\n");continue; }
 			else fclose(fi);
+			if (selected_ab < 0) select_ab(io);
 			i = -1;
-			if (isdigit(str2[2][0])) {
-				if (part_count) i = atoi(str2[2]);
+			if (isdigit(name[0])) {
+				if (part_count) i = atoi(name);
 				else { DBG_LOG("gpt table is empty\n"); continue; }
-				if (i >= part_count) { DBG_LOG("part not exist\n"); continue; }
+				if (i > part_count) { DBG_LOG("part not exist\n"); continue; }
 			}
 			if (!skip_confirm) check_confirm("write partition");
-			if (i > -1) {
+			if (i == 0) load_partition(io, "splloader", str2[3], 4096);
+			else if (i > 0) {
 				if (strstr((*(ptable + i)).name, "fixnv1")) load_nv_partition(io, (*(ptable + i)).name, str2[3], 4096);
 				else load_partition(io, (*(ptable + i)).name, str2[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			}
 			else {
-				if (strstr(str2[2], "fixnv1")) load_nv_partition(io, str2[2], str2[3], 4096);
-				else load_partition(io, str2[2], str2[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				realsize = find_partition_size(io, name);
+				if (!realsize) {
+					if (selected_ab > 0) {
+						sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
+						realsize = find_partition_size(io, name_ab);
+						use_input_name = 0;
+					}
+					if (!realsize) { DBG_LOG("part not exist\n"); continue; }
+				}
+				if (use_input_name) {
+					if (strstr(name, "fixnv1")) load_nv_partition(io, name, str2[3], 4096);
+					else load_partition(io, name, str2[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				}
+				else {
+					if (strstr(name, "fixnv1")) load_nv_partition(io, name_ab, str2[3], 4096);
+					else load_partition(io, name_ab, str2[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				}
 			}
 
 		} else if (!strcmp(str2[1], "write_parts")) {

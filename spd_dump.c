@@ -21,6 +21,8 @@ extern char savepath[ARGC_LEN];
 extern DA_INFO_T Da_Info;
 int gpt_failed = 1;
 int m_bOpened = 0;
+int fdl2_executed = 0;
+int selected_ab = -1;
 int main(int argc, char **argv) {
 	spdio_t *io = NULL; int ret, i;
 	int wait = 30 * REOPEN_FREQ;
@@ -123,7 +125,7 @@ int main(int argc, char **argv) {
 
 				DBG_LOG("BSL_REP_VER: ");
 				print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
-				if (strstr((char*)(io->raw_buf + 4), "SPRD4")) { exec_addr = 0; fdl_loaded = 2; }
+				if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) { exec_addr = 0; fdl_loaded = 2; }
 
 				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
 				if (send_and_check(io)) exit(1);
@@ -242,6 +244,7 @@ int main(int argc, char **argv) {
 					nand_info[1] = 32 / (uint8_t)pow(2, (nand_id >> 2) & 3); //spare area size
 					nand_info[2] = 64 * (uint8_t)pow(2, (nand_id >> 4) & 3); //block size
 				}
+				fdl2_executed = 1;
 			}
 			argc -= 1; argv += 1;
 #if !USE_LIBUSB
@@ -249,7 +252,7 @@ int main(int argc, char **argv) {
 			if (argc <= 2) ERR_EXIT("baudrate rate\n");
 			else {
 				baudrate = strtol(argv[2], NULL, 0);
-				if (fdl_loaded > 1) call_SetProperty(io->handle, 0, 100, (LPCVOID)&baudrate);
+				if (fdl2_executed) call_SetProperty(io->handle, 0, 100, (LPCVOID)&baudrate);
 				DBG_LOG("baudrate is %d\n", baudrate);
 			}
 			argc -= 2; argv += 2;
@@ -322,31 +325,60 @@ int main(int argc, char **argv) {
 
 		} else if (!strcmp(argv[1], "read_part")) {
 			const char *name, *fn; uint64_t offset, size;
+			uint64_t realsize = 0;
+			char name_ab[36];
+			int use_input_name = 1;
 			if (argc <= 5) ERR_EXIT("read_part part_name offset size FILE\n(read ubi on nand) read_part system 0 ubi40m system.bin\n");
 
 			name = argv[2];
+			if (selected_ab < 0) select_ab(io);
+			realsize = find_partition_size(io, name);
+			if (!realsize) {
+				if (selected_ab > 0) {
+					sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
+					realsize = find_partition_size(io, name_ab);
+					use_input_name = 0;
+				}
+				if (!realsize) {
+					DBG_LOG("unable to get part size of %s\n", name);
+					argc -= 5; argv += 5;
+					continue;
+				}
+			}
 			offset = str_to_size_ubi(argv[3], nand_info);
 			size = str_to_size_ubi(argv[4], nand_info);
-			if (0xffffffff == size) size = find_partition_size(io, name);
-			if (!size) { DBG_LOG("unable to get part size of %s\n", name); argc -= 5; argv += 5; continue; }
+			if (0xffffffff == size) size = realsize;
 			fn = argv[5];
 			if (offset + size < offset)
 				ERR_EXIT("64-bit limit reached\n");
-			dump_partition(io, name, offset, size, fn,
-					blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			if(use_input_name) dump_partition(io, name, offset, size, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			else dump_partition(io, name_ab, offset, size, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 5; argv += 5;
 
 		} else if (!strcmp(argv[1], "r")) {
 			uint64_t realsize = 0;
 			const char* name = argv[2];
+			char name_ab[36];
+			int use_input_name = 1;
 			if (argc <= 2) ERR_EXIT("r all/part_name\n");
 			if (gpt_failed == 1) ptable = partition_list(io, "partition.xml", &part_count);
-			if (strstr(name, "splloader")) {
+			if (selected_ab > 0) sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
+			if (!memcmp(name, "splloader", 9)) {
 				realsize = 256 * 1024;
 			}
 			else if (!part_count) {
 				realsize = find_partition_size(io, name);
-				if (!realsize) { DBG_LOG("unable to get part size of %s\n", name); argc -= 2; argv += 2; continue; }
+				if (!realsize) {
+					if (selected_ab > 0) {
+						realsize = find_partition_size(io, name_ab);
+						use_input_name = 0;
+					}
+					if (!realsize) {
+						DBG_LOG("unable to get part size of %s\n", name);
+						argc -= 2; argv += 2;
+						continue;
+					}
+				}
 			}
 			else if (!strcmp(name, "preset_modem")) {
 				for (i = 0; i < part_count; i++)
@@ -370,16 +402,23 @@ int main(int argc, char **argv) {
 				continue;
 			}
 			else {
-				for (i = 0; i < part_count; i++)
+				for (i = 0; i < part_count; i++) {
 					if (!strcmp(name, (*(ptable + i)).name)) {
 						realsize = (*(ptable + i)).size;
 						break;
 					}
+					if (!strcmp(name_ab, (*(ptable + i)).name)) {
+						realsize = (*(ptable + i)).size;
+						use_input_name = 0;
+						break;
+					}
+				}
 				if (i == part_count) ERR_EXIT("part not exist\n");
 			}
 			char dfile[40];
 			sprintf(dfile, "%s.bin", name);
-			dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			if (use_input_name) dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			else dump_partition(io, name_ab, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(argv[1], "read_parts")) {
@@ -404,18 +443,59 @@ int main(int argc, char **argv) {
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(argv[1], "erase_part") || !strcmp(argv[1], "e")) {
+			uint64_t realsize = 0;
+			const char* name = argv[2];
+			char name_ab[36];
+			int use_input_name = 1;
 			if (argc <= 2) ERR_EXIT("erase_part part_name\n");
 			if (!skip_confirm) check_confirm("erase partition");
-			erase_partition(io, argv[2]);
+			if (selected_ab < 0) select_ab(io);
+			realsize = find_partition_size(io, name);
+			if (!realsize) {
+				if (selected_ab > 0) {
+					sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
+					realsize = find_partition_size(io, name_ab);
+					use_input_name = 0;
+				}
+				if (!realsize) {
+					DBG_LOG("part not exist\n");
+					argc -= 2; argv += 2;
+					continue;
+				}
+			}
+			if(use_input_name) erase_partition(io, name);
+			else erase_partition(io, name_ab);
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(argv[1], "write_part") || !strcmp(argv[1], "w")) {
+			uint64_t realsize = 0;
+			const char* name = argv[2];
+			char name_ab[36];
+			int use_input_name = 1;
 			if (argc <= 3) ERR_EXIT("write_part part_name FILE\n");
 			if (!skip_confirm) check_confirm("write partition");
-			if (strstr(argv[2], "fixnv1"))
-				load_nv_partition(io, argv[2], argv[3], 4096);
-			else
-				load_partition(io, argv[2], argv[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			if (selected_ab < 0) select_ab(io);
+			realsize = find_partition_size(io, name);
+			if (!realsize) {
+				if (selected_ab > 0) {
+					sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
+					realsize = find_partition_size(io, name_ab);
+					use_input_name = 0;
+				}
+				if (!realsize) {
+					DBG_LOG("part not exist\n");
+					argc -= 3; argv += 3;
+					continue;
+				}
+			}
+			if (use_input_name) {
+				if (strstr(name, "fixnv1")) load_nv_partition(io, name, argv[3], 4096);
+				else load_partition(io, name, argv[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			}
+			else {
+				if (strstr(name, "fixnv1")) load_nv_partition(io, name_ab, argv[3], 4096);
+				else load_partition(io, name_ab, argv[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			}
 			argc -= 3; argv += 3;
 
 		} else if (!strcmp(argv[1], "write_parts")) {
