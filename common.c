@@ -482,17 +482,14 @@ int send_and_check(spdio_t* io) {
 	return 0;
 }
 
-void check_confirm(const char* name) {
-	char buf[4], c; int i;
-	printf("Answer \"yes\" to confirm the \"%s\" command: ", name);
+int check_confirm(const char* name) {
+	char c;
+	printf("Answer \"y\" to confirm the \"%s\" command: ", name);
 	fflush(stdout);
-	do {
-		i = scanf("%3s%c", buf, &c);
-		if (i != 2 || c != '\n') break;
-		for (i = 0; buf[i]; i++) buf[i] = tolower(buf[i]);
-		if (!strcmp(buf, "yes")) return;
-	} while (0);
-	ERR_EXIT("operation is not confirmed\n");
+	if (scanf(" %c", &c) != 1) return 0;
+	while (getchar() != '\n');
+	if (tolower(c) == 'y') return 1;
+	return 0;
 }
 
 uint8_t* loadfile(const char* fn, size_t* num, size_t extra) {
@@ -692,8 +689,8 @@ uint64_t dump_partition(spdio_t* io,
 	uint32_t n, nread, t32; uint64_t offset, n64;
 	int ret, mode64 = (start + len) >> 32;
 	FILE* fo;
-	if (!memcmp(name, "userdata", 8)) check_confirm("read userdata");
-	else if (strstr(name, "fixnv") || strstr(name, "runtimenv"))
+	if (!memcmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
+	else if (strstr(name, "nv1") || strstr(name, "nv2"))
 	{
 		char* name_tmp = malloc(strlen(name) + 1);
 		if (name_tmp == NULL) return 0;
@@ -1052,8 +1049,6 @@ void load_partition(spdio_t* io, const char* name,
 	unsigned mode64, n; int ret;
 	FILE* fi;
 
-	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
-
 	fi = fopen(fn, "rb");
 	if (!fi) ERR_EXIT("fopen(load) failed\n");
 
@@ -1147,14 +1142,14 @@ void load_nv_partition(spdio_t* io, const char* name,
 
 	mem = loadfile(fn, &len, 0);
 	if (!mem) ERR_EXIT("loadfile(\"%s\") failed\n", fn);
+
+	size_t memOffset = 0;
+	uint8_t* output = (uint8_t*)malloc(len);
+	if (!output) ERR_EXIT("malloc failed\n");
+	if (*(uint32_t*)mem == 0x4e56) { memOffset = 0x200; len -= 0x200; }
+	if (strstr(name, "fix"))
 	{
-		uint8_t* output = (uint8_t*)malloc(len);
-		size_t memOffset = 0;
 		len = 0;
-
-		if (!output) ERR_EXIT("malloc failed\n");
-		if (*(uint32_t*)mem == 0x00004e56) memOffset = 0x200;
-
 		len += sizeof(uint32_t);
 
 		uint16_t tmp[2];
@@ -1163,7 +1158,6 @@ void load_nv_partition(spdio_t* io, const char* name,
 			tmp[0] = 0;
 			tmp[1] = 0;
 			memcpy(tmp, mem + memOffset + len, sizeof(tmp));
-
 			len += sizeof(tmp);
 			len += tmp[1];
 
@@ -1174,34 +1168,24 @@ void load_nv_partition(spdio_t* io, const char* name,
 				break;
 			}
 		}
-		memcpy(output, mem + memOffset, sizeof(char) * len);
-		free(mem);
-		mem = output;
+		crc = crc16(crc, mem + memOffset + 2, len - 2);
+		WRITE16_BE(mem, crc);
 	}
+	memcpy(output, mem + memOffset, len);
+	free(mem);
+	mem = output;
+	for (offset = 0; offset < len; offset++) cs += mem[offset];
 	DBG_LOG("file size : 0x%zx\n", len);
 
-	for (offset = 2; (rsz = len - offset); offset += n)
-	{
-		n = rsz > step ? step : rsz;
-		crc = crc16(crc, &mem[offset], n);
-		for (unsigned i = 0; i < n; i++) cs += mem[offset + i];
-	}
-	cs += (crc & 0xff);
-	cs += (crc >> 8) & 0xff;
-	WRITE16_BE(mem, crc);
-
-	{
-		struct {
-			uint16_t name[36];
-			uint32_t size, cs;
-		} pkt = { 0 };
-
-		ret = copy_to_wstr(pkt.name, sizeof(pkt.name) / 2, name);
-		if (ret) ERR_EXIT("name too long\n");
-		WRITE32_LE(&pkt.size, len);
-		WRITE32_LE(&pkt.cs, cs);
-		encode_msg(io, BSL_CMD_START_DATA, &pkt, sizeof(pkt));
-	}
+	struct {
+		uint16_t name[36];
+		uint32_t size, cs;
+	} pkt = { 0 };
+	ret = copy_to_wstr(pkt.name, sizeof(pkt.name) / 2, name);
+	if (ret) ERR_EXIT("name too long\n");
+	WRITE32_LE(&pkt.size, len);
+	WRITE32_LE(&pkt.cs, cs);
+	encode_msg(io, BSL_CMD_START_DATA, &pkt, sizeof(pkt));
 	if (send_and_check(io)) { free(mem); return; }
 
 	for (offset = 0; (rsz = len - offset); offset += n) {
@@ -1248,7 +1232,7 @@ uint64_t find_partition_size(spdio_t* io, const char* name) {
 	uint32_t t32; uint64_t n64; unsigned long long offset = 0;
 	int ret, i, start = 47;
 
-	if (strstr(name, "fixnv") || strstr(name, "runtimenv")) {
+	if (strstr(name, "fixnv")) {
 		if (selected_ab > 0) {
 			size_t namelen = strlen(name);
 			if (0 == strcmp(name + namelen - 2, "_a") || 0 == strcmp(name + namelen - 2, "_b")) return 1;
@@ -1256,6 +1240,7 @@ uint64_t find_partition_size(spdio_t* io, const char* name) {
 		}
 		return 1;
 	}
+	else if (strstr(name, "runtimenv")) return 1;
 	find_partition_size_new(io, name, &offset);
 	if (offset) return offset;
 
@@ -1448,7 +1433,7 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		snprintf(fix_fn, sizeof(fix_fn), "%s/%s", path, fn);
 		char* dot = strrchr(fn, '.');
 		if (dot != NULL) *dot = '\0';
-		if (strstr(fn, "fixnv1"))
+		if (strstr(fn, "nv1"))
 			load_nv_partition(io, fn, fix_fn, 4096);
 		else if (!memcmp(fn, "pgpt", 4) || !memcmp(fn, "sprdpart", 8))
 			continue;
@@ -1524,6 +1509,84 @@ void select_ab(spdio_t* io)
 	if (abc->nb_slot != 2) { selected_ab = 0; return; }
 	if (ab_compare_slots(&abc->slot_info[1], &abc->slot_info[0]) < 0) selected_ab = 2;
 	else selected_ab = 1;
+}
+
+void dm_disable(spdio_t* io, int blk_size)
+{
+	int ret;
+	const char* list[] = { "vbmeta", "vbmeta_a", "vbmeta_b", NULL };
+	uint8_t head[0x80];
+	for (int i = 0; list[i] != NULL; i++) {
+		select_partition(io, list[i], 0x80, 0, BSL_CMD_READ_START);
+		if (send_and_check(io)) continue;
+
+		uint32_t data[2] = { 0x80,0 };
+		encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
+		send_msg(io);
+		ret = recv_msg(io);
+		if (!ret) ERR_EXIT("timeout reached\n");
+		if (recv_type(io) != BSL_REP_READ_FLASH) continue;
+		else memcpy(head,(io->raw_buf + 4),0x80);
+		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		send_and_check(io);
+
+		if (memcmp(head, "DHTB", 4)) head[0x7B] = 1;
+		else { DBG_LOG("unsupported\n"); break; }
+
+		struct {
+			uint16_t name[36];
+			uint32_t size;
+		} pkt = { 0 };
+
+		ret = copy_to_wstr(pkt.name, sizeof(pkt.name) / 2, list[i]);
+		if (ret) ERR_EXIT("name too long\n");
+		WRITE32_LE(&pkt.size, 0x80);
+		encode_msg(io, BSL_CMD_START_DATA, &pkt, sizeof(pkt));
+		if (send_and_check(io)) continue;
+
+		memcpy(io->temp_buf, head, 0x80);
+		encode_msg(io, BSL_CMD_MIDST_DATA, io->temp_buf, 0x80);
+		send_msg(io);
+		ret = recv_msg_timeout(io, 15000);
+		if (!ret) ERR_EXIT("timeout reached\n");
+		if ((ret = recv_type(io)) != BSL_REP_ACK) {
+			DBG_LOG("unexpected response (0x%04x)\n", ret);
+			continue;
+		}
+		encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
+		if (!send_and_check(io)) DBG_LOG("disabled dm-verity: %s\n", list[i]);
+		if (i == 0) break;
+	}
+}
+
+void dm_enable(spdio_t* io, int blk_size)
+{
+	const char* list[] = { "vbmeta", "vbmeta_a", "vbmeta_b",
+					"vbmeta_system", "vbmeta_system_a", "vbmeta_system_b",
+					"vbmeta_vendor", "vbmeta_vendor_a", "vbmeta_vendor_b",
+					"vbmeta_system_ext", "vbmeta_system_ext_a", "vbmeta_system_ext_b",
+					"vbmeta_product", "vbmeta_product_a", "vbmeta_product_b",
+					"vbmeta_odm", "vbmeta_odm_a", "vbmeta_odm_b", NULL };
+	for (int i = 0; list[i] != NULL; i++) {
+		char dfile[40];
+		sprintf(dfile, "%s.bin", list[i]);
+		if (1048576 != dump_partition(io, list[i], 0, 1048576, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE)) continue;
+
+		FILE* vb;
+		vb = fopen(dfile, "rb+");
+		if (!vb) ERR_EXIT("fopen %s failed\n", dfile);
+		char header[4];
+		if (fread(header, 1, 4, vb) != 4) ERR_EXIT("Failed to read header\n");
+		if (memcmp(header, "DHTB", 4)) {
+			if (fseek(vb, 0x7B, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
+			char ch = '\0';
+			if (fwrite(&ch, 1, 1, vb) != 1) ERR_EXIT("fwrite failed\n");
+		}
+		else { DBG_LOG("unsupported\n"); break; }
+		fclose(vb);
+
+		load_partition(io, list[i], dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+	}
 }
 
 #if _WIN32
