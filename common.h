@@ -34,6 +34,7 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam);
 #else
 #include <dirent.h>
 #endif
+
 #if USE_LIBUSB
 #include <libusb-1.0/libusb.h>
 #include <unistd.h>
@@ -181,6 +182,8 @@ void print_string(FILE* f, const void* src, size_t n);
 
 #if USE_LIBUSB
 void find_endpoints(libusb_device_handle* dev_handle, int result[2]);
+#else
+void ChangeMode(spdio_t* io, int ms, int bootmode);
 #endif
 
 spdio_t* spdio_init(int flags);

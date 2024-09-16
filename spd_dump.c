@@ -26,10 +26,11 @@ int selected_ab = -1;
 int main(int argc, char **argv) {
 	spdio_t *io = NULL; int ret, i;
 	int wait = 30 * REOPEN_FREQ;
-	int fdl_loaded = 0, exec_addr = 0, nand_id = DEFAULT_NAND_ID;
+	int fdl_loaded = 0, exec_addr = 0, stage = -1, nand_id = DEFAULT_NAND_ID;
 	int nand_info[3];
 	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 0, baudrate = 0, highspeed = 0;
 	char execfile[40];
+	int bootmode = -1;
 	int part_count = 0;
 	partition_t* ptable = NULL;
 #if !USE_LIBUSB
@@ -55,6 +56,16 @@ int main(int argc, char **argv) {
 			if (argc <= 2) ERR_EXIT("bad option\n");
 			io->verbose = atoi(argv[2]);
 			argc -= 2; argv += 2;
+#if !USE_LIBUSB
+		} else if (!strcmp(argv[1], "--kick")) {
+			if (argc <= 1) ERR_EXIT("bad option\n");
+			bootmode = 2;
+			argc -= 1; argv += 1;
+		} else if (!strcmp(argv[1], "--kickto")) {
+			if (argc <= 2) ERR_EXIT("bad option\n");
+			bootmode = atoi(argv[2]);
+			argc -= 2; argv += 2;
+#endif
 		} else break;
 	}
 
@@ -70,14 +81,22 @@ int main(int argc, char **argv) {
 				send_file(io, fn, addr, end_data,
 					blk_size ? blk_size : 528);
 			} else {
-				DBG_LOG("Waiting for connection (%ds)\n", wait / REOPEN_FREQ);
-#if !USE_LIBUSB
-				FindPort();
+#if _WIN32
 				io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
 				if (io->hThread == NULL) {
 					return -1;
 				}
 #endif
+#if !USE_LIBUSB
+				if (!curPort) FindPort();
+				if (bootmode >= 0)
+				{
+					if (curPort) ERR_EXIT("kick feature needs program running before connecting device to PC\n");
+					else ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode);
+					wait = 10 * REOPEN_FREQ;
+				}
+#endif
+				DBG_LOG("Waiting for connection (%ds)\n", wait / REOPEN_FREQ);
 				for (i = 0; ; i++) {
 #if USE_LIBUSB
 					io->dev_handle = libusb_open_device_with_vid_pid(NULL, 0x1782, 0x4d00);
@@ -116,16 +135,18 @@ int main(int argc, char **argv) {
 				/* Bootloader (chk = crc16) */
 				io->flags |= FLAGS_CRC16;
 
-				encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
-				send_msg(io);
-				recv_msg(io);
-				if (recv_type(io) != BSL_REP_VER)
-					ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
-				DBG_LOG("CHECK_BAUD bootrom\n");
+				if (stage) {
+					encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
+					send_msg(io);
+					recv_msg(io);
+					if (recv_type(io) != BSL_REP_VER)
+						ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
+					DBG_LOG("CHECK_BAUD bootrom\n");
 
-				DBG_LOG("BSL_REP_VER: ");
-				print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
-				if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) { exec_addr = 0; fdl_loaded = 2; }
+					DBG_LOG("BSL_REP_VER: ");
+					print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+					if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) { exec_addr = 0; fdl_loaded = 2; }
+				}
 
 				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
 				if (send_and_check(io)) exit(1);
@@ -401,6 +422,23 @@ int main(int argc, char **argv) {
 					if (!memcmp((*(ptable + i)).name, "blackbox", 8)) continue;
 					else if (!memcmp((*(ptable + i)).name, "cache", 5)) continue;
 					else if (!memcmp((*(ptable + i)).name, "userdata", 8)) continue;
+					sprintf(dfile, "%s.bin", (*(ptable + i)).name);
+					dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				}
+				argc -= 2; argv += 2;
+				continue;
+			}
+			else if (!strcmp(name, "all_lite")) {
+				dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				for (i = 0; i < part_count; i++)
+				{
+					char dfile[40];
+					size_t namelen = strlen((*(ptable + i)).name);
+					if (!memcmp((*(ptable + i)).name, "blackbox", 8)) continue;
+					else if (!memcmp((*(ptable + i)).name, "cache", 5)) continue;
+					else if (!memcmp((*(ptable + i)).name, "userdata", 8)) continue;
+					if (selected_ab == 1 && namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_b")) continue;
+					else if (selected_ab == 2 && namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_a")) continue;
 					sprintf(dfile, "%s.bin", (*(ptable + i)).name);
 					dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				}
