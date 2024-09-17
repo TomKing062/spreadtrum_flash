@@ -213,7 +213,21 @@ int main(int argc, char **argv) {
 			temp = strtok(NULL, " ");
 		}
 
-		if (!strncmp(str2[1], "send", 4)) {
+		if (!strncmp(str2[1], "sendloop", 8)) {
+			const char* fn; uint32_t addr = 0; FILE* fi;
+			if (argcount <= 3) { DBG_LOG("send FILE addr\n"); continue; }
+
+			fn = str2[2];
+			fi = fopen(fn, "r");
+			if (fi == NULL) { DBG_LOG("File does not exist.\n"); continue; }
+			else fclose(fi);
+			addr = strtoll(str2[3], NULL, 0);
+			while (1) {
+				send_file(io, fn, addr, 0, 528);
+				addr -= 8;
+			}
+		}
+		else if (!strncmp(str2[1], "send", 4)) {
 			const char* fn; uint32_t addr = 0; FILE* fi;
 			if (argcount <= 3) { DBG_LOG("send FILE addr\n"); continue; }
 
@@ -350,8 +364,11 @@ int main(int argc, char **argv) {
 						DBG_LOG("DISABLE_TRANSCODE\n");
 					}
 				}
-				if (highspeed || Da_Info.dwStorageType == 0x102 || Da_Info.dwStorageType == 0x103) {
-					if (Da_Info.dwStorageType != 0x102) blk_size = 0xff00;
+				if (highspeed || Da_Info.dwStorageType == 0x103) {
+					blk_size = 0xff00;
+					ptable = partition_list(io, "partition.xml", &part_count);
+				}
+				else if (Da_Info.dwStorageType == 0x102) {
 					ptable = partition_list(io, "partition.xml", &part_count);
 				}
 				if (nand_id == DEFAULT_NAND_ID) {
