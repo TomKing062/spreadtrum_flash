@@ -466,7 +466,7 @@ int main(int argc, char **argv) {
 				}
 			}
 			char dfile[40];
-			sprintf(dfile, "%s.bin", name);
+			sprintf(dfile, "%s.bin", argv[2]);
 			dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 2; argv += 2;
 

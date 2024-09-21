@@ -581,7 +581,7 @@ int main(int argc, char **argv) {
 				}
 			}
 			char dfile[40];
-			sprintf(dfile, "%s.bin", name);
+			sprintf(dfile, "%s.bin", str2[2]);
 			dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 
 		} else if (!strcmp(str2[1], "read_parts")) {
