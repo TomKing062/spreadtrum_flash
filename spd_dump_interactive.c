@@ -476,7 +476,6 @@ int main(int argc, char **argv) {
 				if (!realsize) {
 					DBG_LOG("part not exist\n");
 					io->verbose = verbose;
-					argc -= 5; argv += 5;
 					continue;
 				}
 			}

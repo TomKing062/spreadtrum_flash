@@ -1594,49 +1594,26 @@ void select_ab(spdio_t* io)
 
 void dm_disable(spdio_t* io, int blk_size)
 {
-	int ret;
 	const char* list[] = { "vbmeta", "vbmeta_a", "vbmeta_b", NULL };
-	uint8_t head[0x80];
 	for (int i = 0; list[i] != NULL; i++) {
-		select_partition(io, list[i], 0x80, 0, BSL_CMD_READ_START);
-		if (send_and_check(io)) continue;
+		char dfile[40];
+		sprintf(dfile, "%s.bin", list[i]);
+		if (1048576 != dump_partition(io, list[i], 0, 1048576, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE)) continue;
 
-		uint32_t data[2] = { 0x80,0 };
-		encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
-		send_msg(io);
-		ret = recv_msg(io);
-		if (!ret) ERR_EXIT("timeout reached\n");
-		if (recv_type(io) != BSL_REP_READ_FLASH) continue;
-		else memcpy(head,(io->raw_buf + 4),0x80);
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
-		send_and_check(io);
-
-		if (memcmp(head, "DHTB", 4)) head[0x7B] = 1;
-		else { DBG_LOG("unsupported\n"); break; }
-
-		struct {
-			uint16_t name[36];
-			uint32_t size;
-		} pkt = { 0 };
-
-		ret = copy_to_wstr(pkt.name, sizeof(pkt.name) / 2, list[i]);
-		if (ret) ERR_EXIT("name too long\n");
-		WRITE32_LE(&pkt.size, 0x80);
-		encode_msg(io, BSL_CMD_START_DATA, &pkt, sizeof(pkt));
-		if (send_and_check(io)) continue;
-
-		memcpy(io->temp_buf, head, 0x80);
-		encode_msg(io, BSL_CMD_MIDST_DATA, io->temp_buf, 0x80);
-		send_msg(io);
-		ret = recv_msg_timeout(io, 15000);
-		if (!ret) ERR_EXIT("timeout reached\n");
-		if ((ret = recv_type(io)) != BSL_REP_ACK) {
-			DBG_LOG("unexpected response (0x%04x)\n", ret);
-			continue;
+		FILE* vb;
+		vb = fopen(dfile, "rb+");
+		if (!vb) ERR_EXIT("fopen %s failed\n", dfile);
+		char header[4];
+		if (fread(header, 1, 4, vb) != 4) ERR_EXIT("Failed to read header\n");
+		if (memcmp(header, "DHTB", 4)) {
+			if (fseek(vb, 0x7B, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
+			char ch = '\1';
+			if (fwrite(&ch, 1, 1, vb) != 1) ERR_EXIT("fwrite failed\n");
 		}
-		encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
-		if (!send_and_check(io)) DBG_LOG("disabled dm-verity: %s\n", list[i]);
-		if (i == 0) break;
+		else { DBG_LOG("unsupported\n"); break; }
+		fclose(vb);
+
+		load_partition(io, list[i], dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 	}
 }
 
