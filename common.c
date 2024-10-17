@@ -29,7 +29,7 @@ BOOL FindPort(void)
 			char portNum_str[4];
 			strncpy(portNum_str, result + strlen(USB_DL) + 5, 3);
 			portNum_str[3] = 0;
-			curPort = (DWORD)strtol(portNum_str, NULL, 0);
+			curPort = strtoul(portNum_str, NULL, 0);
 			break;
 		}
 
@@ -157,7 +157,7 @@ void find_endpoints(libusb_device_handle* dev_handle, int result[2]) {
 
 #define RECV_BUF_LEN (0x8000)
 
-char savepath[ARGC_LEN] = { 0 };
+char savepath[ARGV_LEN] = { 0 };
 DA_INFO_T Da_Info;
 
 spdio_t* spdio_init(int flags) {
@@ -265,6 +265,7 @@ void encode_msg(spdio_t* io, int type, const void* data, size_t len) {
 	if (type == BSL_CMD_CHECK_BAUD) {
 		memset(io->enc_buf, HDLC_HEADER, len);
 		io->enc_len = len;
+		*(uint8_t*)(io->raw_buf) = HDLC_HEADER;
 		return;
 	}
 
@@ -334,6 +335,7 @@ int send_msg(spdio_t* io) {
 	return ret;
 }
 
+extern int fdl1_loaded;
 int recv_msg_orig(spdio_t* io) {
 	int a, pos, len, chk;
 	int esc = 0, nread = 0, head_found = 0, plen = 6;
@@ -419,14 +421,35 @@ int recv_msg_orig(spdio_t* io) {
 	if (nread != plen)
 	{ DBG_LOG("bad length (%d, expected %d)\n", nread, plen); return 0; }
 
-	if (io->flags & FLAGS_CRC16)
-		chk = spd_crc16(0, io->raw_buf, plen - 2);
-	else
-		chk = spd_checksum(0, io->raw_buf, plen - 2, CHK_ORIG);
-
 	a = READ16_BE(io->raw_buf + plen - 2);
-	if (a != chk)
-	{ DBG_LOG("bad checksum (0x%04x, expected 0x%04x)\n", a, chk); return 0; }
+	if (fdl1_loaded == 0 && !(io->flags & FLAGS_CRC16))
+	{		
+		int chk1, chk2;
+		chk1 = spd_crc16(0, io->raw_buf, plen - 2);
+		if (a == chk1) io->flags |= FLAGS_CRC16;
+		else
+		{
+			chk2 = spd_checksum(0, io->raw_buf, plen - 2, CHK_ORIG);
+			if (a == chk2) fdl1_loaded = 1;
+			else
+			{
+				DBG_LOG("bad checksum (0x%04x, expected 0x%04x or 0x%04x)\n", a, chk1, chk2);
+				return 0;
+			}
+		}
+	}
+	else
+	{
+		if (io->flags & FLAGS_CRC16)
+			chk = spd_crc16(0, io->raw_buf, plen - 2);
+		else
+			chk = spd_checksum(0, io->raw_buf, plen - 2, CHK_ORIG);
+		if (a != chk)
+		{
+			DBG_LOG("bad checksum (0x%04x, expected 0x%04x)\n", a, chk);
+			return 0;
+		}
+	}
 
 	if (io->verbose == 1)
 		DBG_LOG("recv: type = 0x%02x, size = %d\n",
@@ -441,14 +464,17 @@ int recv_msg(spdio_t* io) {
 	for (;;) {
 		ret = recv_msg_orig(io);
 		// only retry in fdl2 stage
-		if ((!ret) && fdl2_executed) {
+		if (!ret) {
+			if (fdl2_executed) {
 #if !USE_LIBUSB
-			call_Clear(io->handle);
+				call_Clear(io->handle);
 #endif
-			send_msg(io);
-			ret = recv_msg_orig(io);
+				send_msg(io);
+				ret = recv_msg_orig(io);
+				if (!ret) break;
+			}
+			else break;
 		}
-		if (!ret) break;
 		if (recv_type(io) != BSL_REP_LOG) break;
 		DBG_LOG("BSL_REP_LOG: ");
 		print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
@@ -666,7 +692,7 @@ void select_partition(spdio_t* io, const char* name,
 void print_progress_bar(float progress) {
 	static int completed0 = 0;
 	if (completed0 == PROGRESS_BAR_WIDTH) completed0 = 0;
-	int completed = PROGRESS_BAR_WIDTH * progress;
+	int completed = (int)(PROGRESS_BAR_WIDTH * progress);
 	int remaining;
 	if (completed != completed0)
 	{
@@ -730,7 +756,7 @@ uint64_t dump_partition(spdio_t* io,
 
 	for (offset = start; (n64 = start + len - offset); ) {
 		uint32_t data[3];
-		n = n64 > step ? step : n64;
+		n = (uint32_t)(n64 > step ? step : n64);
 
 		WRITE32_LE(data, n);
 		WRITE32_LE(data + 1, offset);
@@ -898,7 +924,7 @@ int gpt_info(partition_t* ptable, const char* fn_pgpt, const char* fn_xml, int* 
 		fclose(fp);
 		return -1;
 	}
-	fseek(fp, header.partition_entry_lba * real_SECTOR_SIZE, SEEK_SET);
+	fseek(fp, (long)header.partition_entry_lba * real_SECTOR_SIZE, SEEK_SET);
 	bytes_read = fread(entries, 1, header.number_of_partition_entries * sizeof(efi_entry), fp);
 	if (bytes_read != (int)(header.number_of_partition_entries * sizeof(efi_entry)))
 		DBG_LOG("only read %d/%d\n", bytes_read, (int)(header.number_of_partition_entries * sizeof(efi_entry)));
@@ -939,7 +965,7 @@ int gpt_info(partition_t* ptable, const char* fn_pgpt, const char* fn_xml, int* 
 
 extern int gpt_failed;
 partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
-	long long size;
+	long size;
 	unsigned i, n = 0;
 	int ret; FILE* fo = NULL; uint8_t* p;
 	partition_t* ptable = malloc(128 * sizeof(partition_t));
@@ -962,7 +988,7 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 		}
 		size = READ16_BE(io->raw_buf + 2);
 		if (size % 0x4c) {
-			DBG_LOG("not divisible by struct size (0x%04llx)\n", size);
+			DBG_LOG("not divisible by struct size (0x%04lx)\n", size);
 			free(ptable);
 			return NULL;
 		}
@@ -1074,7 +1100,7 @@ void load_partition(spdio_t* io, const char* name,
 		if (!rawbuf) ERR_EXIT("malloc failed\n");
 
 		for (offset = 0; (n64 = len - offset); offset += n) {
-			n = n64 > step ? step : n64;
+			n = (unsigned)(n64 > step ? step : n64);
 #if _WIN32
 			if (m_bOpened == -1) {
 				spdio_free(io);
@@ -1111,7 +1137,7 @@ void load_partition(spdio_t* io, const char* name,
 #endif
 		fallback_load:
 		for (offset = 0; (n64 = len - offset); offset += n) {
-			n = n64 > step ? step : n64;
+			n = (unsigned)(n64 > step ? step : n64);
 			if (fread(io->temp_buf, 1, n, fi) != n)
 				ERR_EXIT("fread(load) failed\n");
 			encode_msg(io, BSL_CMD_MIDST_DATA, io->temp_buf, n);
@@ -1278,7 +1304,7 @@ void find_partition_size_new(spdio_t* io, const char* name, unsigned long long *
 
 uint64_t find_partition_size(spdio_t* io, const char* name) {
 	uint32_t t32; uint64_t n64; unsigned long long offset = 0;
-	int ret, i, start = 47;
+	int ret, i, end = 20;
 
 	if (selected_ab > 0 && strcmp(name, "uboot") == 0) return 0;
 	if (strstr(name, "fixnv")) {
@@ -1293,12 +1319,14 @@ uint64_t find_partition_size(spdio_t* io, const char* name) {
 	find_partition_size_new(io, name, &offset);
 	if (offset) return offset;
 
-	select_partition(io, name, 1ll << (start + 1), 1, BSL_CMD_READ_START);
+	if (!strcmp(name, "ubipac")) end = 10;
+	select_partition(io, name, 128 * 1024, 0, BSL_CMD_READ_START);
 	if (send_and_check(io)) return 0;
 
-	for (i = start; i >= 20; i--) {
+	int incrementing = 1;
+	for (i = end; i >= end;) {
 		uint32_t data[3];
-		n64 = offset + (1ll << i) - (1 << 20);
+		n64 = offset + (1ll << i) - (1ll << end);
 		WRITE32_LE(data, 4);
 		WRITE32_LE(data + 1, n64);
 		t32 = n64 >> 32;
@@ -1309,8 +1337,20 @@ uint64_t find_partition_size(spdio_t* io, const char* name) {
 		ret = recv_msg(io);
 		if (!ret) ERR_EXIT("timeout reached\n");
 		ret = recv_type(io);
-		if (ret != BSL_REP_READ_FLASH) continue;
-		offset = n64 + (1 << 20);
+		if (incrementing) {
+			if (ret != BSL_REP_READ_FLASH) {
+				if (!n64) break;
+				offset += 1ll << (i - 1);
+				i -= 2;
+				incrementing = 0;
+			}
+			else if (i == 10) i += 11;
+			else i++;
+		}
+		else {
+			if (ret == BSL_REP_READ_FLASH) offset += (1ll << i);
+			i--;
+		}
 	}
 	DBG_LOG("partition_size_pc: %s, 0x%llx\n", name, offset);
 	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
@@ -1377,7 +1417,7 @@ uint64_t str_to_size_ubi(const char* str, int* nand_info) {
 			char suffix = tolower(*end);
 			if (suffix == 'm')
 			{
-				int block = n * (1024 / nand_info[2]) + n * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1;
+				int block = (int)(n * (1024 / nand_info[2]) + n * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1);
 				return 1024 * (nand_info[2] - 2 * nand_info[0]) * block;
 			}
 			else
@@ -1461,7 +1501,7 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) 
 			if (!realsize) { DBG_LOG("unable to get part size of %s\n", partitions[i].name); continue; }
 		}
 		else if (ubi) {
-			int block = partitions[i].size * (1024 / nand_info[2]) + partitions[i].size * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1;
+			int block = (int)(partitions[i].size * (1024 / nand_info[2]) + partitions[i].size * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1);
 			realsize = 1024 * (nand_info[2] - 2 * nand_info[0]) * block;
 		}
 		dump_partition(io, partitions[i].name, 0, realsize, dfile, blk_size);
@@ -1481,8 +1521,8 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) 
 void load_partitions(spdio_t* io, const char* path, int blk_size) {
 	char* fn;
 #if _WIN32
-	char searchPath[ARGC_LEN];
-	snprintf(searchPath, ARGC_LEN, "%s\\*", path);
+	char searchPath[ARGV_LEN];
+	snprintf(searchPath, ARGV_LEN, "%s\\*", path);
 
 	WIN32_FIND_DATAA findData;
 	HANDLE hFind = FindFirstFileA(searchPath, &findData);
@@ -1679,7 +1719,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			case DBT_DEVTYP_PORT:
 				if (interface_checked) {
 					pDevPort = (PDEV_BROADCAST_PORT)pHdr;
-					DWORD changedPort = (DWORD)my_strtol(pDevPort->dbcp_name + 3, NULL, 0);
+					DWORD changedPort = my_strtoul(pDevPort->dbcp_name + 3, NULL, 0);
 					if (DBT_DEVICEARRIVAL == wParam) {
 						if (!curPort) curPort = changedPort;
 						else if (curPort != changedPort) DBG_LOG("second port not supported\n");
@@ -1737,66 +1777,99 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam)
 	return 0;
 }
 #if !USE_LIBUSB
-void ChangeMode(spdio_t* io, int ms, int bootmode)
+void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 {
 	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
 	HANDLE hSerial;
-	char portName[8];
+	char portName[11];
 	DCB dcbSerialParams = { 0 };
 	COMMTIMEOUTS timeouts = { 0 };
 	DWORD bytes_written, bytes_read;
+	int done = 0;
 
-	DBG_LOG("Waiting for connection (%ds)\n", ms / 1000);
-	for (int i = 0; ; i++) {
-		if (curPort) break;
-		if (100 * i >= ms) ERR_EXIT("find port failed\n");
-		usleep(100000);
-	}
-
-	if (curPort < 10)  sprintf(portName, "COM%ld", curPort);
-	else sprintf(portName, "\\\\.\\COM%ld", curPort);
-	hSerial = CreateFileA(portName,
-		GENERIC_READ | GENERIC_WRITE,
-		0,
-		NULL,
-		OPEN_EXISTING,
-		FILE_ATTRIBUTE_NORMAL,
-		NULL);
-	if (hSerial == INVALID_HANDLE_VALUE) ERR_EXIT("Error opening serial port\n");
-	dcbSerialParams.DCBlength = sizeof(dcbSerialParams);
-	if (!GetCommState(hSerial, &dcbSerialParams)) ERR_EXIT("Error getting device state\n");
-	dcbSerialParams.BaudRate = CBR_115200;
-	dcbSerialParams.ByteSize = 8;
-	dcbSerialParams.StopBits = ONESTOPBIT;
-	dcbSerialParams.Parity = NOPARITY;
-	dcbSerialParams.fDtrControl = DTR_CONTROL_ENABLE;
-	dcbSerialParams.fRtsControl = RTS_CONTROL_ENABLE;
-	if (!SetCommState(hSerial, &dcbSerialParams)) ERR_EXIT("Error setting device parameters\n");
-	timeouts.ReadIntervalTimeout = 50;
-	timeouts.ReadTotalTimeoutConstant = 50;
-	timeouts.ReadTotalTimeoutMultiplier = 10;
-	timeouts.WriteTotalTimeoutConstant = 50;
-	timeouts.WriteTotalTimeoutMultiplier = 10;
-	if (!SetCommTimeouts(hSerial, &timeouts)) ERR_EXIT("Error setting timeouts\n");
-
-	uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0,0x7e };
-	payload[8] = bootmode + 0x80;
-	if (io->verbose >= 2) {
-		DBG_LOG("send (%d):\n", 10);
-		print_mem(stderr, payload, 10);
-	}
-	if (!WriteFile(hSerial, payload, 10, &bytes_written, NULL)) ERR_EXIT("Error writing to serial port\n");
-	if (!ReadFile(hSerial, io->recv_buf, RECV_BUF_LEN, &bytes_read, NULL)) CloseHandle(hSerial);
-	for (int i = 0; ; i++)
+	while (!done)
 	{
-		if (m_bOpened == -1)
-		{
-			curPort = 0;
-			m_bOpened = 0;
-			return;
+		DBG_LOG("Waiting for connection (%ds)\n", ms / 1000);
+		for (int i = 0; ; i++) {
+			if (curPort) break;
+			if (100 * i >= ms) ERR_EXIT("find port failed\n");
+			usleep(100000);
 		}
-		if (100 * i >= ms) ERR_EXIT("kick reboot timeout\n");
-		usleep(100000);
+
+		if (curPort < 10)  sprintf(portName, "COM%ld", curPort);
+		else sprintf(portName, "\\\\.\\COM%ld", curPort);
+		hSerial = CreateFileA(portName,
+			GENERIC_READ | GENERIC_WRITE,
+			0,
+			NULL,
+			OPEN_EXISTING,
+			FILE_ATTRIBUTE_NORMAL,
+			NULL);
+		if (hSerial == INVALID_HANDLE_VALUE) ERR_EXIT("Error opening serial port\n");
+		dcbSerialParams.DCBlength = sizeof(dcbSerialParams);
+		if (!GetCommState(hSerial, &dcbSerialParams)) ERR_EXIT("Error getting device state\n");
+		dcbSerialParams.BaudRate = CBR_115200;
+		dcbSerialParams.ByteSize = 8;
+		dcbSerialParams.StopBits = ONESTOPBIT;
+		dcbSerialParams.Parity = NOPARITY;
+		dcbSerialParams.fDtrControl = DTR_CONTROL_ENABLE;
+		dcbSerialParams.fRtsControl = RTS_CONTROL_ENABLE;
+		if (!SetCommState(hSerial, &dcbSerialParams)) ERR_EXIT("Error setting device parameters\n");
+		timeouts.ReadIntervalTimeout = 50;
+		timeouts.ReadTotalTimeoutConstant = 50;
+		timeouts.ReadTotalTimeoutMultiplier = 10;
+		timeouts.WriteTotalTimeoutConstant = 50;
+		timeouts.WriteTotalTimeoutMultiplier = 10;
+		if (!SetCommTimeouts(hSerial, &timeouts)) ERR_EXIT("Error setting timeouts\n");
+
+		uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0,0x7e };
+		if (at) payload[8] = 0x81;
+		else payload[8] = bootmode + 0x80;
+		if (io->verbose >= 2) {
+			DBG_LOG("send (%d):\n", 10);
+			print_mem(stderr, payload, 10);
+		}
+		if (!WriteFile(hSerial, payload, 10, &bytes_written, NULL)) ERR_EXIT("Error writing to serial port\n");
+		if (!ReadFile(hSerial, io->recv_buf, RECV_BUF_LEN, &bytes_read, NULL)) CloseHandle(hSerial);
+		else
+		{
+			uint8_t cali_ok[] = { 8,0,0xd5,0 };
+			if (io->verbose >= 2) {
+				DBG_LOG("read (%d):\n", bytes_read);
+				print_mem(stderr, io->recv_buf, bytes_read);
+			}
+			if (memcmp(io->recv_buf + bytes_read - 5, cali_ok, 4)) ERR_EXIT("Unknown response\n");
+
+			uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
+			if (io->verbose >= 2) {
+				DBG_LOG("send (%d):\n", 34);
+				print_mem(stderr, autod, 34);
+			}
+			if (!WriteFile(hSerial, autod, 34, &bytes_written, NULL)) ERR_EXIT("Error writing to serial port\n");
+			if (!ReadFile(hSerial, io->recv_buf, RECV_BUF_LEN, &bytes_read, NULL)) ERR_EXIT("read response from cali mode failed\n");
+			else
+			{
+				uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
+				if (io->verbose >= 2) {
+					DBG_LOG("read (%d):\n", bytes_read);
+					print_mem(stderr, io->recv_buf, bytes_read);
+				}
+				if (memcmp(io->recv_buf + bytes_read - 7, ok, 6)) ERR_EXIT("Unknown response\n");
+				else done = 1;
+			}
+		}
+		for (int i = 0; ; i++)
+		{
+			if (m_bOpened == -1)
+			{
+				curPort = 0;
+				m_bOpened = 0;
+				break;
+			}
+			if (100 * i >= ms) ERR_EXIT("kick reboot timeout\n");
+			usleep(100000);
+		}
+		if (!at) done = 1;
 	}
 }
 #endif

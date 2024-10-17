@@ -24,9 +24,6 @@
     <ClCompile Include="Wrapper.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="spd_dump_interactive.c">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="common.c">
       <Filter>源文件</Filter>
     </ClCompile>

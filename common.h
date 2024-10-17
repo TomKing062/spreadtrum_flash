@@ -4,7 +4,7 @@
 #define _FILE_OFFSET_BITS 64
 
 #define ARGC_MAX 8
-#define ARGC_LEN 384
+#define ARGV_LEN 384
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -26,10 +26,10 @@
 DWORD WINAPI ThrdFunc(LPVOID lpParam);
 #if UNICODE
 #define my_strstr wcsstr
-#define my_strtol wcstol
+#define my_strtoul wcstoul
 #else
 #define my_strstr strstr
-#define my_strtol strtol
+#define my_strtoul strtoul
 #endif
 #else
 #include <dirent.h>
@@ -183,7 +183,7 @@ void print_string(FILE* f, const void* src, size_t n);
 #if USE_LIBUSB
 void find_endpoints(libusb_device_handle* dev_handle, int result[2]);
 #else
-void ChangeMode(spdio_t* io, int ms, int bootmode);
+void ChangeMode(spdio_t* io, int ms, int bootmode, int at);
 #endif
 
 spdio_t* spdio_init(int flags);
