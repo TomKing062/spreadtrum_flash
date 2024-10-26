@@ -147,7 +147,7 @@ int main(int argc, char **argv) {
 				else
 				{
 					DBG_LOG("CHECK_BAUD bootrom\n");
-					if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) { exec_addr = 0; fdl1_loaded = -1; fdl2_executed = -1; }
+					if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) { fdl1_loaded = -1; fdl2_executed = -1; }
 				}
 				DBG_LOG("BSL_REP_VER: ");
 				print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
@@ -301,16 +301,20 @@ int main(int argc, char **argv) {
 					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 3; argv += 3; continue; }
 					else fclose(fi);
 					send_file(io, fn, addr, end_data, 528);
+					if (exec_addr) {
+						send_file(io, execfile, exec_addr, 0, 528);
+					} else {
+						encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
+						if (send_and_check(io)) exit(1);
+					}
 				}
-				if (addr == 0x5500 || addr == 0x65000800) { highspeed = 1; baudrate = 921600; }
-
-				if (exec_addr) {
-					send_file(io, execfile, exec_addr, 0, 528);
-				} else {
+				else
+				{
 					encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
 					if (send_and_check(io)) exit(1);
 				}
 				DBG_LOG("EXEC FDL1\n");
+				if (addr == 0x5500 || addr == 0x65000800) { highspeed = 1; baudrate = 921600; }
 
 				/* FDL1 (chk = sum) */
 				io->flags &= ~FLAGS_CRC16;
@@ -422,6 +426,11 @@ int main(int argc, char **argv) {
 				}
 				else if (Da_Info.dwStorageType == 0x102) {
 					ptable = partition_list(io, "partition.xml", &part_count);
+				}
+				if (gpt_failed != 1) {
+					if (selected_ab == 2) DBG_LOG("Device is using slot b\n");
+					else if (selected_ab == 1) DBG_LOG("Device is using slot a\n");
+					else DBG_LOG("Device is not using VAB\n");
 				}
 				if (nand_id == DEFAULT_NAND_ID) {
 					nand_info[0] = (uint8_t)pow(2, nand_id & 3); //page size
@@ -551,7 +560,7 @@ int main(int argc, char **argv) {
 			uint64_t realsize = 0;
 			const char* name = str2[2];
 			char name_ab[36];
-			if (argcount <= 2) { DBG_LOG("r all/part_name/part_id\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("r all/all_lite/part_name/part_id\n"); argc -= 2; argv += 2; continue; }
 			if (gpt_failed == 1) ptable = partition_list(io, "partition.xml", &part_count);
 			if (selected_ab > 0) sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
 			if (!memcmp(name, "splloader", 9)) {

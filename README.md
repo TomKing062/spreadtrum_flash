@@ -16,7 +16,7 @@
 
    according to researchdown，supported baudrates are 57600,115200,230400,460800,921600,1000000,2000000,3250000,4000000
 
-   while in littlekernel code, only 115200, 230400, 460800, 921600 are listed (maybe it's internal value in lk, not for usb transfer)
+   while in littlekernel code, only 115200, 230400, 460800, 921600 are listed (maybe they are internal values in lk, not for usb transfer)
 
 5. interactive mode
 
@@ -28,14 +28,24 @@
 
 9. change savepath by `path folder`
 
-10. make full backup by `read_parts partitions.xml`(userdata will be skipped by read_parts), restore backup by `write_parts folder` (don't try `write_parts .`)
+10. `r partname`/`w partname file`/`e partname`
 
-11. (win only)support device detect (speedup connection speed, and auto exit when device disconnected)
+    `r all` to make full backup (without blackbox, cache, userdata)
 
-12. `r partname`/`w partname file`/`e partname`
+    `r all_lite` to make backup (without  inactive slot partitions, blackbox, cache, userdata)
 
     `r` only support emmc/ufs, not support nand(except `ubipac`), `r` will also calculate part size automatically
 
-13. r/w/e/read_part/write_part support detect slot_a/_b (not include read_parts/write_parts)
+    r/w/e/read_part/write_part/erase_part support use partid instead of partname when partition table is available
 
-14. android 10(+): enable dm-verity by `verity 1`, disable dm-verity by `verity 0`
+    r/w/e/read_part/write_part/read_parts/write_parts support detect slot_a/_b
+
+11. make custom backup by `read_parts part.xml`(userdata will be skipped by read_parts),
+
+    when xml name starts with ubi, ubi size will be used.
+
+    restore backup by `write_parts folder` (don't try `write_parts .`)
+
+12. (win only)support device detect (speedup connection speed, and auto exit when device disconnected)
+
+13. android 10(+): enable dm-verity by `verity 1`, disable dm-verity by `verity 0`
