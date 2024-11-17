@@ -19,6 +19,12 @@
 #define LIBUSB_DETACH 1
 #endif
 
+#ifdef __ANDROID__
+#ifndef USE_LIBUSB
+#error "missing USE_LIBUSB defination on android platform!"
+#endif
+#endif
+
 #if _WIN32
 #include <Windows.h>
 #include <Dbt.h>

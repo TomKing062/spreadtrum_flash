@@ -121,6 +121,13 @@ int main(int argc, char **argv) {
 
 	io = spdio_init(0);
 #if USE_LIBUSB
+#ifdef __ANDROID__
+	int xfd = -1; // This store termux gived fd
+    //libusb_device_handle *handle; // Use spdio_t.dev_handle
+    libusb_device *device;
+	struct libusb_device_descriptor desc;
+	libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
+#endif
 	ret = libusb_init(NULL);
 	if (ret < 0)
 		ERR_EXIT("libusb_init failed: %s\n", libusb_error_name(ret));
@@ -147,6 +154,12 @@ int main(int argc, char **argv) {
 			if (argc <= 1) ERR_EXIT("bad option\n");
 			print_help();
 			return 0;
+#ifdef __ANDROID__
+		} else if (!strcmp(argv[1], "--usb-fd")) { // Termux spec
+			if (argc <= 2) ERR_EXIT("bad option\n");
+			xfd = atoi(argv[2]);
+			argc -= 2; argv += 2;
+#endif
 #if !USE_LIBUSB
 		} else if (!strcmp(argv[1], "--kick")) {
 			if (argc <= 1) ERR_EXIT("bad option\n");
@@ -175,6 +188,7 @@ int main(int argc, char **argv) {
 		wait = 30 * REOPEN_FREQ;
 	}
 #endif
+#ifndef __ANDROID__
 	DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
 	for (i = 0; ; i++) {
 #if USE_LIBUSB
@@ -190,6 +204,26 @@ int main(int argc, char **argv) {
 #endif
 		usleep(1000000 / REOPEN_FREQ);
 	}
+#else
+	DBG_LOG("Try to convert termux transfered usb port fd.\n");
+	// handle
+	if (xfd < 0)
+		ERR_EXIT("Example: termux-usb -e \"./spd_dump --usb-fd\" /dev/bus/usb/xxx/xxx\n"
+				 "run on android need provide --usb-fd\n");
+#if USE_LIBUSB
+	if (libusb_wrap_sys_device(NULL, (intptr_t)xfd, &io->dev_handle))
+		ERR_EXIT("libusb_wrap_sys_device exit unconditionally!\n");
+
+	device = libusb_get_device(io->dev_handle);
+	if (libusb_get_device_descriptor(device, &desc))
+		ERR_EXIT("libusb_get_device exit unconditionally!");
+	
+	DBG_LOG("Vendor ID: %04x\nProduct ID: %04x\n", desc.idVendor, desc.idProduct);
+	if (desc.idVendor != 0x1782 || desc.idProduct != 0x4d00) {
+		ERR_EXIT("It seems spec device not a spd device!\n");
+	}
+#endif // USE_LIBUSB
+#endif // __ANDROID__
 
 #if USE_LIBUSB
 	int endpoints[2];
