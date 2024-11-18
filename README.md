@@ -137,7 +137,7 @@ Applicable mainly to the FDL2 stage; only new FDL1 supports exit
 - 
 ### Android(Termux)
 
-1.Install termux API and authorize self startup
+1.Install termux-api and authorize self startup
 
 2.Install dependency libraries and compile components
 
@@ -156,4 +156,26 @@ git clone https://github.com/hxzbaka/spreadtrum_flash.git
 ```
 make
 ```
+Produce executable files:spd_dump
 
+5.Search OTG Device
+
+```
+termux-usb -l
+[
+"/dev/bus/usb/xxx/xxx"
+]
+```
+
+6.Authorize OTG devices
+
+```
+termux-usb -r /dev/bus/usb/xxx/xxx
+```
+Allow access to the target device
+
+7.Run SPD_SUMP
+
+```
+termux-usb -e './spd_dump --usb-fd' /dev/bus/usb/xxx/xxx
+```
