@@ -141,13 +141,19 @@ Applicable mainly to the FDL2 stage; only new FDL1 supports exit
 
 2.Install dependency libraries and compile components
 
-- `pkg install termux-api libusb clang git`
+```
+pkg install termux-api libusb clang git
+```
 
 3.Pull source code
 
-- `git clone https://github.com/hxzbaka/spreadtrum_flash.git`
+```
+git clone https://github.com/hxzbaka/spreadtrum_flash.git
+```
 
 4.Build
 
-- `make`
+```
+make
+```
 
