@@ -1,0 +1,17 @@
+name: C/C++ CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+
+    runs-on: windows-2022
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: make
+      run: CI
