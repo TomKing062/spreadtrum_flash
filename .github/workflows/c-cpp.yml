@@ -13,5 +13,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Visual Studio shell
+      uses: egor-tensin/vs-shell@v2
+      with:
+       arch: optional, default is x64
     - name: make
       run: CI
