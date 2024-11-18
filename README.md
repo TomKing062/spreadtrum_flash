@@ -134,10 +134,10 @@ Applicable mainly to the FDL2 stage; only new FDL1 supports exit
 - `reset`
 
 - `poweroff`
-- 
 ### Android(Termux)
 
 1.Install termux-api and authorize self startup
+### [Termux-api](https://github.com/termux/termux-api/releases)
 
 2.Install dependency libraries and compile components
 
@@ -158,6 +158,7 @@ make
 ```
 Produce executable files:spd_dump
 
+
 5.Search OTG Device
 
 ```
@@ -173,6 +174,7 @@ termux-usb -l
 termux-usb -r /dev/bus/usb/xxx/xxx
 ```
 Allow access to the target device
+
 
 7.Run SPD_SUMP
 
