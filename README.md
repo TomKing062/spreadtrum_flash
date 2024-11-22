@@ -1,4 +1,5 @@
 ## Spreadtrum firmware dumper
+### [中文文档](https://github.com/TomKing062/spreadtrum_flash/blob/main/README_zh.md)
 
 work with Official SPRD U2S Diag Driver or LibUSB Driver.
 
