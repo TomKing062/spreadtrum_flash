@@ -148,7 +148,8 @@ pkg install termux-api libusb clang git
 3.Pull source code
 
 ```
-git clone https://github.com/hxzbaka/spreadtrum_flash.git
+git clone https://github.com/TomKing062/spreadtrum_flash.git
+cd spreadtrum_flash
 ```
 
 4.Build
