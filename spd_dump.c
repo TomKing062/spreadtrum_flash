@@ -1,10 +1,4 @@
 /*
-// Spreadtrum SC6531E/SC6531DA firmware dumper for Linux.
-//
-// sudo modprobe ftdi_sio
-// echo 1782 4d00 | sudo tee /sys/bus/usb-serial/drivers/generic/new_id
-// make && sudo ./spd_dump [options] commands...
-//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
 // OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -15,6 +9,89 @@
 */
 #include "common.h"
 #include "GITVER.h"
+
+void print_help(void)
+{
+	DBG_LOG(
+		"Usage\n"
+		"\tspd_dump [OPTIONS] [COMMANDS] [EXIT COMMANDS]\n"
+		"\nExamples\n"
+		"\tOne-line mode\n"
+		"\t\tspd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec path savepath r all_lite reset\n"
+		"\tInteractive mode\n"
+		"\t\tspd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec\n"
+		"\tThen the prompt should display FDL2>.\n"
+		"\nOptions\n"
+		"\t--wait <seconds>\n"
+		"\t\tSpecifies the time to wait for the device to connect.\n"
+		"\t--stage <number>|-r|--reconnect\n"
+		"\t\tTry to reconnect device in brom/fdl1/fdl2 stage. Any number behaves the same way.\n"
+		"\t\t(unstable, a device in brom/fdl1 stage can be reconnected infinite times, but only once in fdl2 stage)\n"
+		"\t--verbose <level>\n"
+		"\t\tSets the verbosity level of the output (supports 0, 1, or 2).\n"
+		"\t--kick\n"
+		"\t\tConnects the device using the route boot_diag -> cali_diag -> dl_diag.\n"
+		"\t--kickto <mode>\n"
+		"\t\tConnects the device using a custom route boot_diag -> custom_diag. Supported modes are 0-127.\n"
+		"\t\t(mode 1 = cali_diag, mode 2 = dl_diag; not all devices support mode 2).\n"
+		"\t-?|-h|--help\n"
+		"\t\tShow help and usage information\n"
+		"\nRuntime Commands\n"
+		"\tverbose level\n"
+		"\t\tSets the verbosity level of the output (supports 0, 1, or 2).\n"
+		"\ttimeout ms\n"
+		"\t\tSets the command timeout in milliseconds.\n"
+		"\tbaudrate [rate]\n\t\t(Windows SPRD driver only, and brom/fdl2 stage only)\n"
+		"\t\tSupported baudrates are 57600, 115200, 230400, 460800, 921600, 1000000, 2000000, 3250000, and 4000000.\n"
+		"\t\tWhile in u-boot/littlekernel source code, only 115200, 230400, 460800, and 921600 are listed.\n"
+		"\texec_addr [addr]\n\t\t(brom stage only)\n"
+		"\t\tSends custom_exec_no_verify_addr.bin to the specified memory address to bypass the signature verification by brom for splloader/fdl1.\n"
+		"\t\tUsed for CVE-2022-38694.\n"
+		"\tfdl FILE addr\n"
+		"\t\tSends a file (splloader, fdl1, fdl2, sml, trustos, teecfg) to the specified memory address.\n"
+		"\texec\n"
+		"\t\tExecutes a sent file in the fdl1 stage. Typically used with sml or fdl2 (also known as uboot/lk).\n"
+		"\tpath [save_location]\n"
+		"\t\tChanges the save directory for commands like r, read_part(s), read_flash, and read_mem.\n"
+		"\tnand_id [id]\n"
+		"\t\tSpecifies the 4th NAND ID, affecting read_part(s) size calculation, default value is 0x15.\n"
+		"\trawdata {0,2}\n\t\t(fdl2 stage only)\n"
+		"\t\tRawdata protocol helps speed up `w` and `write_part(s)` commands, when rawdata=2, `blk_size` will not effect write speed.\n"
+		"\t\t(rawdata relays on u-boot/lk, so don't set it manually unless its default value is 2. Note: rawdata = 1 is currently not supported.)\n"
+		"\tblk_size byte\n\t\t(fdl2 stage only)\n"
+		"\t\tSets the block size, with a maximum of 65535 bytes. This option helps speed up `r`, `w`,`read_part(s)` and `write_part(s)` commands.\n"
+		"\tr all|part_name|part_id\n"
+		"\t\tWhen the partition table is available:\n"
+		"\t\t\tr all: full backup (excludes blackbox, cache, userdata)\n"
+		"\t\t\tr all_lite: full backup (excludes inactive slot partitions, blackbox, cache, and userdata)\n"
+		"\t\tWhen the partition table is unavailable:\n"
+		"\t\t\tr will auto-calculate part size (supports all partitions on emmc/ufs and only ubipac on NAND).\n"
+		"\tread_part part_name|part_id offset size FILE\n"
+		"\t\tReads a specific partition to a file at the given offset and size.\n"
+		"\t\t(read ubi on nand) read_part system 0 ubi40m system.bin\n"
+		"\tread_parts partition_list_file\n"
+		"\t\tReads partitions from a list file (If the file name starts with \"ubi\", the size will be calculated using the NAND ID).\n"
+		"\tw|write_part part_name|part_id FILE\n"
+		"\t\tWrites the specified file to a partition.\n"
+		"\twrite_parts save_location\n"
+		"\t\tWrites all partitions dumped by read_parts.\n"
+		"\te|erase_part part_name|part_id\n"
+		"\t\tErases the specified partition.\n"
+		"\tpartition_list FILE\n"
+		"\t\tRead the partition list on emmc/ufs, not all fdl2 supports this command.\n"
+		"\trepartition partition_list_xml\n"
+		"\t\tRepartitions based on partition list XML.\n"
+		"\tp|print\n"
+		"\t\tPrints partition_list\n"
+		"\tverity {0,1}\n"
+		"\t\tEnables or disables dm-verity on android 10(+).\n"
+		"\nExit Commands\n"
+		"\t(Usable mainly in FDL2 stage; only new FDL1 supports exit)\n"
+		"\treset\n"
+		"\tpoweroff\n"
+	);
+}
+
 #define REOPEN_FREQ 2
 extern char savepath[ARGV_LEN];
 extern DA_INFO_T Da_Info;
@@ -34,6 +111,7 @@ int main(int argc, char **argv) {
 	char str1[(ARGC_MAX - 1) * ARGV_LEN];
 	char **str2;
 	char execfile[40];
+	char fn_partlist[40];
 	int bootmode = -1, at = 0;
 	int part_count = 0;
 	partition_t* ptable = NULL;
@@ -43,6 +121,13 @@ int main(int argc, char **argv) {
 
 	io = spdio_init(0);
 #if USE_LIBUSB
+#ifdef __ANDROID__
+	int xfd = -1; // This store termux gived fd
+	//libusb_device_handle *handle; // Use spdio_t.dev_handle
+	libusb_device* device;
+	struct libusb_device_descriptor desc;
+	libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
+#endif
 	ret = libusb_init(NULL);
 	if (ret < 0)
 		ERR_EXIT("libusb_init failed: %s\n", libusb_error_name(ret));
@@ -51,6 +136,7 @@ int main(int argc, char **argv) {
 	call_Initialize(io->handle);
 #endif
 	DBG_LOG("branch:%s, sha1:%s\n", GIT_VER, GIT_SHA1);
+	sprintf(fn_partlist, "partition_%lld.xml", (long long)time(NULL));
 	while (argc > 1) {
 		if (!strcmp(argv[1], "--wait")) {
 			if (argc <= 2) ERR_EXIT("bad option\n");
@@ -62,8 +148,22 @@ int main(int argc, char **argv) {
 			argc -= 2; argv += 2;
 		} else if (!strcmp(argv[1], "--stage")) {
 			if (argc <= 2) ERR_EXIT("bad option\n");
-			stage = atoi(argv[2]);
+			stage = 99;
 			argc -= 2; argv += 2;
+		} else if (strstr(argv[1], "-r")) {
+			if (argc <= 1) ERR_EXIT("bad option\n");
+			stage = 99;
+			argc -= 1; argv += 1;
+		} else if (strstr(argv[1], "help") || strstr(argv[1], "-h") || strstr(argv[1], "-?")) {
+			if (argc <= 1) ERR_EXIT("bad option\n");
+			print_help();
+			return 0;
+#ifdef __ANDROID__
+		} else if (!strcmp(argv[1], "--usb-fd")) { // Termux spec
+			if (argc <= 2) ERR_EXIT("bad option\n");
+			xfd = atoi(argv[2]);
+			argc -= 2; argv += 2;
+#endif
 #if !USE_LIBUSB
 		} else if (!strcmp(argv[1], "--kick")) {
 			if (argc <= 1) ERR_EXIT("bad option\n");
@@ -84,15 +184,16 @@ int main(int argc, char **argv) {
 	}
 #endif
 #if !USE_LIBUSB
-	if (!curPort) FindPort();
+	if (!curPort) curPort = FindPort("SPRD U2S Diag");
 	if (at || bootmode >= 0)
 	{
 		if (curPort) ERR_EXIT("kick feature needs program running before connecting device to PC\n");
 		else ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode, at);
-		wait = 10 * REOPEN_FREQ;
+		wait = 30 * REOPEN_FREQ;
 	}
 #endif
-	DBG_LOG("Waiting for connection (%ds)\n", wait / REOPEN_FREQ);
+#ifndef __ANDROID__
+	DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
 	for (i = 0; ; i++) {
 #if USE_LIBUSB
 		io->dev_handle = libusb_open_device_with_vid_pid(NULL, 0x1782, 0x4d00);
@@ -107,8 +208,29 @@ int main(int argc, char **argv) {
 #endif
 		usleep(1000000 / REOPEN_FREQ);
 	}
+#else
+	DBG_LOG("Try to convert termux transfered usb port fd.\n");
+	// handle
+	if (xfd < 0)
+		ERR_EXIT("Example: termux-usb -e \"./spd_dump --usb-fd\" /dev/bus/usb/xxx/xxx\n"
+				 "run on android need provide --usb-fd\n");
+#if USE_LIBUSB
+	if (libusb_wrap_sys_device(NULL, (intptr_t)xfd, &io->dev_handle))
+		ERR_EXIT("libusb_wrap_sys_device exit unconditionally!\n");
+
+	device = libusb_get_device(io->dev_handle);
+	if (libusb_get_device_descriptor(device, &desc))
+		ERR_EXIT("libusb_get_device exit unconditionally!");
+
+	DBG_LOG("Vendor ID: %04x\nProduct ID: %04x\n", desc.idVendor, desc.idProduct);
+	if (desc.idVendor != 0x1782 || desc.idProduct != 0x4d00) {
+		ERR_EXIT("It seems spec device not a spd device!\n");
+	}
+#endif // USE_LIBUSB
+#endif // __ANDROID__
 
 #if USE_LIBUSB
+	m_bOpened = 1;
 	int endpoints[2];
 	find_endpoints(io->dev_handle, endpoints);
 	io->endp_in = endpoints[0];
@@ -157,9 +279,12 @@ int main(int argc, char **argv) {
 			}
 			else if (ret == BSL_REP_VERIFY_ERROR)
 			{
-				io->flags |= FLAGS_CRC16;
 				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
-				if (send_and_check(io)) exit(1);
+				if (fdl1_loaded != 1)
+				{
+					if (send_and_check(io)) exit(1);
+				}
+				else { i = -1; continue; }
 			}
 
 			if (fdl1_loaded == 1)
@@ -188,7 +313,6 @@ int main(int argc, char **argv) {
 			if (stage != -1) ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
 			else { encode_msg(io, BSL_CMD_CONNECT, NULL, 0); stage++; i = -1; }
 		}
-		usleep(500000);
 	}
 
 	while (1) {
@@ -415,18 +539,25 @@ int main(int argc, char **argv) {
 					}
 				}
 				if (Da_Info.bSupportRawData == 2) {
-					encode_msg(io, BSL_CMD_WRITE_RAW_DATA_ENABLE, NULL, 0);
-					if (!send_and_check(io)) DBG_LOG("ENABLE_WRITE_RAW_DATA\n");
+					if (fdl2_executed) {
+						Da_Info.bSupportRawData = 0;
+						DBG_LOG("DISABLE_WRITE_RAW_DATA in SPRD4\n");
+					}
+					else {
+						encode_msg(io, BSL_CMD_WRITE_RAW_DATA_ENABLE, NULL, 0);
+						if (!send_and_check(io)) DBG_LOG("ENABLE_WRITE_RAW_DATA\n");
+					}
 					blk_size = 0xff00;
-					ptable = partition_list(io, "partition.xml", &part_count);
+					ptable = partition_list(io, fn_partlist, &part_count);
 				}
 				else if (highspeed || Da_Info.dwStorageType == 0x103) {
 					blk_size = 0xff00;
-					ptable = partition_list(io, "partition.xml", &part_count);
+					ptable = partition_list(io, fn_partlist, &part_count);
 				}
 				else if (Da_Info.dwStorageType == 0x102) {
-					ptable = partition_list(io, "partition.xml", &part_count);
+					ptable = partition_list(io, fn_partlist, &part_count);
 				}
+				else if (Da_Info.dwStorageType == 0x101) DBG_LOG("Storage is nand\n");
 				if (gpt_failed != 1) {
 					if (selected_ab == 2) DBG_LOG("Device is using slot b\n");
 					else if (selected_ab == 1) DBG_LOG("Device is using slot a\n");
@@ -515,9 +646,9 @@ int main(int argc, char **argv) {
 
 		} else if (!strcmp(str2[1], "p") || !strcmp(str2[1], "print")) {
 			if (part_count) {
-				DBG_LOG("  0 %36s 256KB\n", "splloader");
+				DBG_LOG("  0 %36s     256KB\n", "splloader");
 				for (i = 0; i < part_count; i++) {
-					DBG_LOG("%3d %36s %lldMB\n", i + 1, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
+					DBG_LOG("%3d %36s %7lldMB\n", i + 1, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
 				}
 			}
 			argc -= 1; argv += 1;
@@ -561,7 +692,7 @@ int main(int argc, char **argv) {
 			const char* name = str2[2];
 			char name_ab[36];
 			if (argcount <= 2) { DBG_LOG("r all/all_lite/part_name/part_id\n"); argc -= 2; argv += 2; continue; }
-			if (gpt_failed == 1) ptable = partition_list(io, "partition.xml", &part_count);
+			if (gpt_failed == 1) ptable = partition_list(io, fn_partlist, &part_count);
 			if (selected_ab > 0) sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
 			if (!memcmp(name, "splloader", 9)) {
 				realsize = 256 * 1024;
@@ -659,7 +790,7 @@ int main(int argc, char **argv) {
 
 		} else if (!strcmp(str2[1], "read_parts")) {
 			const char* fn; FILE* fi;
-			if (argcount <= 2) { DBG_LOG("read_parts partition_list_file\n\t(ufs/emmc) read_parts part.xml\n\t(ubi) read_parts ubipart.xml\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("read_parts partition_list_file\n"); argc -= 2; argv += 2; continue; }
 			fn = str2[2];
 			fi = fopen(fn, "r");
 			if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 2; argv += 2; continue; }
@@ -752,7 +883,7 @@ int main(int argc, char **argv) {
 				}
 			if (i == 0) load_partition(io, "splloader", str2[3], 4096);
 			else if (i > 0) {
-				if (strstr((*(ptable + i)).name, "nv1")) load_nv_partition(io, (*(ptable + i)).name, str2[3], 4096);
+				if (strstr((*(ptable + i)).name, "fixnv1")) load_nv_partition(io, (*(ptable + i)).name, str2[3], 4096);
 				else load_partition(io, (*(ptable + i)).name, str2[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			}
 			else {
@@ -772,7 +903,7 @@ int main(int argc, char **argv) {
 					}
 				}
 				io->verbose = verbose;
-				if (strstr(name, "nv1")) load_nv_partition(io, name, str2[3], 4096);
+				if (strstr(name, "fixnv1")) load_nv_partition(io, name, str2[3], 4096);
 				else load_partition(io, name, str2[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			}
 			argc -= 3; argv += 3;
@@ -885,36 +1016,7 @@ int main(int argc, char **argv) {
 			argc -= 2; argv += 2;
 
 		} else if (strlen(str2[1])) {
-#if !USE_LIBUSB
-			DBG_LOG("baudrate [rate]\n");
-#endif
-			DBG_LOG("exec_addr [addr]\n\tbrom stage only\n");
-			DBG_LOG("fdl FILE addr\n");
-			DBG_LOG("exec\n");
-			DBG_LOG("path [save_location]\n\tfor r/read_part(s)/read_flash/read_mem\n");
-			DBG_LOG("r all/part_name/part_id\n");
-			DBG_LOG("w part_name/part_id FILE\n");
-			DBG_LOG("e part_name/part_id\n");
-			DBG_LOG("read_part part_name offset size FILE\n");
-			DBG_LOG("(read ubi on nand) read_part system 0 ubi40m system.bin\n");
-			DBG_LOG("read_parts partition_list_file\n\t(ufs/emmc) read_parts part.xml\n\t(ubi) read_parts ubipart.xml\n");
-			DBG_LOG("write_part part_name/part_id FILE\n");
-			DBG_LOG("write_parts save_location\n\twrite all partitions dumped by read_parts\n");
-			DBG_LOG("erase_part part_name/part_id\n");
-			DBG_LOG("partition_list FILE\n");
-			DBG_LOG("repartition FILE\n");
-			DBG_LOG("reset\n");
-			DBG_LOG("poweroff\n");
-			DBG_LOG("timeout ms\n");
-			DBG_LOG("verity {0,1}\n\tdisable/enable dm-verity\n");
-			DBG_LOG("skip_confirm {0,1}\n");
-			DBG_LOG("rawdata {0,1,2}\n\tfdl2 stage only\n");
-			DBG_LOG("blk_size byte\n\tfdl2 stage only, max is 65535\n");
-			DBG_LOG("nand_id [id]\n");
-			DBG_LOG("disable_transcode\n");
-			DBG_LOG("keep_charge {0,1}\n");
-			DBG_LOG("end_data {0,1}\n");
-			DBG_LOG("verbose {0,1,2}\n");
+			print_help();
 			argc = 1;
 		}
 		if (in_quote != -1)

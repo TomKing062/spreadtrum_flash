@@ -12,10 +12,17 @@
 #include <string.h>
 #include <ctype.h> // tolower
 #include <math.h>
+#include <time.h>
 
 #ifndef LIBUSB_DETACH
 /* detach the device from crappy kernel drivers */
 #define LIBUSB_DETACH 1
+#endif
+
+#ifdef __ANDROID__
+#ifndef USE_LIBUSB
+#error "missing USE_LIBUSB defination on android platform!"
+#endif
 #endif
 
 #if _WIN32
@@ -43,7 +50,7 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam);
 #include "Wrapper.h"
 #define fseeko _fseeki64
 #define ftello _ftelli64
-BOOL FindPort(void);
+DWORD FindPort(const char* USB_DL);
 void usleep(unsigned int us);
 #endif
 
@@ -52,8 +59,13 @@ void usleep(unsigned int us);
 #define FLAGS_CRC16 1
 #define FLAGS_TRANSCODE 2
 
+#if _WIN32
+#define ERR_EXIT(...) \
+	do { fprintf(stderr, __VA_ARGS__); if (m_bOpened == 1) system("pause"); exit(1); } while (0)
+#else
 #define ERR_EXIT(...) \
 	do { fprintf(stderr, __VA_ARGS__); exit(1); } while (0)
+#endif
 
 #define DBG_LOG(...) fprintf(stderr, __VA_ARGS__)
 

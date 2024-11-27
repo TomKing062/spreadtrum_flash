@@ -1,9 +1,8 @@
 #include "common.h"
 #if !USE_LIBUSB
 DWORD curPort = 0;
-BOOL FindPort(void)
+DWORD FindPort(const char* USB_DL)
 {
-	const char* USB_DL = "SPRD U2S Diag";
 	const GUID GUID_DEVCLASS_PORTS = { 0x4d36e978, 0xe325, 0x11ce,{0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18} };
 	HDEVINFO DeviceInfoSet;
 	SP_DEVINFO_DATA DeviceInfoData;
@@ -13,7 +12,7 @@ BOOL FindPort(void)
 
 	if (DeviceInfoSet == INVALID_HANDLE_VALUE) {
 		DBG_LOG("Failed to get device information set. Error code: %ld\n", GetLastError());
-		return FALSE;
+		return 0;
 	}
 
 	DeviceInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
@@ -29,8 +28,8 @@ BOOL FindPort(void)
 			char portNum_str[4];
 			strncpy(portNum_str, result + strlen(USB_DL) + 5, 3);
 			portNum_str[3] = 0;
-			curPort = strtoul(portNum_str, NULL, 0);
-			break;
+			SetupDiDestroyDeviceInfoList(DeviceInfoSet);
+			return strtoul(portNum_str, NULL, 0);
 		}
 
 		++dwIndex;
@@ -38,7 +37,7 @@ BOOL FindPort(void)
 
 	SetupDiDestroyDeviceInfoList(DeviceInfoSet);
 
-	return TRUE;
+	return 0;
 }
 
 void usleep(unsigned int us)
@@ -467,7 +466,7 @@ int recv_msg(spdio_t* io) {
 		if (!ret) {
 			if (fdl2_executed) {
 #if !USE_LIBUSB
-				call_Clear(io->handle);
+				if (io->raw_len) call_Clear(io->handle); //io->raw_len = nread in recv_msg_orig()
 #endif
 				send_msg(io);
 				ret = recv_msg_orig(io);
@@ -605,7 +604,7 @@ unsigned dump_flash(spdio_t* io,
 		offset += nread;
 		if (n != nread) break;
 	}
-	DBG_LOG("dump_flash: 0x%08x+0x%x, target: 0x%x, read: 0x%x\n", addr, start, len, offset - start);
+	DBG_LOG("Read Flash Done: 0x%08x+0x%x, target: 0x%x, read: 0x%x\n", addr, start, len, offset - start);
 	fclose(fo);
 	return offset;
 }
@@ -648,7 +647,7 @@ unsigned dump_mem(spdio_t* io,
 		offset += nread;
 		if (n != nread) break;
 	}
-	DBG_LOG("dump_mem: 0x%08x, target: 0x%x, read: 0x%x\n", start, len, offset - start);
+	DBG_LOG("Read Mem Done: 0x%08x, target: 0x%x, read: 0x%x\n", start, len, offset - start);
 	fclose(fo);
 	return offset;
 }
@@ -780,7 +779,7 @@ uint64_t dump_partition(spdio_t* io,
 		offset += nread;
 		if (n != nread) break;
 	}
-	DBG_LOG("dump_partition: %s+0x%llx, target: 0x%llx, read: 0x%llx\n",
+	DBG_LOG("Read Part Done: %s+0x%llx, target: 0x%llx, read: 0x%llx\n",
 		name, (long long)start, (long long)len,
 		(long long)(offset - start));
 	fclose(fo);
@@ -918,6 +917,10 @@ int gpt_info(partition_t* ptable, const char* fn_xml, int* part_count_ptr) {
 		fclose(fp);
 		return -1;
 	}
+	else {
+		if (sector_index == 1) Da_Info.dwStorageType = 0x102;
+		else Da_Info.dwStorageType = 0x103;
+	}
 	int real_SECTOR_SIZE = SECTOR_SIZE * sector_index;
 	efi_entry* entries = malloc(header.number_of_partition_entries * sizeof(efi_entry));
 	if (entries == NULL) {
@@ -928,8 +931,12 @@ int gpt_info(partition_t* ptable, const char* fn_xml, int* part_count_ptr) {
 	bytes_read = fread(entries, 1, header.number_of_partition_entries * sizeof(efi_entry), fp);
 	if (bytes_read != (int)(header.number_of_partition_entries * sizeof(efi_entry)))
 		DBG_LOG("only read %d/%d\n", bytes_read, (int)(header.number_of_partition_entries * sizeof(efi_entry)));
-	FILE* fo = fopen(fn_xml, "wb");
-	fprintf(fo, "<Partitions>\n");
+	FILE* fo = NULL;
+	if (strcmp(fn_xml, "-")) {
+		fo = fopen(fn_xml, "wb");
+		if (!fo) ERR_EXIT("fopen failed\n");
+		fprintf(fo, "<Partitions>\n");
+	}
 	int n = 0;
 	for (int i = 0; i < header.number_of_partition_entries; i++) {
 		efi_entry entry = *(entries + i);
@@ -938,23 +945,27 @@ int gpt_info(partition_t* ptable, const char* fn_xml, int* part_count_ptr) {
 			break;
 		}
 	}
-	DBG_LOG("  0 %36s 256KB\n", "splloader");
+	DBG_LOG("  0 %36s     256KB\n", "splloader");
 	for (int i = 0; i < n; i++) {
 		efi_entry entry = *(entries + i);
 		copy_from_wstr((*(ptable + i)).name, 36, (uint16_t*)entry.partition_name);
 		uint64_t lba_count = entry.ending_lba - entry.starting_lba + 1;
 		(*(ptable + i)).size = lba_count * real_SECTOR_SIZE;
-		DBG_LOG("%3d %36s %lldMB\n", i + 1, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
-		fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(ptable + i)).name);
-		if (i + 1 == n) fprintf(fo, "0x%x\"/>\n", ~0);
-		else fprintf(fo, "%lld\"/>\n", ((*(ptable + i)).size >> 20));
+		DBG_LOG("%3d %36s %7lldMB\n", i + 1, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
+		if (fo) {
+			fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(ptable + i)).name);
+			if (i + 1 == n) fprintf(fo, "0x%x\"/>\n", ~0);
+			else fprintf(fo, "%lld\"/>\n", ((*(ptable + i)).size >> 20));
+		}
 		if (!selected_ab) {
 			size_t namelen = strlen((*(ptable + i)).name);
 			if (namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_a")) selected_ab = 1;
 		}
 	}
-	fprintf(fo, "</Partitions>");
-	fclose(fo);
+	if (fo) {
+		fprintf(fo, "</Partitions>");
+		fclose(fo);
+	}
 	free(entries);
 	fclose(fp);
 	*part_count_ptr = n;
@@ -973,7 +984,11 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 	
 	DBG_LOG("Reading Partition List\n");
 	if (selected_ab < 0) select_ab(io);
-	if (32 * 1024 == dump_partition(io, "user_partition", 0, 32 * 1024, "pgpt.bin", 4096))
+	int verbose = io->verbose;
+	io->verbose = 0;
+	size = dump_partition(io, "user_partition", 0, 32 * 1024, "pgpt.bin", 4096);
+	io->verbose = verbose;
+	if (32 * 1024 == size)
 		gpt_failed = gpt_info(ptable, fn, part_count_ptr);
 	if (gpt_failed) {
 		encode_msg(io, BSL_CMD_READ_PARTITION, NULL, 0);
@@ -1016,13 +1031,13 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 			while (!(size >> divisor)) divisor--;
 		}
 		p = io->raw_buf + 4;
-		DBG_LOG("  0 %36s 256KB\n", "splloader");
+		DBG_LOG("  0 %36s     256KB\n", "splloader");
 		for (i = 0; i < n; i++, p += 0x4c) {
 			ret = copy_from_wstr((*(ptable + i)).name, 36, (uint16_t*)p);
 			if (ret) ERR_EXIT("bad partition name\n");
 			size = READ32_LE(p + 0x48);
 			(*(ptable + i)).size = (size << 20) >> divisor;
-			DBG_LOG("%3d %36s %lldMB\n", i + 1, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
+			DBG_LOG("%3d %36s %7lldMB\n", i + 1, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
 			if (fo) {
 				fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(ptable + i)).name);
 				if (i + 1 == n) fprintf(fo, "0x%x\"/>\n", ~0);
@@ -1043,8 +1058,10 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 		gpt_failed = 0;
 	}
 	if (*part_count_ptr) {
-		DBG_LOG("partition list saved to partition.xml\n");
+		if (strcmp(fn, "-")) DBG_LOG("partition list saved to %s\n", fn);
 		DBG_LOG("Total number of partitions: %d\n", *part_count_ptr);
+		if (Da_Info.dwStorageType == 0x102) DBG_LOG("Storage is emmc\n");
+		else if (Da_Info.dwStorageType == 0x103) DBG_LOG("Storage is ufs\n");
 		return ptable;
 	}
 	else {
@@ -1071,6 +1088,9 @@ void load_partition(spdio_t* io, const char* name,
 	uint64_t offset, len, n64;
 	unsigned mode64, n; int ret;
 	FILE* fi;
+
+	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
+	if (!strcmp(name, "calinv")) { return; } //skip calinv
 
 	fi = fopen(fn, "rb");
 	if (!fi) ERR_EXIT("fopen(load) failed\n");
@@ -1156,7 +1176,7 @@ void load_partition(spdio_t* io, const char* name,
 #endif
 	fclose(fi);
 	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
-	if(!send_and_check(io)) DBG_LOG("load_partition: %s, target: 0x%llx, written: 0x%llx\n",
+	if(!send_and_check(io)) DBG_LOG("Write Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
 }
 
@@ -1273,7 +1293,7 @@ void load_nv_partition(spdio_t* io, const char* name,
 	}
 	free(mem);
 	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
-	if(!send_and_check(io)) DBG_LOG("load_nv_partition: %s, target: 0x%llx, written: 0x%llx\n",
+	if(!send_and_check(io)) DBG_LOG("Write NV_Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
 }
 
@@ -1591,7 +1611,7 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		}
 		io->verbose = verbose;
 
-		if (strstr(fn, "nv1")) load_nv_partition(io, fn, fix_fn, 4096);
+		if (strstr(fn, "fixnv1")) load_nv_partition(io, fn, fix_fn, 4096);
 		else load_partition(io, fn, fix_fn, blk_size);
 	}
 #if _WIN32
@@ -1623,13 +1643,6 @@ void get_Da_Info(spdio_t* io)
 		}
 		else memcpy(&Da_Info, io->raw_buf + 4, io->raw_len - 6);
 	}
-	FILE* fp;
-	fp = fopen("StorageType", "w");
-	if (Da_Info.dwStorageType == 0x101) fprintf(fp, "nand");
-	else if (Da_Info.dwStorageType == 0x102) fprintf(fp, "emmc");
-	else if (Da_Info.dwStorageType == 0x103) fprintf(fp, "ufs");
-	else fprintf(fp, "unknown");
-	fclose(fp);
 	DBG_LOG("FDL2: incompatible partition\n");
 }
 
@@ -1730,6 +1743,7 @@ HWND hWnd;
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	static BOOL interface_checked = FALSE;
+	static BOOL is_diag = FALSE;
 	switch (message)
 	{
 	case WM_DEVICECHANGE:
@@ -1742,26 +1756,34 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			{
 			case DBT_DEVTYP_DEVICEINTERFACE:
 				pDevInf = (PDEV_BROADCAST_DEVICEINTERFACE)pHdr;
-				if (my_strstr(pDevInf->dbcc_name, _T("VID_1782&PID_4D00"))) {
 #if USE_LIBUSB
-					if (DBT_DEVICEREMOVECOMPLETE == wParam) m_bOpened = -1;
+				if (my_strstr(pDevInf->dbcc_name, _T("VID_1782&PID_4D00")))
+					if (DBT_DEVICEREMOVECOMPLETE == wParam)
+						m_bOpened = -1;
 #else
+				if (my_strstr(pDevInf->dbcc_name, _T("VID_1782&PID_4D00"))) interface_checked = TRUE;
+				else if (my_strstr(pDevInf->dbcc_name, _T("VID_1782&PID_4D03"))) {
 					interface_checked = TRUE;
-#endif
+					is_diag = TRUE;
 				}
+#endif
 				break;
 #if !USE_LIBUSB
 			case DBT_DEVTYP_PORT:
 				if (interface_checked) {
 					pDevPort = (PDEV_BROADCAST_PORT)pHdr;
-					DWORD changedPort = my_strtoul(pDevPort->dbcp_name + 3, NULL, 0);
-					if (DBT_DEVICEARRIVAL == wParam) {
+					DWORD changedPort;
+					if (is_diag) changedPort = FindPort("SPRD DIAG"); //changedPort = 0 when DBT_DEVICEREMOVECOMPLETE
+					else changedPort = my_strtoul(pDevPort->dbcp_name + 3, NULL, 0);
+					if (changedPort == 0) m_bOpened = -1;
+					else if (DBT_DEVICEARRIVAL == wParam) {
 						if (!curPort) curPort = changedPort;
 						else if (curPort != changedPort) DBG_LOG("second port not supported\n");
 					}
 					else if (curPort == changedPort) m_bOpened = -1;
+					interface_checked = FALSE;
+					is_diag = FALSE;
 				}
-				interface_checked = FALSE;
 				break;
 #endif
 			}
@@ -1816,7 +1838,7 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 {
 	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
 	HANDLE hSerial;
-	char portName[11];
+	char portName[11] = { 0 };
 	DCB dcbSerialParams = { 0 };
 	COMMTIMEOUTS timeouts = { 0 };
 	DWORD bytes_written, bytes_read;
@@ -1824,7 +1846,8 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 
 	while (!done)
 	{
-		DBG_LOG("Waiting for connection (%ds)\n", ms / 1000);
+		if (portName[0]) DBG_LOG("Waiting for cali_diag connection (%ds)\n", ms / 1000);
+		else DBG_LOG("Waiting for boot_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
 			if (curPort) break;
 			if (100 * i >= ms) ERR_EXIT("find port failed\n");
@@ -1873,24 +1896,32 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 				DBG_LOG("read (%d):\n", bytes_read);
 				print_mem(stderr, io->recv_buf, bytes_read);
 			}
-			if (memcmp(io->recv_buf + bytes_read - 5, cali_ok, 4)) ERR_EXIT("Unknown response\n");
-
-			uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
-			if (io->verbose >= 2) {
-				DBG_LOG("send (%d):\n", 34);
-				print_mem(stderr, autod, 34);
-			}
-			if (!WriteFile(hSerial, autod, 34, &bytes_written, NULL)) ERR_EXIT("Error writing to serial port\n");
-			if (!ReadFile(hSerial, io->recv_buf, RECV_BUF_LEN, &bytes_read, NULL)) ERR_EXIT("read response from cali mode failed\n");
-			else
+			if (!memcmp(io->recv_buf + bytes_read - 5, cali_ok, 4))
 			{
-				uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
+				uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
 				if (io->verbose >= 2) {
-					DBG_LOG("read (%d):\n", bytes_read);
-					print_mem(stderr, io->recv_buf, bytes_read);
+					DBG_LOG("send (%d):\n", 34);
+					print_mem(stderr, autod, 34);
 				}
-				if (memcmp(io->recv_buf + bytes_read - 7, ok, 6)) ERR_EXIT("Unknown response\n");
-				else done = 1;
+				if (!WriteFile(hSerial, autod, 34, &bytes_written, NULL)) ERR_EXIT("Error writing to serial port\n");
+				if (!ReadFile(hSerial, io->recv_buf, RECV_BUF_LEN, &bytes_read, NULL)) ERR_EXIT("read response from cali mode failed\n");
+				else
+				{
+					uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
+					if (io->verbose >= 2) {
+						DBG_LOG("read (%d):\n", bytes_read);
+						print_mem(stderr, io->recv_buf, bytes_read);
+					}
+					if (!memcmp(io->recv_buf + bytes_read - 7, ok, 6)) done = 1;
+					else {
+						DBG_LOG("Unknown response\n");
+						if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
+					}
+				}
+			}
+			else {
+				DBG_LOG("Unknown response\n");
+				if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
 			}
 		}
 		for (int i = 0; ; i++)
@@ -1901,7 +1932,7 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 				m_bOpened = 0;
 				break;
 			}
-			if (100 * i >= ms) ERR_EXIT("kick reboot timeout\n");
+			if (100 * i >= ms) ERR_EXIT("kick reboot timeout, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
 			usleep(100000);
 		}
 		if (!at) done = 1;
