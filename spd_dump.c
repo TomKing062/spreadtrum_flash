@@ -117,6 +117,7 @@ int main(int argc, char **argv) {
 	partition_t* ptable = NULL;
 #if !USE_LIBUSB
 	extern DWORD curPort;
+	extern DWORD* ports;
 #endif
 
 	io = spdio_init(0);
@@ -177,23 +178,32 @@ int main(int argc, char **argv) {
 		} else break;
 	}
 
-#if _WIN32
-	io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
-	if (io->hThread == NULL) {
-		return -1;
-	}
-#endif
 #if !USE_LIBUSB
-	if (!curPort) curPort = FindPort("SPRD U2S Diag");
 	if (at || bootmode >= 0)
 	{
-		if (curPort) ERR_EXIT("kick feature needs program running before connecting device to PC\n");
-		else ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode, at);
+		io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
+		if (io->hThread == NULL) return -1;
+		ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode, at);
 		wait = 30 * REOPEN_FREQ;
 	}
+	else
+	{
+		curPort = FindPort("SPRD U2S Diag");
+		if (curPort)
+		{
+			for (DWORD* port = ports; *port != 0; port++) { if (call_ConnectChannel(io->handle, *port)) break; }
+			if (!m_bOpened) curPort = 0;
+			free(ports);
+			ports = NULL;
+		}
+	}
+#endif
+#if _WIN32
+	if (io->hThread == NULL) io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
+	if (io->hThread == NULL) return -1;
 #endif
 #ifndef __ANDROID__
-	DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
+	if (!m_bOpened) DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
 	for (i = 0; ; i++) {
 #if USE_LIBUSB
 		io->dev_handle = libusb_open_device_with_vid_pid(NULL, 0x1782, 0x4d00);
@@ -236,12 +246,9 @@ int main(int argc, char **argv) {
 	io->endp_in = endpoints[0];
 	io->endp_out = endpoints[1];
 #else
-	call_ConnectChannel(io->handle, curPort);
+	if (!m_bOpened) if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
 #endif
 	io->flags |= FLAGS_TRANSCODE;
-
-	// Required for smartphones.
-	// Is there a way to do the same with usb-serial?
 #if USE_LIBUSB
 	ret = libusb_control_transfer(io->dev_handle,
 			0x21, 34, 0x601, 0, NULL, 0, io->timeout);
@@ -666,7 +673,7 @@ int main(int argc, char **argv) {
 			realsize = check_partition(io, name);
 			if (!realsize) {
 				if (selected_ab > 0) {
-					sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
+					snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
 					realsize = check_partition(io, name_ab);
 					name = name_ab;
 				}
@@ -693,7 +700,7 @@ int main(int argc, char **argv) {
 			char name_ab[36];
 			if (argcount <= 2) { DBG_LOG("r all/all_lite/part_name/part_id\n"); argc -= 2; argv += 2; continue; }
 			if (gpt_failed == 1) ptable = partition_list(io, fn_partlist, &part_count);
-			if (selected_ab > 0) sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
+			if (selected_ab > 0) snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
 			if (!memcmp(name, "splloader", 9)) {
 				realsize = 256 * 1024;
 			}
@@ -730,7 +737,7 @@ int main(int argc, char **argv) {
 					for (i = 0; i < part_count; i++)
 						if (0 == strncmp("l_", (*(ptable + i)).name, 2) || 0 == strncmp("nr_", (*(ptable + i)).name, 3)) {
 							char dfile[40];
-							sprintf(dfile, "%s.bin", (*(ptable + i)).name);
+							snprintf(dfile, sizeof(dfile), "%s.bin", (*(ptable + i)).name);
 							dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 						}
 					argc -= 2; argv += 2;
@@ -744,7 +751,7 @@ int main(int argc, char **argv) {
 						if (!memcmp((*(ptable + i)).name, "blackbox", 8)) continue;
 						else if (!memcmp((*(ptable + i)).name, "cache", 5)) continue;
 						else if (!memcmp((*(ptable + i)).name, "userdata", 8)) continue;
-						sprintf(dfile, "%s.bin", (*(ptable + i)).name);
+						snprintf(dfile, sizeof(dfile), "%s.bin", (*(ptable + i)).name);
 						dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 					}
 					argc -= 2; argv += 2;
@@ -760,10 +767,10 @@ int main(int argc, char **argv) {
 						else if (!memcmp((*(ptable + i)).name, "cache", 5)) continue;
 						else if (!memcmp((*(ptable + i)).name, "userdata", 8)) continue;
 						if (selected_ab == 1 && namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_b")) continue;
-						else if (selected_ab == 2 && namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_a")) continue;
-						sprintf(dfile, "%s.bin", (*(ptable + i)).name);
+						snprintf(dfile, sizeof(dfile), "%s.bin", (*(ptable + i)).name);
 						dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 					}
+					if (selected_ab == 2) DBG_LOG("When the device is in slot B, some partitions in slot A are still in use; therefore, all partitions are dumped.\n");
 					argc -= 2; argv += 2;
 					continue;
 				}
@@ -783,8 +790,8 @@ int main(int argc, char **argv) {
 				}
 			}
 			char dfile[40];
-			if (isdigit(str2[2][0])) sprintf(dfile, "%s.bin", name);
-			else sprintf(dfile, "%s.bin", str2[2]);
+			if (isdigit(str2[2][0])) snprintf(dfile, sizeof(dfile), "%s.bin", name);
+			else snprintf(dfile, sizeof(dfile), "%s.bin", str2[2]);
 			dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 2; argv += 2;
 
@@ -841,7 +848,7 @@ int main(int argc, char **argv) {
 				realsize = check_partition(io, name);
 				if (!realsize) {
 					if (selected_ab > 0) {
-						sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
+						snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
 						realsize = check_partition(io, name_ab);
 						name = name_ab;
 					}
@@ -891,7 +898,7 @@ int main(int argc, char **argv) {
 				realsize = check_partition(io, name);
 				if (!realsize) {
 					if (selected_ab > 0) {
-						sprintf(name_ab, "%s_%c", name, 96 + selected_ab);
+						snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
 						realsize = check_partition(io, name_ab);
 						name = name_ab;
 					}

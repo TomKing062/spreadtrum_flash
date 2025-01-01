@@ -17,7 +17,7 @@ BOOL CBMPlatformApp::InitInstance()
 
 	if(m_hChannelLib == NULL)
 	{
-		std::cout << GetLastError() << std::endl;
+		std::cout << "Failed to load Channel9.dll. Error code: " << GetLastError() << std::endl;
 		return FALSE;
 	}
 
@@ -122,6 +122,7 @@ BOOL CBootModeOpr::ConnectChannel(DWORD dwPort)
 
 	//Log(_T("Connect Channel +++"));
 	m_bOpened = m_pChannel->Open(&ca);
+	if (m_bOpened) std::cout << "Successfully connected to port: " << dwPort << std::endl;
 	//Log(_T("Connect Channel ---"));
 	return m_bOpened;
 }

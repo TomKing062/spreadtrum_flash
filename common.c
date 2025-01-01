@@ -1,12 +1,14 @@
 #include "common.h"
 #if !USE_LIBUSB
 DWORD curPort = 0;
+DWORD* ports = NULL;
 DWORD FindPort(const char* USB_DL)
 {
 	const GUID GUID_DEVCLASS_PORTS = { 0x4d36e978, 0xe325, 0x11ce,{0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18} };
 	HDEVINFO DeviceInfoSet;
 	SP_DEVINFO_DATA DeviceInfoData;
 	DWORD dwIndex = 0;
+	DWORD count = 0;
 
 	DeviceInfoSet = SetupDiGetClassDevs(&GUID_DEVCLASS_PORTS, NULL, NULL, DIGCF_PRESENT);
 
@@ -28,15 +30,28 @@ DWORD FindPort(const char* USB_DL)
 			char portNum_str[4];
 			strncpy(portNum_str, result + strlen(USB_DL) + 5, 3);
 			portNum_str[3] = 0;
-			SetupDiDestroyDeviceInfoList(DeviceInfoSet);
-			return strtoul(portNum_str, NULL, 0);
-		}
 
+			DWORD portNum = strtoul(portNum_str, NULL, 0);
+			DWORD* temp = (DWORD*)realloc(ports, (count + 2) * sizeof(DWORD));
+			if (temp == NULL) {
+				DBG_LOG("Memory allocation failed.\n");
+				SetupDiDestroyDeviceInfoList(DeviceInfoSet);
+				free(ports);
+				ports = NULL;
+				return 0;
+			}
+			ports = temp;
+			ports[count] = portNum;
+			count++;
+		}
 		++dwIndex;
 	}
 
 	SetupDiDestroyDeviceInfoList(DeviceInfoSet);
-
+	if (count > 0) {
+		ports[count] = 0;
+		return ports[0];
+	}
 	return 0;
 }
 
@@ -886,7 +901,7 @@ int gpt_info(partition_t* ptable, const char* fn_xml, int* part_count_ptr) {
 	FILE* fp;
 	if (savepath[0]) {
 		char fix_fn[1024];
-		sprintf(fix_fn, "%s/%s", savepath, "pgpt.bin");
+		sprintf(fix_fn, "%s/pgpt.bin", savepath);
 		fp = fopen(fix_fn, "rb");
 	}
 	else fp = fopen("pgpt.bin", "rb");
@@ -991,6 +1006,7 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 	if (32 * 1024 == size)
 		gpt_failed = gpt_info(ptable, fn, part_count_ptr);
 	if (gpt_failed) {
+		remove("pgpt.bin");
 		encode_msg(io, BSL_CMD_READ_PARTITION, NULL, 0);
 		send_msg(io);
 		ret = recv_msg(io);
@@ -998,12 +1014,14 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 		ret = recv_type(io);
 		if (ret != BSL_REP_READ_PARTITION){
 			DBG_LOG("unexpected response (0x%04x)\n", ret);
+			gpt_failed = -1;
 			free(ptable);
 			return NULL;
 		}
 		size = READ16_BE(io->raw_buf + 2);
 		if (size % 0x4c) {
 			DBG_LOG("not divisible by struct size (0x%04lx)\n", size);
+			gpt_failed = -1;
 			free(ptable);
 			return NULL;
 		}
@@ -1030,6 +1048,8 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 			size = READ32_LE(p + 0x48);
 			while (!(size >> divisor)) divisor--;
 		}
+		if (divisor == 10) Da_Info.dwStorageType = 0x102;
+		else Da_Info.dwStorageType = 0x103;
 		p = io->raw_buf + 4;
 		DBG_LOG("  0 %36s     256KB\n", "splloader");
 		for (i = 0; i < n; i++, p += 0x4c) {
@@ -1065,6 +1085,7 @@ partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr) {
 		return ptable;
 	}
 	else {
+		gpt_failed = -1;
 		free(ptable);
 		return NULL;
 	}
@@ -1079,7 +1100,8 @@ void repartition(spdio_t* io, const char* fn) {
 }
 
 void erase_partition(spdio_t* io, const char* name) {
-	select_partition(io, name, 0, 0, BSL_CMD_ERASE_FLASH);
+	if (!memcmp(name, "userdata", 8)) select_partition(io, name, 1048576, 0, BSL_CMD_ERASE_FLASH);
+	else select_partition(io, name, 0, 0, BSL_CMD_ERASE_FLASH);
 	send_and_check(io);
 }
 
@@ -1113,7 +1135,7 @@ void load_partition(spdio_t* io, const char* name,
 		encode_msg(io, BSL_CMD_DLOAD_RAW_START2, NULL, 0);
 		if (send_and_check(io)) { Da_Info.bSupportRawData = 0; goto fallback_load; }
 		step = Da_Info.dwFlushSize << 10;
-		uint8_t* rawbuf = (uint8_t*)malloc(step);
+		uint8_t* rawbuf = (uint8_t*)malloc(step + 1);
 		if (!rawbuf) ERR_EXIT("malloc failed\n");
 
 		for (offset = 0; (n64 = len - offset); offset += n) {
@@ -1448,11 +1470,12 @@ uint64_t str_to_size_ubi(const char* str, int* nand_info) {
 }
 
 void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) {
-	partition_t partitions[128];
 	const char* part1 = "Partitions>";
 	char* src, * p;
 	int part1_len = strlen(part1), found = 0, stage = 0, ubi = 0;
 	size_t size = 0;
+	partition_t* partitions = malloc(128 * sizeof(partition_t));
+	if (partitions == NULL) return;
 
 	if (!memcmp(fn, "ubi", 3)) ubi = 1;
 	src = (char*)loadfile(fn, &size, 1);
@@ -1506,6 +1529,8 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) 
 	if (p - 1 != src + size) ERR_EXIT("xml: zero byte");
 	if (stage != 2) ERR_EXIT("xml: unexpected syntax\n");
 
+	int verbose = io->verbose;
+	if (selected_ab < 0) select_ab(io);
 	for (int i = 0; i < found; i++) {
 		DBG_LOG("Partition %d: name=%s, size=%llim\n", i + 1, partitions[i].name, partitions[i].size);
 		if (!memcmp(partitions[i].name, "userdata", 8)) continue;
@@ -1513,13 +1538,11 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) 
 		char* pn = partitions[i].name;
 		uint64_t realsize = 0;
 		char name_ab[36];
-		int verbose = io->verbose;
-		if (selected_ab < 0) select_ab(io);
 		io->verbose = 0;
 		realsize = check_partition(io, pn);
 		if (!realsize) {
 			if (selected_ab > 0) {
-				sprintf(name_ab, "%s_%c", pn, 96 + selected_ab);
+				snprintf(name_ab, sizeof(name_ab), "%s_%c", pn, 96 + selected_ab);
 				realsize = check_partition(io, name_ab);
 				pn = name_ab;
 			}
@@ -1540,22 +1563,35 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) 
 		else realsize = partitions[i].size << 20;
 
 		char dfile[40];
-		sprintf(dfile, "%s.bin", partitions[i].name);
+		snprintf(dfile, sizeof(dfile), "%s.bin", partitions[i].name);
 		dump_partition(io, pn, 0, realsize, dfile, blk_size);
 	}
 
 	if (savepath[0]) {
 		DBG_LOG("saving dump list\n");
 		char fix_fn[1024];
-		sprintf(fix_fn, "%s/%s", savepath, fn);
-		FILE *fo = fopen(fix_fn, "wb");
-		fwrite(src, 1, size, fo);
-		fclose(fo);
+		char* ch;
+		if ((ch = strrchr(fn, '/'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
+		else if ((ch = strrchr(fn, '\\'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
+		else sprintf(fix_fn, "%s/%s", savepath, fn);
+		FILE* fo = fopen(fix_fn, "wb");
+		if (fo) { fwrite(src, 1, size, fo); fclose(fo); }
+		else DBG_LOG("create dump list failed, skipping.\n");
 	}
 	free(src);
+	free(partitions);
 }
 
 void load_partitions(spdio_t* io, const char* path, int blk_size) {
+	typedef struct {
+		char name[36];
+		char file_path[1024];
+		int written_flag;
+	} partition_info_t;
+
+	int partition_count = 0;
+	partition_info_t* partitions = malloc(128 * sizeof(partition_info_t));
+	if (partitions == NULL) return;
 	char* fn;
 #if _WIN32
 	char searchPath[ARGV_LEN];
@@ -1586,39 +1622,84 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		size_t len = strlen(fn);
 		if (len >= 4 && strcmp(fn + len - 4, ".xml") == 0) continue;
 		if (!memcmp(fn, "pgpt", 4) || !memcmp(fn, "sprdpart", 8)) continue;
-		char fix_fn[1024];
-		snprintf(fix_fn, sizeof(fix_fn), "%s/%s", path, fn);
+
+		snprintf(partitions[partition_count].file_path, sizeof(partitions[partition_count].file_path), "%s/%s", path, fn);
 		char* dot = strrchr(fn, '.');
 		if (dot != NULL) *dot = '\0';
 
-		uint64_t realsize = 0;
-		char name_ab[36];
-		int verbose = io->verbose;
-		if (selected_ab < 0) select_ab(io);
-		io->verbose = 0;
-		realsize = check_partition(io, fn);
-		if (!realsize) {
-			if (selected_ab > 0) {
-				sprintf(name_ab, "%s_%c", fn, 96 + selected_ab);
-				realsize = check_partition(io, name_ab);
-				fn = name_ab;
-			}
-			if (!realsize) {
-				DBG_LOG("part not exist\n");
-				io->verbose = verbose;
-				continue;
-			}
-		}
-		io->verbose = verbose;
-
-		if (strstr(fn, "fixnv1")) load_nv_partition(io, fn, fix_fn, 4096);
-		else load_partition(io, fn, fix_fn, blk_size);
+		snprintf(partitions[partition_count].name, sizeof(partitions[partition_count].name), "%s", fn);
+		partitions[partition_count].written_flag = 0;
+		partition_count++;
 	}
 #if _WIN32
 	FindClose(hFind);
 #else
 	closedir(dir);
 #endif
+	int verbose = io->verbose;
+	if (selected_ab < 0) select_ab(io);
+	for (int i = 0; i < partition_count; i++) {
+		if (strcmp(partitions[i].name, "splloader") == 0
+			|| strcmp(partitions[i].name, "uboot_a") == 0
+			|| strcmp(partitions[i].name, "uboot_b") == 0
+			|| strcmp(partitions[i].name, "vbmeta_a") == 0
+			|| strcmp(partitions[i].name, "vbmeta_b") == 0) {
+			load_partition(io, partitions[i].name, partitions[i].file_path, blk_size);
+			partitions[i].written_flag = 1;
+			if (strcmp(partitions[i].name, "vbmeta_b") == 0) break;
+			continue;
+		}
+		if (strcmp(partitions[i].name, "uboot") == 0 || strcmp(partitions[i].name, "vbmeta") == 0) {
+			uint64_t realsize = 0;
+			char name_ab[36];
+			io->verbose = 0;
+			fn = partitions[i].name;
+			realsize = check_partition(io, fn);
+			if (!realsize) {
+				if (selected_ab > 0) {
+					snprintf(name_ab, sizeof(name_ab), "%s_%c", fn, 96 + selected_ab);
+					realsize = check_partition(io, name_ab);
+					fn = name_ab;
+				}
+				if (!realsize) {
+					DBG_LOG("part not exist\n");
+					io->verbose = verbose;
+					continue;
+				}
+			}
+			io->verbose = verbose;
+			load_partition(io, fn, partitions[i].file_path, blk_size);
+			partitions[i].written_flag = 1;
+			if(strcmp(partitions[i].name, "uboot")) break;
+			continue;
+		}
+	}
+
+	for (int i = 0; i < partition_count; i++) {
+		if (!partitions[i].written_flag) {
+			uint64_t realsize = 0;
+			char name_ab[36];
+			fn = partitions[i].name;
+			realsize = check_partition(io, fn);
+			if (!realsize) {
+				if (selected_ab > 0) {
+					snprintf(name_ab, sizeof(name_ab), "%s_%c", fn, 96 + selected_ab);
+					realsize = check_partition(io, name_ab);
+					fn = name_ab;
+				}
+				if (!realsize) {
+					DBG_LOG("part not exist\n");
+					io->verbose = verbose;
+					continue;
+				}
+			}
+			io->verbose = verbose;
+
+			if (strstr(fn, "fixnv1")) load_nv_partition(io, fn, partitions[i].file_path, 4096);
+			else load_partition(io, fn, partitions[i].file_path, blk_size);
+		}
+	}
+	free(partitions);
 }
 
 void get_Da_Info(spdio_t* io)
@@ -1683,12 +1764,22 @@ void select_ab(spdio_t* io)
 void dm_disable(spdio_t* io, int blk_size)
 {
 	const char* list[] = { "vbmeta", "vbmeta_a", "vbmeta_b", NULL };
+	char dfile[40];
 	for (int i = 0; list[i] != NULL; i++) {
-		char dfile[40];
 		sprintf(dfile, "%s.bin", list[i]);
-		if (1048576 != dump_partition(io, list[i], 0, 1048576, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE)) continue;
-
-		FILE* vb;
+		if (1048576 != dump_partition(io, list[i], 0, 1048576, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE)) {
+			remove(dfile);
+			continue;
+		}
+	}
+	for (int i = 0; list[i] != NULL; i++) {
+		sprintf(dfile, "%s.bin", list[i]);
+		FILE* vb = fopen(dfile, "r");
+		if (!vb) {
+			DBG_LOG("File %s does not exist, skipping.\n", dfile);
+			continue;
+		}
+		fclose(vb);
 		vb = fopen(dfile, "rb+");
 		if (!vb) ERR_EXIT("fopen %s failed\n", dfile);
 		char header[4];
@@ -1713,12 +1804,22 @@ void dm_enable(spdio_t* io, int blk_size)
 					"vbmeta_system_ext", "vbmeta_system_ext_a", "vbmeta_system_ext_b",
 					"vbmeta_product", "vbmeta_product_a", "vbmeta_product_b",
 					"vbmeta_odm", "vbmeta_odm_a", "vbmeta_odm_b", NULL };
+	char dfile[40];
 	for (int i = 0; list[i] != NULL; i++) {
-		char dfile[40];
 		sprintf(dfile, "%s.bin", list[i]);
-		if (1048576 != dump_partition(io, list[i], 0, 1048576, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE)) continue;
-
-		FILE* vb;
+		if (1048576 != dump_partition(io, list[i], 0, 1048576, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE)) {
+			remove(dfile);
+			continue;
+		}
+	}
+	for (int i = 0; list[i] != NULL; i++) {
+		sprintf(dfile, "%s.bin", list[i]);
+		FILE* vb = fopen(dfile, "r");
+		if (!vb) {
+			DBG_LOG("File %s does not exist, skipping.\n", dfile);
+			continue;
+		}
+		fclose(vb);
 		vb = fopen(dfile, "rb+");
 		if (!vb) ERR_EXIT("fopen %s failed\n", dfile);
 		char header[4];
@@ -1773,14 +1874,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 				if (interface_checked) {
 					pDevPort = (PDEV_BROADCAST_PORT)pHdr;
 					DWORD changedPort;
-					if (is_diag) changedPort = FindPort("SPRD DIAG"); //changedPort = 0 when DBT_DEVICEREMOVECOMPLETE
+					if (is_diag) {
+						changedPort = FindPort("SPRD DIAG"); //changedPort = 0 when DBT_DEVICEREMOVECOMPLETE
+						free(ports);
+						ports = NULL;
+					}
 					else changedPort = my_strtoul(pDevPort->dbcp_name + 3, NULL, 0);
 					if (changedPort == 0) m_bOpened = -1;
-					else if (DBT_DEVICEARRIVAL == wParam) {
-						if (!curPort) curPort = changedPort;
-						else if (curPort != changedPort) DBG_LOG("second port not supported\n");
+					else {
+						if (DBT_DEVICEARRIVAL == wParam) { if (!curPort) curPort = changedPort; }
+						else { if (curPort == changedPort) m_bOpened = -1; }
 					}
-					else if (curPort == changedPort) m_bOpened = -1;
 					interface_checked = FALSE;
 					is_diag = FALSE;
 				}
@@ -1846,8 +1950,7 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 
 	while (!done)
 	{
-		if (portName[0]) DBG_LOG("Waiting for cali_diag connection (%ds)\n", ms / 1000);
-		else DBG_LOG("Waiting for boot_diag connection (%ds)\n", ms / 1000);
+		DBG_LOG("Waiting for boot_diag/cali_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
 			if (curPort) break;
 			if (100 * i >= ms) ERR_EXIT("find port failed\n");
@@ -1884,44 +1987,43 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 		if (at) payload[8] = 0x81;
 		else payload[8] = bootmode + 0x80;
 		if (io->verbose >= 2) {
-			DBG_LOG("send (%d):\n", 10);
-			print_mem(stderr, payload, 10);
+			DBG_LOG("send (%d):\n", sizeof(payload));
+			print_mem(stderr, payload, sizeof(payload));
 		}
-		if (!WriteFile(hSerial, payload, 10, &bytes_written, NULL)) ERR_EXIT("Error writing to serial port\n");
+		if (!WriteFile(hSerial, payload, sizeof(payload), &bytes_written, NULL)) ERR_EXIT("Error writing to serial port\n");
 		if (!ReadFile(hSerial, io->recv_buf, RECV_BUF_LEN, &bytes_read, NULL)) CloseHandle(hSerial);
 		else
 		{
-			uint8_t cali_ok[] = { 8,0,0xd5,0 };
+			uint8_t cali_ok[] = { 0x7e,0,0,0,0 };
 			if (io->verbose >= 2) {
 				DBG_LOG("read (%d):\n", bytes_read);
 				print_mem(stderr, io->recv_buf, bytes_read);
 			}
-			if (!memcmp(io->recv_buf + bytes_read - 5, cali_ok, 4))
+			if (memcmp(io->recv_buf, cali_ok, 5))
 			{
-				uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
-				if (io->verbose >= 2) {
-					DBG_LOG("send (%d):\n", 34);
-					print_mem(stderr, autod, 34);
-				}
-				if (!WriteFile(hSerial, autod, 34, &bytes_written, NULL)) ERR_EXIT("Error writing to serial port\n");
-				if (!ReadFile(hSerial, io->recv_buf, RECV_BUF_LEN, &bytes_read, NULL)) ERR_EXIT("read response from cali mode failed\n");
-				else
-				{
-					uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
-					if (io->verbose >= 2) {
-						DBG_LOG("read (%d):\n", bytes_read);
-						print_mem(stderr, io->recv_buf, bytes_read);
-					}
-					if (!memcmp(io->recv_buf + bytes_read - 7, ok, 6)) done = 1;
-					else {
-						DBG_LOG("Unknown response\n");
-						if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
-					}
-				}
-			}
-			else {
 				DBG_LOG("Unknown response\n");
 				if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
+			}
+			if (!memcmp(io->recv_buf, payload, 10)) DBG_LOG("Warning: response is same as send\n");
+			uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
+			if (io->verbose >= 2) {
+				DBG_LOG("send (%d):\n", sizeof(autod));
+				print_mem(stderr, autod, sizeof(autod));
+			}
+			if (!WriteFile(hSerial, autod, sizeof(autod), &bytes_written, NULL)) ERR_EXIT("Error writing to serial port\n");
+			if (!ReadFile(hSerial, io->recv_buf, RECV_BUF_LEN, &bytes_read, NULL)) ERR_EXIT("read response from cali mode failed\n");
+			else
+			{
+				uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
+				if (io->verbose >= 2) {
+					DBG_LOG("read (%d):\n", bytes_read);
+					print_mem(stderr, io->recv_buf, bytes_read);
+				}
+				if (!memcmp(io->recv_buf + bytes_read - 7, ok, 6)) done = 1;
+				else {
+					DBG_LOG("Unknown response\n");
+					if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
+				}
 			}
 		}
 		for (int i = 0; ; i++)
