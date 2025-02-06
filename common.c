@@ -191,6 +191,7 @@ spdio_t* spdio_init(int flags) {
 	io->enc_buf = p;
 	io->verbose = 0;
 	io->timeout = 1000;
+	memset(io->recv_buf, 0, 8);
 	return io;
 }
 
@@ -723,10 +724,11 @@ void print_progress_bar(float progress) {
 	completed0 = completed;
 }
 
+extern uint64_t fblk_size;
 uint64_t dump_partition(spdio_t* io,
 	const char* name, uint64_t start, uint64_t len,
 	const char* fn, unsigned step) {
-	uint32_t n, nread, t32; uint64_t offset, n64;
+	uint32_t n, nread, t32; uint64_t offset, n64, saved_size = 0;
 	int ret, mode64 = (start + len) >> 32;
 	FILE* fo;
 	if (!memcmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
@@ -793,6 +795,11 @@ uint64_t dump_partition(spdio_t* io,
 		print_progress_bar((offset + nread - start) / (float)len);
 		offset += nread;
 		if (n != nread) break;
+
+		if (fblk_size) {
+			saved_size += nread;
+			if (saved_size >= fblk_size) { usleep(1000000); saved_size = 0; }
+		}
 	}
 	DBG_LOG("Read Part Done: %s+0x%llx, target: 0x%llx, read: 0x%llx\n",
 		name, (long long)start, (long long)len,
@@ -1355,8 +1362,10 @@ uint64_t find_partition_size(spdio_t* io, const char* name) {
 		return 1;
 	}
 	else if (strstr(name, "runtimenv")) return 1;
-	find_partition_size_new(io, name, &offset);
-	if (offset) return offset;
+	if (selected_ab > 0) {
+		find_partition_size_new(io, name, &offset);
+		if (offset) return offset;
+	}
 
 	if (!strcmp(name, "ubipac")) end = 10;
 	select_partition(io, name, 128 * 1024, 0, BSL_CMD_READ_START);
@@ -1941,88 +1950,75 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam)
 void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 {
 	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
-	HANDLE hSerial;
-	char portName[11] = { 0 };
-	DCB dcbSerialParams = { 0 };
-	COMMTIMEOUTS timeouts = { 0 };
 	DWORD bytes_written, bytes_read;
 	int done = 0;
 
 	while (!done)
 	{
-		DBG_LOG("Waiting for boot_diag/cali_diag connection (%ds)\n", ms / 1000);
+		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
 			if (curPort) break;
 			if (100 * i >= ms) ERR_EXIT("find port failed\n");
 			usleep(100000);
 		}
-
-		if (curPort < 10)  sprintf(portName, "COM%ld", curPort);
-		else sprintf(portName, "\\\\.\\COM%ld", curPort);
-		hSerial = CreateFileA(portName,
-			GENERIC_READ | GENERIC_WRITE,
-			0,
-			NULL,
-			OPEN_EXISTING,
-			FILE_ATTRIBUTE_NORMAL,
-			NULL);
-		if (hSerial == INVALID_HANDLE_VALUE) ERR_EXIT("Error opening serial port\n");
-		dcbSerialParams.DCBlength = sizeof(dcbSerialParams);
-		if (!GetCommState(hSerial, &dcbSerialParams)) ERR_EXIT("Error getting device state\n");
-		dcbSerialParams.BaudRate = CBR_115200;
-		dcbSerialParams.ByteSize = 8;
-		dcbSerialParams.StopBits = ONESTOPBIT;
-		dcbSerialParams.Parity = NOPARITY;
-		dcbSerialParams.fDtrControl = DTR_CONTROL_ENABLE;
-		dcbSerialParams.fRtsControl = RTS_CONTROL_ENABLE;
-		if (!SetCommState(hSerial, &dcbSerialParams)) ERR_EXIT("Error setting device parameters\n");
-		timeouts.ReadIntervalTimeout = 50;
-		timeouts.ReadTotalTimeoutConstant = 50;
-		timeouts.ReadTotalTimeoutMultiplier = 10;
-		timeouts.WriteTotalTimeoutConstant = 50;
-		timeouts.WriteTotalTimeoutMultiplier = 10;
-		if (!SetCommTimeouts(hSerial, &timeouts)) ERR_EXIT("Error setting timeouts\n");
+		if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
 
 		uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0,0x7e };
-		if (at) payload[8] = 0x81;
+		if (!bootmode) {
+			uint8_t hello[10] = { 0x7e,0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e };
+			if (io->verbose >= 2) {
+				DBG_LOG("send (%d):\n", sizeof(hello));
+				print_mem(stderr, hello, sizeof(hello));
+			}
+			if (!(bytes_written = call_Write(io->handle, hello, sizeof(hello)))) ERR_EXIT("Error writing to serial port\n");
+			if (!(bytes_read = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout))) ERR_EXIT("read response from boot mode failed\n");
+			else
+			{
+				if (io->verbose >= 2) {
+					DBG_LOG("read (%d):\n", bytes_read);
+					print_mem(stderr, io->recv_buf, bytes_read);
+				}
+				if (io->recv_buf[2] == BSL_REP_VER) return;
+			}
+			payload[8] = 0x82;
+		}
+		else if (at) payload[8] = 0x81;
 		else payload[8] = bootmode + 0x80;
 		if (io->verbose >= 2) {
 			DBG_LOG("send (%d):\n", sizeof(payload));
 			print_mem(stderr, payload, sizeof(payload));
 		}
-		if (!WriteFile(hSerial, payload, sizeof(payload), &bytes_written, NULL)) ERR_EXIT("Error writing to serial port\n");
-		if (!ReadFile(hSerial, io->recv_buf, RECV_BUF_LEN, &bytes_read, NULL)) CloseHandle(hSerial);
-		else
+		if (!(bytes_written = call_Write(io->handle, payload, sizeof(payload)))) ERR_EXIT("Error writing to serial port\n");
+		if ((bytes_read = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout)))
 		{
-			uint8_t cali_ok[] = { 0x7e,0,0,0,0 };
 			if (io->verbose >= 2) {
 				DBG_LOG("read (%d):\n", bytes_read);
 				print_mem(stderr, io->recv_buf, bytes_read);
 			}
-			if (memcmp(io->recv_buf, cali_ok, 5))
+			if (io->recv_buf[2] == BSL_REP_VER) { if (io->recv_buf[9] < '4') return; }
+			else if (io->recv_buf[2] != 0x7e)
 			{
-				DBG_LOG("Unknown response\n");
-				if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
-			}
-			if (!memcmp(io->recv_buf, payload, 10)) DBG_LOG("Warning: response is same as send\n");
-			uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
-			if (io->verbose >= 2) {
-				DBG_LOG("send (%d):\n", sizeof(autod));
-				print_mem(stderr, autod, sizeof(autod));
-			}
-			if (!WriteFile(hSerial, autod, sizeof(autod), &bytes_written, NULL)) ERR_EXIT("Error writing to serial port\n");
-			if (!ReadFile(hSerial, io->recv_buf, RECV_BUF_LEN, &bytes_read, NULL)) ERR_EXIT("read response from cali mode failed\n");
-			else
-			{
-				uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
+				uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
 				if (io->verbose >= 2) {
-					DBG_LOG("read (%d):\n", bytes_read);
-					print_mem(stderr, io->recv_buf, bytes_read);
+					DBG_LOG("send (%d):\n", sizeof(autod));
+					print_mem(stderr, autod, sizeof(autod));
 				}
-				if (!memcmp(io->recv_buf + bytes_read - 7, ok, 6)) done = 1;
-				else {
-					DBG_LOG("Unknown response\n");
-					if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
+				if ((bytes_written = call_Write(io->handle, autod, sizeof(autod))))
+				{
+					if (!(bytes_read = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout))) ERR_EXIT("read response from cali mode failed\n");
+					else
+					{
+						uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
+						if (io->verbose >= 2) {
+							DBG_LOG("read (%d):\n", bytes_read);
+							print_mem(stderr, io->recv_buf, bytes_read);
+						}
+						if (!memcmp(io->recv_buf + bytes_read - 7, ok, 6)) done = 1;
+						else {
+							DBG_LOG("Unknown response\n");
+							if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
+						}
+					}
 				}
 			}
 		}
@@ -2030,11 +2026,17 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 		{
 			if (m_bOpened == -1)
 			{
+				call_DisconnectChannel(io->handle);
+				io->recv_buf[2] = 0;
 				curPort = 0;
 				m_bOpened = 0;
 				break;
 			}
-			if (100 * i >= ms) ERR_EXIT("kick reboot timeout, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
+			if (i >= 50)
+			{
+				if (io->recv_buf[2] == BSL_REP_VER) return;
+				else ERR_EXIT("kick reboot timeout, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
+			}
 			usleep(100000);
 		}
 		if (!at) done = 1;

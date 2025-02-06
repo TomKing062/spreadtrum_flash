@@ -100,6 +100,7 @@ int m_bOpened = 0;
 int fdl1_loaded = 0;
 int fdl2_executed = 0;
 int selected_ab = -1;
+uint64_t fblk_size = 0;
 int main(int argc, char **argv) {
 	spdio_t *io = NULL; int ret, i, in_quote;
 	int wait = 30 * REOPEN_FREQ;
@@ -162,8 +163,8 @@ int main(int argc, char **argv) {
 #ifdef __ANDROID__
 		} else if (!strcmp(argv[1], "--usb-fd")) { // Termux spec
 			if (argc <= 2) ERR_EXIT("bad option\n");
-			xfd = atoi(argv[2]);
-			argc -= 2; argv += 2;
+			xfd = atoi(argv[argc - 1]);
+			argc -= 2; argv += 1;
 #endif
 #if !USE_LIBUSB
 		} else if (!strcmp(argv[1], "--kick")) {
@@ -179,12 +180,14 @@ int main(int argc, char **argv) {
 	}
 
 #if !USE_LIBUSB
+	if (stage == 99) { bootmode = -1; at = 0; }
 	if (at || bootmode >= 0)
 	{
 		io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
 		if (io->hThread == NULL) return -1;
 		ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode, at);
 		wait = 30 * REOPEN_FREQ;
+		stage = -1;
 	}
 	else
 	{
@@ -260,10 +263,19 @@ int main(int argc, char **argv) {
 	io->flags &= ~FLAGS_CRC16;
 	if (stage != -1) encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
 	else encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
-	for (i = 0;; i++) {
-		send_msg(io);
-		recv_msg(io);
-		ret = recv_type(io);
+	for (i = 0; ; i++) {
+		if (io->recv_buf[2] == BSL_REP_VER)
+		{
+			ret = BSL_REP_VER;
+			io->flags |= FLAGS_CRC16;
+			memcpy(io->raw_buf + 4, io->recv_buf + 5, 5);
+			io->raw_buf[2] = 0;
+			io->raw_buf[3] = 5;
+		} else {
+			send_msg(io);
+			recv_msg(io);
+			ret = recv_type(io);
+		}
 		if (ret == BSL_REP_ACK || ret == BSL_REP_VER || ret == BSL_REP_VERIFY_ERROR)
 		{
 			if (ret == BSL_REP_VER)
@@ -445,13 +457,17 @@ int main(int argc, char **argv) {
 					if (send_and_check(io)) exit(1);
 				}
 				DBG_LOG("EXEC FDL1\n");
-				if (addr == 0x5500 || addr == 0x65000800) { highspeed = 1; baudrate = 921600; }
+				if (addr == 0x5500 || addr == 0x65000800)
+				{
+					highspeed = 1;
+					if (!baudrate) baudrate = 921600;
+				}
 
 				/* FDL1 (chk = sum) */
 				io->flags &= ~FLAGS_CRC16;
 
 				encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
-				for (i = 0;; i++) {
+				for (i = 0; ; i++) {
 					send_msg(io);
 					recv_msg(io);
 					if (recv_type(io) == BSL_REP_VER) break;
@@ -699,15 +715,91 @@ int main(int argc, char **argv) {
 			const char* name = str2[2];
 			char name_ab[36];
 			if (argcount <= 2) { DBG_LOG("r all/all_lite/part_name/part_id\n"); argc -= 2; argv += 2; continue; }
-			if (gpt_failed == 1) ptable = partition_list(io, fn_partlist, &part_count);
-			if (selected_ab > 0) snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
 			if (!memcmp(name, "splloader", 9)) {
 				realsize = 256 * 1024;
 			}
-			else if (!part_count) {
+			else if (isdigit(name[0])) {
+				if (gpt_failed == 1) ptable = partition_list(io, fn_partlist, &part_count);
+				i = atoi(name);
+				if (i > part_count) { DBG_LOG("part not exist\n"); argc -= 2; argv += 2; continue; }
+				if (i == 0) {
+					name = "splloader";
+					realsize = 256 * 1024;
+				}
+				else {
+					name = (*(ptable + i - 1)).name;
+					realsize = (*(ptable + i - 1)).size;
+				}
+			}
+			else if (!strcmp(name, "preset_modem")) {
+				if (gpt_failed == 1) ptable = partition_list(io, fn_partlist, &part_count);
+				if (!part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
+				for (i = 0; i < part_count; i++)
+					if (0 == strncmp("l_", (*(ptable + i)).name, 2) || 0 == strncmp("nr_", (*(ptable + i)).name, 3)) {
+						char dfile[40];
+						snprintf(dfile, sizeof(dfile), "%s.bin", (*(ptable + i)).name);
+						dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+					}
+				argc -= 2; argv += 2;
+				continue;
+			}
+			else if (!strcmp(name, "all")) {
+				if (gpt_failed == 1) ptable = partition_list(io, fn_partlist, &part_count);
+				if (!part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
+				dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				for (i = 0; i < part_count; i++)
+				{
+					char dfile[40];
+					if (!memcmp((*(ptable + i)).name, "blackbox", 8)) continue;
+					else if (!memcmp((*(ptable + i)).name, "cache", 5)) continue;
+					else if (!memcmp((*(ptable + i)).name, "userdata", 8)) continue;
+					snprintf(dfile, sizeof(dfile), "%s.bin", (*(ptable + i)).name);
+					dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				}
+				argc -= 2; argv += 2;
+				continue;
+			}
+			else if (!strcmp(name, "all_lite")) {
+				if (gpt_failed == 1) ptable = partition_list(io, fn_partlist, &part_count);
+				if (!part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
+				dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				for (i = 0; i < part_count; i++)
+				{
+					char dfile[40];
+					size_t namelen = strlen((*(ptable + i)).name);
+					if (!memcmp((*(ptable + i)).name, "blackbox", 8)) continue;
+					else if (!memcmp((*(ptable + i)).name, "cache", 5)) continue;
+					else if (!memcmp((*(ptable + i)).name, "userdata", 8)) continue;
+					if (selected_ab == 1 && namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_b")) continue;
+					snprintf(dfile, sizeof(dfile), "%s.bin", (*(ptable + i)).name);
+					dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				}
+				if (selected_ab == 2) DBG_LOG("When the device is in slot B, some partitions in slot A are still in use; therefore, all partitions are dumped.\n");
+				argc -= 2; argv += 2;
+				continue;
+			}
+			else if (part_count) {
+				if (selected_ab > 0) snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
+				for (i = 0; i < part_count; i++) {
+					if (!strcmp(name, (*(ptable + i)).name)) {
+						realsize = (*(ptable + i)).size;
+						break;
+					}
+					if (selected_ab > 0 && !strcmp(name_ab, (*(ptable + i)).name)) {
+						realsize = (*(ptable + i)).size;
+						name = name_ab;
+						break;
+					}
+				}
+				if (i == part_count) { DBG_LOG("part not exist\n"); argc -= 2; argv += 2; continue; }
+			}
+			else
+			{
+				if (selected_ab < 0) select_ab(io);
 				realsize = check_partition(io, name);
 				if (!realsize) {
 					if (selected_ab > 0) {
+						snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
 						realsize = check_partition(io, name_ab);
 						name = name_ab;
 					}
@@ -718,76 +810,6 @@ int main(int argc, char **argv) {
 					}
 				}
 				realsize = find_partition_size(io, name);
-			}
-			else
-			{
-				if (isdigit(name[0])) {
-					i = atoi(name);
-					if (i > part_count) { DBG_LOG("part not exist\n"); argc -= 2; argv += 2; continue; }
-					if (i == 0) {
-						name = "splloader";
-						realsize = 256 * 1024;
-					}
-					else {
-						name = (*(ptable + i - 1)).name;
-						realsize = (*(ptable + i - 1)).size;
-					}
-				}
-				else if (!strcmp(name, "preset_modem")) {
-					for (i = 0; i < part_count; i++)
-						if (0 == strncmp("l_", (*(ptable + i)).name, 2) || 0 == strncmp("nr_", (*(ptable + i)).name, 3)) {
-							char dfile[40];
-							snprintf(dfile, sizeof(dfile), "%s.bin", (*(ptable + i)).name);
-							dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
-						}
-					argc -= 2; argv += 2;
-					continue;
-				}
-				else if (!strcmp(name, "all")) {
-					dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
-					for (i = 0; i < part_count; i++)
-					{
-						char dfile[40];
-						if (!memcmp((*(ptable + i)).name, "blackbox", 8)) continue;
-						else if (!memcmp((*(ptable + i)).name, "cache", 5)) continue;
-						else if (!memcmp((*(ptable + i)).name, "userdata", 8)) continue;
-						snprintf(dfile, sizeof(dfile), "%s.bin", (*(ptable + i)).name);
-						dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
-					}
-					argc -= 2; argv += 2;
-					continue;
-				}
-				else if (!strcmp(name, "all_lite")) {
-					dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
-					for (i = 0; i < part_count; i++)
-					{
-						char dfile[40];
-						size_t namelen = strlen((*(ptable + i)).name);
-						if (!memcmp((*(ptable + i)).name, "blackbox", 8)) continue;
-						else if (!memcmp((*(ptable + i)).name, "cache", 5)) continue;
-						else if (!memcmp((*(ptable + i)).name, "userdata", 8)) continue;
-						if (selected_ab == 1 && namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_b")) continue;
-						snprintf(dfile, sizeof(dfile), "%s.bin", (*(ptable + i)).name);
-						dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
-					}
-					if (selected_ab == 2) DBG_LOG("When the device is in slot B, some partitions in slot A are still in use; therefore, all partitions are dumped.\n");
-					argc -= 2; argv += 2;
-					continue;
-				}
-				else {
-					for (i = 0; i < part_count; i++) {
-						if (!strcmp(name, (*(ptable + i)).name)) {
-							realsize = (*(ptable + i)).size;
-							break;
-						}
-						if (!strcmp(name_ab, (*(ptable + i)).name)) {
-							realsize = (*(ptable + i)).size;
-							name = name_ab;
-							break;
-						}
-					}
-					if (i == part_count) { DBG_LOG("part not exist\n"); argc -= 2; argv += 2; continue; }
-				}
 			}
 			char dfile[40];
 			if (isdigit(str2[2][0])) snprintf(dfile, sizeof(dfile), "%s.bin", name);
@@ -925,11 +947,16 @@ int main(int argc, char **argv) {
 			read_pactime(io);
 			argc -= 1; argv += 1;
 
-		} else if (!strcmp(str2[1], "blk_size")) {
+		} else if (!strcmp(str2[1], "blk_size") || !strcmp(str2[1], "bs")) {
 			if (argcount <= 2) { DBG_LOG("blk_size byte\n\tmax is 65535\n"); argc -= 2; argv += 2; continue; }
 			blk_size = strtol(str2[2], NULL, 0);
 			blk_size = blk_size < 0 ? 0 :
 					blk_size > 0xffff ? 0xffff : blk_size;
+			argc -= 2; argv += 2;
+
+		} else if (!strcmp(str2[1], "fblk_size") || !strcmp(str2[1], "fbs")) {
+			if (argcount <= 2) { DBG_LOG("fblk_size mb\n"); argc -= 2; argv += 2; continue; }
+			fblk_size = strtoull(str2[2], NULL, 0) * 1024 * 1024;
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(str2[1], "verity")) {
