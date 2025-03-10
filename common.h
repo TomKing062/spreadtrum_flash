@@ -1,8 +1,8 @@
 #pragma once
-
+#ifndef _MSC_VER
 #define _GNU_SOURCE 1
 #define _FILE_OFFSET_BITS 64
-
+#endif
 #define ARGC_MAX 8
 #define ARGV_LEN 384
 
@@ -38,11 +38,17 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam);
 
 #if USE_LIBUSB
 #include <libusb-1.0/libusb.h>
+#ifndef _MSC_VER
 #include <pthread.h>
 #include <unistd.h>
+#endif
 #else
 #include <setupapi.h>
 #include "Wrapper.h"
+#endif
+
+#ifdef _MSC_VER
+void usleep(unsigned int us);
 #define fseeko _fseeki64
 #define ftello _ftelli64
 #endif
@@ -191,7 +197,6 @@ void find_endpoints(libusb_device_handle* dev_handle, int result[2]);
 void call_Initialize_libusb(spdio_t* io);
 #else
 DWORD FindPort(const char* USB_DL);
-void usleep(unsigned int us);
 #endif
 
 void print_string(FILE* f, const void* src, size_t n);

@@ -132,7 +132,7 @@ int main(int argc, char **argv) {
 #ifdef __ANDROID__
 	int xfd = -1; // This store termux gived fd
 	//libusb_device_handle *handle; // Use spdio_t.dev_handle
-	libusb_device* device;
+	//libusb_device* device; //use curPort
 	struct libusb_device_descriptor desc;
 	libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
 #endif
@@ -184,6 +184,27 @@ int main(int argc, char **argv) {
 	}
 
 	if (stage == 99) { bootmode = -1; at = 0; }
+#ifdef __ANDROID__
+	bListenLibusb = 0;
+	DBG_LOG("Try to convert termux transfered usb port fd.\n");
+	// handle
+	if (xfd < 0)
+		ERR_EXIT("Example: termux-usb -e \"./spd_dump --usb-fd\" /dev/bus/usb/xxx/xxx\n"
+			"run on android need provide --usb-fd\n");
+
+	if (libusb_wrap_sys_device(NULL, (intptr_t)xfd, &io->dev_handle))
+		ERR_EXIT("libusb_wrap_sys_device exit unconditionally!\n");
+
+	curPort = libusb_get_device(io->dev_handle);
+	if (libusb_get_device_descriptor(curPort, &desc))
+		ERR_EXIT("libusb_get_device exit unconditionally!");
+
+	DBG_LOG("Vendor ID: %04x\nProduct ID: %04x\n", desc.idVendor, desc.idProduct);
+	if (desc.idVendor != 0x1782 || desc.idProduct != 0x4d00) {
+		ERR_EXIT("It seems spec device not a spd device!\n");
+	}
+	call_Initialize_libusb(io);
+#else
 #if !USE_LIBUSB
 	bListenLibusb = 0;
 	if (at || bootmode >= 0)
@@ -247,56 +268,39 @@ int main(int argc, char **argv) {
 		if (io->hThread == NULL) return -1;
 	}
 #endif
-#ifdef __ANDROID__
-	DBG_LOG("Try to convert termux transfered usb port fd.\n");
-	// handle
-	if (xfd < 0)
-		ERR_EXIT("Example: termux-usb -e \"./spd_dump --usb-fd\" /dev/bus/usb/xxx/xxx\n"
-			"run on android need provide --usb-fd\n");
-
-	if (libusb_wrap_sys_device(NULL, (intptr_t)xfd, &io->dev_handle))
-		ERR_EXIT("libusb_wrap_sys_device exit unconditionally!\n");
-
-	device = libusb_get_device(io->dev_handle);
-	if (libusb_get_device_descriptor(device, &desc))
-		ERR_EXIT("libusb_get_device exit unconditionally!");
-
-	DBG_LOG("Vendor ID: %04x\nProduct ID: %04x\n", desc.idVendor, desc.idProduct);
-	if (desc.idVendor != 0x1782 || desc.idProduct != 0x4d00) {
-		ERR_EXIT("It seems spec device not a spd device!\n");
-	}
-	call_Initialize_libusb(io);
-#else
-	if (!m_bOpened) DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
-	for (i = 0; ; i++) {
+	if (!m_bOpened) {
+		DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
+		for (i = 0; ; i++) {
 #if USE_LIBUSB
-		if (bListenLibusb) { if (curPort) break; }
-		else {
-			io->dev_handle = libusb_open_device_with_vid_pid(NULL, 0x1782, 0x4d00);
-			if (io->dev_handle) {
-				call_Initialize_libusb(io);
+			if (bListenLibusb) {
+				if (curPort) {
+					if (libusb_open(curPort, &io->dev_handle) >= 0) call_Initialize_libusb(io);
+					else ERR_EXIT("Connection failed\n");
+					break;
+				}
+			}
+			else {
+				io->dev_handle = libusb_open_device_with_vid_pid(NULL, 0x1782, 0x4d00);
+				if (io->dev_handle) {
+					curPort = libusb_get_device(io->dev_handle);
+					call_Initialize_libusb(io);
+					break;
+				}
+			}
+			if (i >= wait)
+				ERR_EXIT("libusb_open_device failed\n");
+#else
+			if (io->verbose) DBG_LOG("CurTime: %.1f, CurPort: %d\n", (float)i / REOPEN_FREQ, curPort);
+			if (curPort) {
+				if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
 				break;
 			}
+			if (i >= wait)
+				ERR_EXIT("find port failed\n");
+#endif
+			usleep(1000000 / REOPEN_FREQ);
 		}
-		if (i >= wait)
-			ERR_EXIT("libusb_open_device failed\n");
-#else
-		if (io->verbose) DBG_LOG("CurTime: %.1f, CurPort: %d\n", (float)i / REOPEN_FREQ, curPort);
-		if (curPort) break;
-		if (i >= wait)
-			ERR_EXIT("find port failed\n");
-#endif
-		usleep(1000000 / REOPEN_FREQ);
 	}
-#if USE_LIBUSB
-	if (!m_bOpened)
-	{
-		if (libusb_open(curPort, &io->dev_handle) >= 0) call_Initialize_libusb(io);
-		else ERR_EXIT("Connection failed\n");
-	}
-#else
-	if (!m_bOpened) if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
-#endif
 #endif
 	io->flags |= FLAGS_TRANSCODE;
 	io->flags &= ~FLAGS_CRC16;
@@ -374,9 +378,9 @@ int main(int argc, char **argv) {
 	}
 
 	char** save_argv = NULL;
+	if (fdl1_loaded == -1) argc += 2;
+	if (fdl2_executed == -1) argc += 1;
 	while (1) {
-		if (fdl1_loaded == -1) argc += 2;
-		else if (fdl2_executed == -1) argc += 1;
 		if (argc > 1)
 		{
 			str2 = (char**)malloc(argc * sizeof(char*));

@@ -54,11 +54,6 @@ DWORD FindPort(const char* USB_DL)
 	}
 	return 0;
 }
-
-void usleep(unsigned int us)
-{
-	Sleep(us / 1000);
-}
 #else
 libusb_device* curPort = NULL;
 libusb_device** ports = NULL;
@@ -100,6 +95,13 @@ libusb_device* FindPort(void)
 		return ports[0];
 	}
 	return NULL;
+}
+#endif
+
+#ifdef _MSC_VER
+void usleep(unsigned int us)
+{
+	Sleep(us / 1000);
 }
 #endif
 
@@ -2021,11 +2023,13 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 	{
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
-			if (curPort) break;
+			if (curPort) {
+				if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
+				break;
+			}
 			if (100 * i >= ms) ERR_EXIT("find port failed\n");
 			usleep(100000);
 		}
-		if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
 
 		uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0,0x7e };
 		if (!bootmode) {
@@ -2106,16 +2110,14 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 	}
 }
 #else
+#ifndef _MSC_VER
 pthread_t gUsbEventThrd;
 libusb_hotplug_callback_handle gHotplugCbHandle = 0;
 
 int HotplugCbFunc(libusb_context* ctx, libusb_device* device, libusb_hotplug_event event, void* user_data)
 {
-	struct libusb_device_descriptor desc;
-	if (!libusb_get_device_descriptor(device, &desc)) {
-		if (event == LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED) { if (!curPort) curPort = device; }
-		else if (curPort == device) m_bOpened = -1;
-	}
+	if (event == LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED) { if (!curPort) curPort = device; }
+	else { if (curPort == device) m_bOpened = -1; }
 	return 0;
 }
 
@@ -2158,7 +2160,15 @@ void stopUsbEventHandle(void) {
 	int ret = pthread_join(gUsbEventThrd, NULL);
 	if (ret != 0) DBG_LOG("Failed to join thread, error: %d\n", ret);
 }
+#else
+void startUsbEventHandle(void) {
+	DBG_LOG("startUsbEventHandle() is not supported in MSVC. Please use MSYS2 if you need it.\n");
+}
 
+void stopUsbEventHandle(void) {
+	DBG_LOG("stopUsbEventHandle() is not supported in MSVC. Please use MSYS2 if you need it.\n");
+}
+#endif
 void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 {
 	int err, bytes_written, bytes_read;
@@ -2169,12 +2179,14 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 	{
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
-			if (curPort) break;
+			if (curPort) {
+				if (libusb_open(curPort, &io->dev_handle) < 0) ERR_EXIT("Connection failed\n");
+				call_Initialize_libusb(io);
+				break;
+			}
 			if (100 * i >= ms) ERR_EXIT("find port failed\n");
 			usleep(100000);
 		}
-		if (libusb_open(curPort, &io->dev_handle) < 0) ERR_EXIT("Connection failed\n");
-		call_Initialize_libusb(io);
 
 		uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0,0x7e };
 		if (!bootmode) {
