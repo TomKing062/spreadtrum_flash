@@ -182,7 +182,9 @@ int main(int argc, char **argv) {
 			argc -= 2; argv += 2;
 		} else break;
 	}
-
+#if defined(_DEBUG) && defined(USE_LIBUSB)
+	io->verbose = 2;
+#endif
 	if (stage == 99) { bootmode = -1; at = 0; }
 #ifdef __ANDROID__
 	bListenLibusb = 0;
@@ -508,7 +510,7 @@ int main(int argc, char **argv) {
 					}
 				}
 				if (last_pos) addr = strtoul(last_pos, NULL, 16);
-				else DBG_LOG("\"0x\" not found in name.\n");
+				else { DBG_LOG("\"0x\" not found in name.\n"); argc -= argchange; argv += argchange; continue; }
 			}
 			else {
 				argchange = 3;
