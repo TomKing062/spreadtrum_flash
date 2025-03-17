@@ -53,7 +53,7 @@ Then the prompt should display `FDL2>`.
 
   Connects the device using a custom route `boot_diag -> custom_diag`. Supported modes are 0-127.
 
-  (mode 1 = cali_diag, mode 2 = dl_diag; not all devices support mode 2).
+  (mode 0 = `--kickto 2` on ums9621, mode 1 = cali_diag, mode 2 = dl_diag; not all devices support mode 2).
 
 - `-h|--help|help`
 
@@ -97,9 +97,9 @@ Then the prompt should display `FDL2>`.
 
   Specifies the 4th NAND ID, affecting `read_part(s)` size calculation, default value is 0x15.
 
-- `rawdata {0,2}` (fdl2 stage only)
+- `rawdata {0,1,2}` (fdl2 stage only)
 
-  Rawdata protocol helps speed up `w` and `write_part(s)` commands, when rawdata=2, `blk_size` will not effect write speed. (rawdata relays on u-boot/lk, so don't set it manually unless its default value is 2. Note: rawdata = 1 is currently not supported.)
+  Rawdata protocol helps speed up `w` and `write_part(s)` commands, when rawdata > 0, `blk_size` will not effect write speed. (rawdata relays on u-boot/lk, so don't set it manually.)
 
 - `blk_size byte` (fdl2 stage only)
 
@@ -110,6 +110,7 @@ Then the prompt should display `FDL2>`.
   When the partition table is available:
 
     - `r all`: full backup (excludes blackbox, cache, userdata)
+    - `r all_lite`: full backup (excludes inactive slot partitions, blackbox, cache, and userdata)
 
   When the partition table is unavailable:
     - `r` will auto-calculate part size (supports all partitions on emmc/ufs and only `ubipac` on NAND).

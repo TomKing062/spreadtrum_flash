@@ -54,13 +54,58 @@ DWORD FindPort(const char* USB_DL)
 	}
 	return 0;
 }
+#else
+libusb_device* curPort = NULL;
+libusb_device** ports = NULL;
+libusb_device* FindPort(void)
+{
+	libusb_device** devs;
+	int usb_cnt, count = 0;
 
+	usb_cnt = libusb_get_device_list(NULL, &devs);
+	if (usb_cnt < 0) {
+		DBG_LOG("Get device list error\n");
+		return NULL;
+	}
+	for (int i = 0; i < usb_cnt; i++) {
+		libusb_device* dev = devs[i];
+		struct libusb_device_descriptor desc;
+		int r = libusb_get_device_descriptor(dev, &desc);
+		if (r < 0) {
+			DBG_LOG("Failed to get device descriptor\n");
+			continue;
+		}
+		if (desc.idVendor == 0x1782 && desc.idProduct == 0x4d00)
+		{
+			libusb_device** temp = (libusb_device**)realloc(ports, (count + 2) * sizeof(libusb_device*));
+			if (temp == NULL) {
+				DBG_LOG("Memory allocation failed.\n");
+				libusb_free_device_list(devs, 1);
+				free(ports);
+				ports = NULL;
+				return NULL;
+			}
+			ports = temp;
+			ports[count++] = dev;
+		}
+	}
+	libusb_free_device_list(devs, 1);
+	if (count > 0) {
+		ports[count] = NULL;
+		return ports[0];
+	}
+	return NULL;
+}
+#endif
+
+#ifdef _MSC_VER
 void usleep(unsigned int us)
 {
 	Sleep(us / 1000);
 }
 #endif
 
+extern int bListenLibusb;
 extern int m_bOpened;
 
 void print_mem(FILE* f, uint8_t* buf, size_t len) {
@@ -198,11 +243,14 @@ spdio_t* spdio_init(int flags) {
 void spdio_free(spdio_t* io) {
 	if (!io) return;
 #if _WIN32
-	PostThreadMessage(io->iThread, THRD_MESSAGE_EXIT, 0, 0);
-	WaitForSingleObject(io->hThread, INFINITE);
-	CloseHandle(io->hThread);
+	if (!bListenLibusb) {
+		PostThreadMessage(io->iThread, THRD_MESSAGE_EXIT, 0, 0);
+		WaitForSingleObject(io->hThread, INFINITE);
+		CloseHandle(io->hThread);
+	}
 #endif
 #if USE_LIBUSB
+	if (bListenLibusb) stopUsbEventHandle();
 	libusb_close(io->dev_handle);
 	libusb_exit(NULL);
 #else
@@ -314,12 +362,10 @@ int send_msg(spdio_t* io) {
 	if (!io->enc_len)
 		ERR_EXIT("empty message\n");
 
-#if _WIN32
 	if (m_bOpened == -1) {
 		spdio_free(io);
 		ERR_EXIT("device removed, exiting...\n");
 	}
-#endif
 	if (io->verbose >= 2) {
 		DBG_LOG("send (%d):\n", io->enc_len);
 		print_mem(stderr, io->enc_buf, io->enc_len);
@@ -360,12 +406,10 @@ int recv_msg_orig(spdio_t* io) {
 	memset(io->recv_buf, 0, 8);
 	for (;;) {
 		if (pos >= len) {
-#if _WIN32
 			if (m_bOpened == -1) {
 				spdio_free(io);
 				ERR_EXIT("device removed, exiting...\n");
 			}
-#endif
 #if USE_LIBUSB
 			int err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &len, io->timeout);
 			if (err == LIBUSB_ERROR_NO_DEVICE)
@@ -589,7 +633,10 @@ unsigned dump_flash(spdio_t* io,
 	FILE* fo;
 	if (savepath[0]) {
 		char fix_fn[1024];
-		sprintf(fix_fn, "%s/%s", savepath, fn);
+		char* ch;
+		if ((ch = strrchr(fn, '/'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
+		else if ((ch = strrchr(fn, '\\'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
+		else sprintf(fix_fn, "%s/%s", savepath, fn);
 		fo = fopen(fix_fn, "wb");
 	}
 	else fo = fopen(fn, "wb");
@@ -631,8 +678,11 @@ unsigned dump_mem(spdio_t* io,
 	int ret;
 	FILE* fo;
 	if (savepath[0]) {
-		char fix_fn[2048];
-		sprintf(fix_fn, "%s/%s", savepath, fn);
+		char fix_fn[1024];
+		char* ch;
+		if ((ch = strrchr(fn, '/'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
+		else if ((ch = strrchr(fn, '\\'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
+		else sprintf(fix_fn, "%s/%s", savepath, fn);
 		fo = fopen(fix_fn, "wb");
 	}
 	else fo = fopen(fn, "wb");
@@ -763,8 +813,11 @@ uint64_t dump_partition(spdio_t* io,
 	if (send_and_check(io)) return 0;
 
 	if (savepath[0]) {
-		char fix_fn[2048];
-		sprintf(fix_fn, "%s/%s", savepath, fn);
+		char fix_fn[1024];
+		char* ch;
+		if ((ch = strrchr(fn, '/'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
+		else if ((ch = strrchr(fn, '\\'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
+		else sprintf(fix_fn, "%s/%s", savepath, fn);
 		fo = fopen(fix_fn, "wb");
 	}
 	else fo = fopen(fn, "wb");
@@ -844,11 +897,11 @@ uint64_t read_pactime(spdio_t* io) {
 
 int scan_xml_partitions(const char* fn, uint8_t* buf, size_t buf_size) {
 	const char* part1 = "Partitions>";
-	char* src, * p, name[36]; size_t size = 0;
+	char* src, * p, name[36]; size_t fsize = 0;
 	int part1_len = strlen(part1), found = 0, stage = 0;
-	src = (char*)loadfile(fn, &size, 1);
+	src = (char*)loadfile(fn, &fsize, 1);
 	if (!src) ERR_EXIT("loadfile failed\n");
-	src[size] = 0;
+	src[fsize] = 0;
 	p = src;
 	for (;;) {
 		int i, a = *p++, n; char c; long long size;
@@ -894,7 +947,7 @@ int scan_xml_partitions(const char* fn, uint8_t* buf, size_t buf_size) {
 		DBG_LOG("[%d] %s, %d\n", found, name, (int)size);
 		found++;
 	}
-	if (p - 1 != src + size) ERR_EXIT("xml: zero byte");
+	if (p - 1 != src + fsize) ERR_EXIT("xml: zero byte");
 	if (stage != 2) ERR_EXIT("xml: unexpected syntax\n");
 	free(src);
 	return found;
@@ -1109,7 +1162,7 @@ void repartition(spdio_t* io, const char* fn) {
 void erase_partition(spdio_t* io, const char* name) {
 	if (!memcmp(name, "userdata", 8)) select_partition(io, name, 1048576, 0, BSL_CMD_ERASE_FLASH);
 	else select_partition(io, name, 0, 0, BSL_CMD_ERASE_FLASH);
-	send_and_check(io);
+	if (!send_and_check(io)) DBG_LOG("Erase Part Done: %s\n", name);
 }
 
 void load_partition(spdio_t* io, const char* name,
@@ -1119,6 +1172,7 @@ void load_partition(spdio_t* io, const char* name,
 	FILE* fi;
 
 	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
+	if (strstr(name, "metadata")) { erase_partition(io, name); return; }
 	if (!strcmp(name, "calinv")) { return; } //skip calinv
 
 	fi = fopen(fn, "rb");
@@ -1138,21 +1192,35 @@ void load_partition(spdio_t* io, const char* name,
 	if (send_and_check(io)) { fclose(fi); return; }
 
 #if !USE_LIBUSB
-	if (Da_Info.bSupportRawData == 2) {
-		encode_msg(io, BSL_CMD_DLOAD_RAW_START2, NULL, 0);
-		if (send_and_check(io)) { Da_Info.bSupportRawData = 0; goto fallback_load; }
+	if (Da_Info.bSupportRawData) {
+		if (Da_Info.bSupportRawData > 1)
+		{
+			encode_msg(io, BSL_CMD_DLOAD_RAW_START2, NULL, 0);
+			if (send_and_check(io)) { Da_Info.bSupportRawData = 0; goto fallback_load; }
+		}
 		step = Da_Info.dwFlushSize << 10;
 		uint8_t* rawbuf = (uint8_t*)malloc(step + 1);
 		if (!rawbuf) ERR_EXIT("malloc failed\n");
 
 		for (offset = 0; (n64 = len - offset); offset += n) {
 			n = (unsigned)(n64 > step ? step : n64);
-#if _WIN32
 			if (m_bOpened == -1) {
 				spdio_free(io);
 				ERR_EXIT("device removed, exiting...\n");
 			}
-#endif
+			if (Da_Info.bSupportRawData == 1) {
+				uint32_t data[3];
+				uint32_t t32 = offset >> 32;
+				WRITE32_LE(data, offset);
+				WRITE32_LE(data + 1, t32);
+				WRITE32_LE(data + 2, n);
+				encode_msg(io, BSL_CMD_DLOAD_RAW_START, data, 12);
+				if (send_and_check(io))
+				{
+					if (offset) break;
+					else { free(rawbuf); step = 0xff00; Da_Info.bSupportRawData = 0; goto fallback_load; }
+				}
+			}
 			if (fread(rawbuf, 1, n, fi) != n)
 				ERR_EXIT("fread(load) failed\n");
 //#if USE_LIBUSB
@@ -1575,6 +1643,7 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) 
 		snprintf(dfile, sizeof(dfile), "%s.bin", partitions[i].name);
 		dump_partition(io, pn, 0, realsize, dfile, blk_size);
 	}
+	if (selected_ab > 0) { DBG_LOG("saving slot info\n"); dump_partition(io, "misc", 0, 1048576, "misc.bin", blk_size); }
 
 	if (savepath[0]) {
 		DBG_LOG("saving dump list\n");
@@ -1591,6 +1660,7 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) 
 	free(partitions);
 }
 
+int ab_compare_slots(const slot_metadata* a, const slot_metadata* b);
 void load_partitions(spdio_t* io, const char* path, int blk_size) {
 	typedef struct {
 		char name[36];
@@ -1598,6 +1668,8 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		int written_flag;
 	} partition_info_t;
 
+	char miscname[1024] = { 0 };
+	int VAB = 0;
 	int partition_count = 0;
 	partition_info_t* partitions = malloc(128 * sizeof(partition_info_t));
 	if (partitions == NULL) return;
@@ -1635,6 +1707,15 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		snprintf(partitions[partition_count].file_path, sizeof(partitions[partition_count].file_path), "%s/%s", path, fn);
 		char* dot = strrchr(fn, '.');
 		if (dot != NULL) *dot = '\0';
+		if (!strcmp(fn, "misc")) snprintf(miscname, 1024, "%s", partitions[partition_count].file_path);
+		if (!VAB) {
+			size_t namelen = strlen(fn);
+			if (namelen > 2)
+			{
+				if(!strcmp(fn + namelen - 2, "_a")) VAB = 1;
+				else if (!strcmp(fn + namelen - 2, "_b")) VAB = 2;
+			}
+		}
 
 		snprintf(partitions[partition_count].name, sizeof(partitions[partition_count].name), "%s", fn);
 		partitions[partition_count].written_flag = 0;
@@ -1647,26 +1728,47 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 #endif
 	int verbose = io->verbose;
 	if (selected_ab < 0) select_ab(io);
+	int load_partitions_selected_ab = 0;
+	bootloader_control* abc = NULL;
+	size_t misclen = 0;
+	if (miscname[0]) {
+		uint8_t* mem = loadfile(miscname, &misclen, 0);
+		if (misclen >= 0x820) {
+			abc = (bootloader_control*)(mem + 0x800);
+			if (abc->nb_slot != 2) load_partitions_selected_ab = 0;
+			if (ab_compare_slots(&abc->slot_info[1], &abc->slot_info[0]) < 0) load_partitions_selected_ab = 2;
+			else load_partitions_selected_ab = 1;
+		}
+		free(mem);
+	}
+	if (!load_partitions_selected_ab)
+	{
+		if (VAB) load_partitions_selected_ab = VAB;
+		else if (selected_ab > 0) load_partitions_selected_ab = selected_ab;
+	}
+
 	for (int i = 0; i < partition_count; i++) {
-		if (strcmp(partitions[i].name, "splloader") == 0
-			|| strcmp(partitions[i].name, "uboot_a") == 0
-			|| strcmp(partitions[i].name, "uboot_b") == 0
-			|| strcmp(partitions[i].name, "vbmeta_a") == 0
-			|| strcmp(partitions[i].name, "vbmeta_b") == 0) {
-			load_partition(io, partitions[i].name, partitions[i].file_path, blk_size);
+		fn = partitions[i].name;
+		size_t namelen = strlen(fn);
+		if (load_partitions_selected_ab == 1 && namelen > 2 && 0 == strcmp(fn + namelen - 2, "_b")) { partitions[i].written_flag = 1; continue; }
+		else if (load_partitions_selected_ab == 2 && namelen > 2 && 0 == strcmp(fn + namelen - 2, "_a")) { partitions[i].written_flag = 1; continue; }
+		if (strcmp(fn, "splloader") == 0
+			|| strcmp(fn, "uboot_a") == 0
+			|| strcmp(fn, "uboot_b") == 0
+			|| strcmp(fn, "vbmeta_a") == 0
+			|| strcmp(fn, "vbmeta_b") == 0) {
+			load_partition(io, fn, partitions[i].file_path, blk_size);
 			partitions[i].written_flag = 1;
-			if (strcmp(partitions[i].name, "vbmeta_b") == 0) break;
 			continue;
 		}
-		if (strcmp(partitions[i].name, "uboot") == 0 || strcmp(partitions[i].name, "vbmeta") == 0) {
+		if (strcmp(fn, "uboot") == 0 || strcmp(fn, "vbmeta") == 0) {
 			uint64_t realsize = 0;
 			char name_ab[36];
 			io->verbose = 0;
-			fn = partitions[i].name;
 			realsize = check_partition(io, fn);
 			if (!realsize) {
-				if (selected_ab > 0) {
-					snprintf(name_ab, sizeof(name_ab), "%s_%c", fn, 96 + selected_ab);
+				if (load_partitions_selected_ab > 0) {
+					snprintf(name_ab, sizeof(name_ab), "%s_%c", fn, 96 + load_partitions_selected_ab);
 					realsize = check_partition(io, name_ab);
 					fn = name_ab;
 				}
@@ -1679,7 +1781,12 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 			io->verbose = verbose;
 			load_partition(io, fn, partitions[i].file_path, blk_size);
 			partitions[i].written_flag = 1;
-			if(strcmp(partitions[i].name, "uboot")) break;
+			if (strcmp(partitions[i].name, "uboot")) break; //fn might be name_ab
+			continue;
+		}
+		if (strncmp(fn, "vbmeta_", 7) == 0) {
+			load_partition(io, fn, partitions[i].file_path, blk_size);
+			partitions[i].written_flag = 1;
 			continue;
 		}
 	}
@@ -1691,8 +1798,8 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 			fn = partitions[i].name;
 			realsize = check_partition(io, fn);
 			if (!realsize) {
-				if (selected_ab > 0) {
-					snprintf(name_ab, sizeof(name_ab), "%s_%c", fn, 96 + selected_ab);
+				if (load_partitions_selected_ab > 0) {
+					snprintf(name_ab, sizeof(name_ab), "%s_%c", fn, 96 + load_partitions_selected_ab);
 					realsize = check_partition(io, name_ab);
 					fn = name_ab;
 				}
@@ -1772,64 +1879,93 @@ void select_ab(spdio_t* io)
 
 void dm_disable(spdio_t* io, int blk_size)
 {
-	const char* list[] = { "vbmeta", "vbmeta_a", "vbmeta_b", NULL };
-	char dfile[40];
-	for (int i = 0; list[i] != NULL; i++) {
-		sprintf(dfile, "%s.bin", list[i]);
-		if (1048576 != dump_partition(io, list[i], 0, 1048576, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE)) {
-			remove(dfile);
-			continue;
+	int verbose = io->verbose;
+	if (selected_ab < 0) select_ab(io);
+	const char* pn = "vbmeta";
+	uint64_t realsize = 0;
+	char name_ab[36];
+	io->verbose = 0;
+	realsize = check_partition(io, pn);
+	if (!realsize) {
+		if (selected_ab > 0) {
+			snprintf(name_ab, sizeof(name_ab), "%s_%c", pn, 96 + selected_ab);
+			realsize = check_partition(io, name_ab);
+			pn = name_ab;
+		}
+		if (!realsize) {
+			DBG_LOG("part not exist\n");
+			io->verbose = verbose;
+			return;
 		}
 	}
-	for (int i = 0; list[i] != NULL; i++) {
-		sprintf(dfile, "%s.bin", list[i]);
-		FILE* vb = fopen(dfile, "r");
-		if (!vb) {
-			DBG_LOG("File %s does not exist, skipping.\n", dfile);
-			continue;
-		}
-		fclose(vb);
-		vb = fopen(dfile, "rb+");
-		if (!vb) ERR_EXIT("fopen %s failed\n", dfile);
-		char header[4];
-		if (fread(header, 1, 4, vb) != 4) ERR_EXIT("Failed to read header\n");
-		if (memcmp(header, "DHTB", 4)) {
-			if (fseek(vb, 0x7B, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
-			char ch = '\1';
-			if (fwrite(&ch, 1, 1, vb) != 1) ERR_EXIT("fwrite failed\n");
-		}
-		else { DBG_LOG("unsupported\n"); break; }
-		fclose(vb);
+	io->verbose = verbose;
 
-		load_partition(io, list[i], dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+	char dfile[40];
+	snprintf(dfile, sizeof(dfile), "vbmeta.bin");
+	if (1048576 != dump_partition(io, pn, 0, 1048576, dfile, blk_size)) {
+		remove(dfile);
+		return;
 	}
+	FILE* vb;
+	char fix_fn[1024];
+	if (savepath[0]) {
+		sprintf(fix_fn, "%s/%s", savepath, dfile);
+		vb = fopen(fix_fn, "rb+");
+	}
+	else vb = fopen(dfile, "rb+");
+	if (!vb) ERR_EXIT("fopen %s failed\n", dfile);
+	char header[4];
+	if (fread(header, 1, 4, vb) != 4) ERR_EXIT("Failed to read header\n");
+	if (memcmp(header, "DHTB", 4)) {
+		if (fseek(vb, 0x7B, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
+		char ch = '\1';
+		if (fwrite(&ch, 1, 1, vb) != 1) ERR_EXIT("fwrite failed\n");
+	}
+	else { DBG_LOG("unsupported\n"); fclose(vb); return; }
+	fclose(vb);
+
+	if (savepath[0]) load_partition(io, pn, fix_fn, blk_size);
+	else load_partition(io, pn, dfile, blk_size);
 }
 
 void dm_enable(spdio_t* io, int blk_size)
 {
-	const char* list[] = { "vbmeta", "vbmeta_a", "vbmeta_b",
-					"vbmeta_system", "vbmeta_system_a", "vbmeta_system_b",
-					"vbmeta_vendor", "vbmeta_vendor_a", "vbmeta_vendor_b",
-					"vbmeta_system_ext", "vbmeta_system_ext_a", "vbmeta_system_ext_b",
-					"vbmeta_product", "vbmeta_product_a", "vbmeta_product_b",
-					"vbmeta_odm", "vbmeta_odm_a", "vbmeta_odm_b", NULL };
-	char dfile[40];
+	const char* list[] = { "vbmeta", "vbmeta_system", "vbmeta_vendor", "vbmeta_system_ext", "vbmeta_product", "vbmeta_odm", NULL };
+	int verbose = io->verbose;
+	if (selected_ab < 0) select_ab(io);
 	for (int i = 0; list[i] != NULL; i++) {
-		sprintf(dfile, "%s.bin", list[i]);
-		if (1048576 != dump_partition(io, list[i], 0, 1048576, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE)) {
+		const char* pn = list[i];
+		uint64_t realsize = 0;
+		char name_ab[36];
+		io->verbose = 0;
+		realsize = check_partition(io, pn);
+		if (!realsize) {
+			if (selected_ab > 0) {
+				snprintf(name_ab, sizeof(name_ab), "%s_%c", pn, 96 + selected_ab);
+				realsize = check_partition(io, name_ab);
+				pn = name_ab;
+			}
+			if (!realsize) {
+				DBG_LOG("part not exist\n");
+				io->verbose = verbose;
+				continue;
+			}
+		}
+		io->verbose = verbose;
+
+		char dfile[40];
+		snprintf(dfile, sizeof(dfile), "%s.bin", list[i]);
+		if (1048576 != dump_partition(io, pn, 0, 1048576, dfile, blk_size)) {
 			remove(dfile);
 			continue;
 		}
-	}
-	for (int i = 0; list[i] != NULL; i++) {
-		sprintf(dfile, "%s.bin", list[i]);
-		FILE* vb = fopen(dfile, "r");
-		if (!vb) {
-			DBG_LOG("File %s does not exist, skipping.\n", dfile);
-			continue;
+		FILE* vb;
+		char fix_fn[1024];
+		if (savepath[0]) {
+			sprintf(fix_fn, "%s/%s", savepath, dfile);
+			vb = fopen(fix_fn, "rb+");
 		}
-		fclose(vb);
-		vb = fopen(dfile, "rb+");
+		else vb = fopen(dfile, "rb+");
 		if (!vb) ERR_EXIT("fopen %s failed\n", dfile);
 		char header[4];
 		if (fread(header, 1, 4, vb) != 4) ERR_EXIT("Failed to read header\n");
@@ -1838,17 +1974,17 @@ void dm_enable(spdio_t* io, int blk_size)
 			char ch = '\0';
 			if (fwrite(&ch, 1, 1, vb) != 1) ERR_EXIT("fwrite failed\n");
 		}
-		else { DBG_LOG("unsupported\n"); break; }
+		else { DBG_LOG("unsupported\n"); fclose(vb); break; }
 		fclose(vb);
-
-		load_partition(io, list[i], dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+		if (savepath[0]) load_partition(io, pn, fix_fn, blk_size);
+		else load_partition(io, pn, dfile, blk_size);
 	}
 }
 
 #if _WIN32
 const _TCHAR CLASS_NAME[] = _T("Sample Window Class");
 
-HWND hWnd;
+HWND g_hWnd;
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
@@ -1867,9 +2003,23 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			case DBT_DEVTYP_DEVICEINTERFACE:
 				pDevInf = (PDEV_BROADCAST_DEVICEINTERFACE)pHdr;
 #if USE_LIBUSB
-				if (my_strstr(pDevInf->dbcc_name, _T("VID_1782&PID_4D00")))
-					if (DBT_DEVICEREMOVECOMPLETE == wParam)
-						m_bOpened = -1;
+				if (DBT_DEVICEREMOVECOMPLETE == wParam)
+				{
+					libusb_device* changedPort = FindPort();
+					if (changedPort == NULL) m_bOpened = -1;
+					else
+					{
+						libusb_device** port = ports;
+						while (*port != NULL)
+						{
+							if (curPort == *port) break;
+							port++;
+						}
+						if (*port == NULL) m_bOpened = -1;
+						free(ports);
+						ports = NULL;
+					}
+				}
 #else
 				if (my_strstr(pDevInf->dbcc_name, _T("VID_1782&PID_4D00"))) interface_checked = TRUE;
 				else if (my_strstr(pDevInf->dbcc_name, _T("VID_1782&PID_4D03"))) {
@@ -1914,16 +2064,15 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam)
 	wc.lpszClassName = CLASS_NAME;
 	if (0 == RegisterClass(&wc)) return -1;
 
-	hWnd = CreateWindowEx(0, CLASS_NAME, _T(""), WS_OVERLAPPEDWINDOW,
+	g_hWnd = CreateWindowEx(0, CLASS_NAME, _T(""), WS_OVERLAPPEDWINDOW,
 		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
 		NULL,       // Parent window
 		NULL,       // Menu
 		GetModuleHandle(NULL),  // Instance handle
 		NULL        // Additional application data
 	);
-	if (hWnd==NULL) return -1;
+	if (g_hWnd == NULL) return -1;
 
-	HDEVNOTIFY hDevNotify;
 	DEV_BROADCAST_DEVICEINTERFACE NotificationFilter;
 #if USE_LIBUSB
 	const GUID GUID_DEVINTERFACE = { 0xa5dcbf10, 0x6530, 0x11d2, { 0x90, 0x1f, 0x00, 0xc0, 0x4f, 0xb9, 0x51, 0xed } };
@@ -1934,7 +2083,7 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam)
 	NotificationFilter.dbcc_size = sizeof(DEV_BROADCAST_DEVICEINTERFACE);
 	NotificationFilter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
 	NotificationFilter.dbcc_classguid = GUID_DEVINTERFACE;
-	hDevNotify = RegisterDeviceNotification(hWnd, &NotificationFilter, DEVICE_NOTIFY_WINDOW_HANDLE);
+	if(RegisterDeviceNotification(g_hWnd, &NotificationFilter, DEVICE_NOTIFY_WINDOW_HANDLE) == NULL)  return -1;
 
 	MSG msg;
 	while (GetMessage(&msg, NULL, 0, 0))
@@ -1946,6 +2095,8 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam)
 
 	return 0;
 }
+#endif
+
 #if !USE_LIBUSB
 void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 {
@@ -1957,38 +2108,39 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 	{
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
-			if (curPort) break;
+			if (curPort) {
+				if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
+				break;
+			}
 			if (100 * i >= ms) ERR_EXIT("find port failed\n");
 			usleep(100000);
 		}
-		if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
 
 		uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0,0x7e };
 		if (!bootmode) {
 			uint8_t hello[10] = { 0x7e,0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e };
+
+			if (!(bytes_written = call_Write(io->handle, hello, sizeof(hello)))) ERR_EXIT("Error writing to serial port\n");
 			if (io->verbose >= 2) {
-				DBG_LOG("send (%d):\n", sizeof(hello));
+				DBG_LOG("send (%d):\n", (int)sizeof(hello));
 				print_mem(stderr, hello, sizeof(hello));
 			}
-			if (!(bytes_written = call_Write(io->handle, hello, sizeof(hello)))) ERR_EXIT("Error writing to serial port\n");
 			if (!(bytes_read = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout))) ERR_EXIT("read response from boot mode failed\n");
-			else
-			{
-				if (io->verbose >= 2) {
-					DBG_LOG("read (%d):\n", bytes_read);
-					print_mem(stderr, io->recv_buf, bytes_read);
-				}
-				if (io->recv_buf[2] == BSL_REP_VER) return;
+			if (io->verbose >= 2) {
+				DBG_LOG("read (%d):\n", bytes_read);
+				print_mem(stderr, io->recv_buf, bytes_read);
 			}
+			if (io->recv_buf[2] == BSL_REP_VER) return;
 			payload[8] = 0x82;
 		}
 		else if (at) payload[8] = 0x81;
 		else payload[8] = bootmode + 0x80;
+
+		if (!(bytes_written = call_Write(io->handle, payload, sizeof(payload)))) ERR_EXIT("Error writing to serial port\n");
 		if (io->verbose >= 2) {
-			DBG_LOG("send (%d):\n", sizeof(payload));
+			DBG_LOG("send (%d):\n", (int)sizeof(payload));
 			print_mem(stderr, payload, sizeof(payload));
 		}
-		if (!(bytes_written = call_Write(io->handle, payload, sizeof(payload)))) ERR_EXIT("Error writing to serial port\n");
 		if ((bytes_read = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout)))
 		{
 			if (io->verbose >= 2) {
@@ -1999,14 +2151,14 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 			else if (io->recv_buf[2] != 0x7e)
 			{
 				uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
-				if (io->verbose >= 2) {
-					DBG_LOG("send (%d):\n", sizeof(autod));
-					print_mem(stderr, autod, sizeof(autod));
-				}
+				usleep(500000);
 				if ((bytes_written = call_Write(io->handle, autod, sizeof(autod))))
 				{
-					if (!(bytes_read = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout))) ERR_EXIT("read response from cali mode failed\n");
-					else
+					if (io->verbose >= 2) {
+						DBG_LOG("send (%d):\n", (int)sizeof(autod));
+						print_mem(stderr, autod, sizeof(autod));
+					}
+					if ((bytes_read = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout)))
 					{
 						uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
 						if (io->verbose >= 2) {
@@ -2032,7 +2184,7 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 				m_bOpened = 0;
 				break;
 			}
-			if (i >= 50)
+			if (i >= 100)
 			{
 				if (io->recv_buf[2] == BSL_REP_VER) return;
 				else ERR_EXIT("kick reboot timeout, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
@@ -2042,5 +2194,196 @@ void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
 		if (!at) done = 1;
 	}
 }
+#else
+#ifndef _MSC_VER
+pthread_t gUsbEventThrd;
+libusb_hotplug_callback_handle gHotplugCbHandle = 0;
+
+int HotplugCbFunc(libusb_context* ctx, libusb_device* device, libusb_hotplug_event event, void* user_data)
+{
+	if (event == LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED) { if (!curPort) curPort = device; }
+	else { if (curPort == device) m_bOpened = -1; }
+	return 0;
+}
+
+void* UsbThrdFunc(void* param) {
+	int ret;
+	while (bListenLibusb) {
+		ret = libusb_handle_events(NULL);
+		if (ret < 0)
+			DBG_LOG("libusb_handle_events() failed: %s\n", libusb_error_name(ret));
+	}
+	return NULL;
+}
+
+void startUsbEventHandle(void) {
+	int ret = libusb_hotplug_register_callback(
+		NULL,
+		LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED | LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT,
+		LIBUSB_HOTPLUG_NO_FLAGS,
+		0x1782,
+		LIBUSB_HOTPLUG_MATCH_ANY,
+		LIBUSB_HOTPLUG_MATCH_ANY,
+		HotplugCbFunc,
+		NULL,
+		&gHotplugCbHandle);
+	if (ret != LIBUSB_SUCCESS) ERR_EXIT("libusb_hotplug_register_callback failed, error: %d\n", ret);
+
+	ret = pthread_create(&gUsbEventThrd, NULL, UsbThrdFunc, NULL);
+	if (ret != 0) {
+		libusb_hotplug_deregister_callback(NULL, gHotplugCbHandle);
+		ERR_EXIT("Failed to create thread, error: %d\n", ret);
+	}
+
+	bListenLibusb = 1;
+}
+
+void stopUsbEventHandle(void) {
+	bListenLibusb = 0;
+	libusb_hotplug_deregister_callback(NULL, gHotplugCbHandle);
+
+	int ret = pthread_join(gUsbEventThrd, NULL);
+	if (ret != 0) DBG_LOG("Failed to join thread, error: %d\n", ret);
+}
+#else
+void startUsbEventHandle(void) {
+	DBG_LOG("startUsbEventHandle() is not supported in MSVC. Please use MSYS2 if you need it.\n");
+}
+
+void stopUsbEventHandle(void) {
+	DBG_LOG("stopUsbEventHandle() is not supported in MSVC. Please use MSYS2 if you need it.\n");
+}
 #endif
+void ChangeMode(spdio_t* io, int ms, int bootmode, int at)
+{
+	int err, bytes_written, bytes_read;
+	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
+	int done = 0;
+
+	while (!done)
+	{
+		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
+		for (int i = 0; ; i++) {
+			if (curPort) {
+				if (libusb_open(curPort, &io->dev_handle) < 0) ERR_EXIT("Connection failed\n");
+				call_Initialize_libusb(io);
+				break;
+			}
+			if (100 * i >= ms) ERR_EXIT("find port failed\n");
+			usleep(100000);
+		}
+
+		uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0,0x7e };
+		if (!bootmode) {
+			uint8_t hello[10] = { 0x7e,0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e };
+
+			err = libusb_bulk_transfer(io->dev_handle,
+				io->endp_out, hello, sizeof(hello), &bytes_written, io->timeout);
+			if (err < 0)
+				ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
+			if (io->verbose >= 2) {
+				DBG_LOG("send (%d):\n", (int)sizeof(hello));
+				print_mem(stderr, hello, sizeof(hello));
+			}
+			err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &bytes_read, io->timeout);
+			if (err == LIBUSB_ERROR_NO_DEVICE)
+				ERR_EXIT("connection closed\n");
+			else if (err < 0)
+				ERR_EXIT("usb_recv failed : %s\n", libusb_error_name(err));
+			if (!bytes_read) ERR_EXIT("read response from boot mode failed\n");
+			if (io->verbose >= 2) {
+				DBG_LOG("read (%d):\n", bytes_read);
+				print_mem(stderr, io->recv_buf, bytes_read);
+			}
+			if (io->recv_buf[2] == BSL_REP_VER) return;
+			payload[8] = 0x82;
+		}
+		else if (at) payload[8] = 0x81;
+		else payload[8] = bootmode + 0x80;
+
+		err = libusb_bulk_transfer(io->dev_handle,
+			io->endp_out, payload, sizeof(payload), &bytes_written, io->timeout);
+		if (err < 0)
+			ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
+		if (io->verbose >= 2) {
+			DBG_LOG("send (%d):\n", (int)sizeof(payload));
+			print_mem(stderr, payload, sizeof(payload));
+		}
+		err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &bytes_read, io->timeout);
+		if (err == LIBUSB_ERROR_NO_DEVICE)
+			DBG_LOG("connection closed\n");
+		else if (err < 0)
+			ERR_EXIT("usb_recv failed : %s\n", libusb_error_name(err));
+		else if (bytes_read)
+		{
+			if (io->verbose >= 2) {
+				DBG_LOG("read (%d):\n", bytes_read);
+				print_mem(stderr, io->recv_buf, bytes_read);
+			}
+			if (io->recv_buf[2] == BSL_REP_VER) { if (io->recv_buf[9] < '4') return; }
+			else if (io->recv_buf[2] != 0x7e)
+			{
+				uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
+				usleep(500000);
+				err = libusb_bulk_transfer(io->dev_handle,
+					io->endp_out, autod, sizeof(autod), &bytes_written, io->timeout);
+				if (err >= 0)
+				{
+					if (io->verbose >= 2) {
+						DBG_LOG("send (%d):\n", (int)sizeof(autod));
+						print_mem(stderr, autod, sizeof(autod));
+					}
+					err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &bytes_read, io->timeout);
+					if (err == LIBUSB_ERROR_NO_DEVICE)
+						DBG_LOG("connection closed\n");
+					else if (err < 0)
+						ERR_EXIT("usb_recv failed : %s\n", libusb_error_name(err));
+					else if (bytes_read)
+					{
+						uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
+						if (io->verbose >= 2) {
+							DBG_LOG("read (%d):\n", bytes_read);
+							print_mem(stderr, io->recv_buf, bytes_read);
+						}
+						if (!memcmp(io->recv_buf + bytes_read - 7, ok, 6)) done = 1;
+						else {
+							DBG_LOG("Unknown response\n");
+							if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
+						}
+					}
+				}
+			}
+		}
+		for (int i = 0; ; i++)
+		{
+			if (m_bOpened == -1)
+			{
+				libusb_close(io->dev_handle);
+				io->recv_buf[2] = 0;
+				curPort = 0;
+				m_bOpened = 0;
+				break;
+			}
+			if (i >= 100)
+			{
+				if (io->recv_buf[2] == BSL_REP_VER) return;
+				else ERR_EXIT("kick reboot timeout, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
+			}
+			usleep(100000);
+		}
+		if (!at) done = 1;
+	}
+}
+
+void call_Initialize_libusb(spdio_t* io)
+{
+	int endpoints[2];
+	find_endpoints(io->dev_handle, endpoints);
+	io->endp_in = endpoints[0];
+	io->endp_out = endpoints[1];
+	int ret = libusb_control_transfer(io->dev_handle, 0x21, 34, 0x601, 0, NULL, 0, io->timeout);
+	if (ret < 0) ERR_EXIT("libusb_control_transfer failed : %s\n", libusb_error_name(ret));
+	DBG_LOG("libusb_control_transfer ok\n");
+	m_bOpened = 1;
+}
 #endif

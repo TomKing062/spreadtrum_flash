@@ -38,6 +38,8 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
   尝试重新连接在brom/fdl1/fdl2阶段的设备。数字输入多少无所谓（甚至非数字也行）。
 
+  处于brom/fdl1阶段的设备可以无限次重新连接，但在fdl2阶段只能重新连接一次
+
 - `--verbose <等级>`
 
   设置屏幕日志的详细程度（支持0、1或2，不影响文件日志）。
@@ -45,16 +47,14 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 - `--kick`
 
   使用 `boot_diag->cali_diag->dl_diag` 途径连接设备。
-
-
+  
   boot_diag是在设备关机直接上电出现的u2s端口，其中cali_diag依赖原厂或少数经过定制的第三方recovery
 
 - `--kickto <模式>`
 
   使用`boot_diag->custom_diag` 途径连接设备。支持的模式为0-127。
-
-
-  (模式 1 = cali_diag, 模式 2 = dl_diag; 并非所有设备都支持模式 2)
+  
+  (模式0为ums9621平台的新版`--kickto 2`, 模式 1 = cali_diag, 模式 2 = dl_diag; 并非所有设备都支持模式 2)
 
 
 - `-h|--help|help`
@@ -99,8 +99,8 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
   指定nand芯片的4th id参数，该参数影响`read_part(s)`分区大小的算法，默认值为0x15。
 
-- `rawdata {0,2}`（仅限fdl2阶段）
-  rawdata协议用于加速`w`和`write_part`命令，当rawdata为2时，写入速度与blk_size无关（依赖于u-boot/lk，因此默认2的可以改0/2，默认0的不能改2，注意：暂时不支持默认rawdata=1的设备）
+- `rawdata {0,1,2}`（仅限fdl2阶段）
+  rawdata协议用于加速`w`和`write_part`命令，当rawdata为1或2时，写入速度与blk_size无关（依赖于u-boot/lk，请勿手动修改）
 
 - `blk_size byte`（仅限fdl2阶段）
   设置块大小，最大为65535字节。此选项用于加快`r`、`w`、`read_part(s)`和`write_part(s)`命令的速度。
@@ -110,6 +110,7 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
   当分区表可用时：
 
     - `r all`: 全盘备份 (跳过 blackbox, cache, userdata)
+    - `r all_lite`: 全盘备份（不包括非活动槽位, blackbox, cache和userdata）
 
   当分区表不可用时:
 
@@ -147,7 +148,6 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
   根据XML类型分区列表重新分区。
 
 - `p|print`
-
 
   打印分区列表
 

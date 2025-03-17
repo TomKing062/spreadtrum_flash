@@ -33,7 +33,7 @@ void print_help(void)
 		"\t\tConnects the device using the route boot_diag -> cali_diag -> dl_diag.\n"
 		"\t--kickto <mode>\n"
 		"\t\tConnects the device using a custom route boot_diag -> custom_diag. Supported modes are 0-127.\n"
-		"\t\t(mode 1 = cali_diag, mode 2 = dl_diag; not all devices support mode 2).\n"
+		"\t\t(mode 0 is `kickto 2` on ums9621, mode 1 = cali_diag, mode 2 = dl_diag; not all devices support mode 2).\n"
 		"\t-?|-h|--help\n"
 		"\t\tShow help and usage information\n"
 		"\nRuntime Commands\n"
@@ -55,9 +55,9 @@ void print_help(void)
 		"\t\tChanges the save directory for commands like r, read_part(s), read_flash, and read_mem.\n"
 		"\tnand_id [id]\n"
 		"\t\tSpecifies the 4th NAND ID, affecting read_part(s) size calculation, default value is 0x15.\n"
-		"\trawdata {0,2}\n\t\t(fdl2 stage only)\n"
-		"\t\tRawdata protocol helps speed up `w` and `write_part(s)` commands, when rawdata=2, `blk_size` will not effect write speed.\n"
-		"\t\t(rawdata relays on u-boot/lk, so don't set it manually unless its default value is 2. Note: rawdata = 1 is currently not supported.)\n"
+		"\trawdata {0,1,2}\n\t\t(fdl2 stage only)\n"
+		"\t\tRawdata protocol helps speed up `w` and `write_part(s)` commands, when rawdata > 0, `blk_size` will not effect write speed.\n"
+		"\t\t(rawdata relays on u-boot/lk, so don't set it manually.\n"
 		"\tblk_size byte\n\t\t(fdl2 stage only)\n"
 		"\t\tSets the block size, with a maximum of 65535 bytes. This option helps speed up `r`, `w`,`read_part(s)` and `write_part(s)` commands.\n"
 		"\tr all|part_name|part_id\n"
@@ -95,6 +95,7 @@ void print_help(void)
 #define REOPEN_FREQ 2
 extern char savepath[ARGV_LEN];
 extern DA_INFO_T Da_Info;
+int bListenLibusb = -1;
 int gpt_failed = 1;
 int m_bOpened = 0;
 int fdl1_loaded = 0;
@@ -111,7 +112,7 @@ int main(int argc, char **argv) {
 	char *temp;
 	char str1[(ARGC_MAX - 1) * ARGV_LEN];
 	char **str2;
-	char execfile[40];
+	char *execfile;
 	char fn_partlist[40];
 	int bootmode = -1, at = 0;
 	int part_count = 0;
@@ -119,14 +120,19 @@ int main(int argc, char **argv) {
 #if !USE_LIBUSB
 	extern DWORD curPort;
 	extern DWORD* ports;
+#else
+	extern libusb_device* curPort;
+	extern libusb_device** ports;
 #endif
+	execfile = malloc(ARGV_LEN);
+	if (!execfile) ERR_EXIT("malloc failed\n");
 
 	io = spdio_init(0);
 #if USE_LIBUSB
 #ifdef __ANDROID__
 	int xfd = -1; // This store termux gived fd
 	//libusb_device_handle *handle; // Use spdio_t.dev_handle
-	libusb_device* device;
+	//libusb_device* device; //use curPort
 	struct libusb_device_descriptor desc;
 	libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
 #endif
@@ -166,7 +172,6 @@ int main(int argc, char **argv) {
 			xfd = atoi(argv[argc - 1]);
 			argc -= 2; argv += 1;
 #endif
-#if !USE_LIBUSB
 		} else if (!strcmp(argv[1], "--kick")) {
 			if (argc <= 1) ERR_EXIT("bad option\n");
 			at = 1;
@@ -175,12 +180,35 @@ int main(int argc, char **argv) {
 			if (argc <= 2) ERR_EXIT("bad option\n");
 			bootmode = atoi(argv[2]); at = 0;
 			argc -= 2; argv += 2;
-#endif
 		} else break;
 	}
-
-#if !USE_LIBUSB
+#if defined(_DEBUG) && defined(USE_LIBUSB)
+	io->verbose = 2;
+#endif
 	if (stage == 99) { bootmode = -1; at = 0; }
+#ifdef __ANDROID__
+	bListenLibusb = 0;
+	DBG_LOG("Try to convert termux transfered usb port fd.\n");
+	// handle
+	if (xfd < 0)
+		ERR_EXIT("Example: termux-usb -e \"./spd_dump --usb-fd\" /dev/bus/usb/xxx/xxx\n"
+			"run on android need provide --usb-fd\n");
+
+	if (libusb_wrap_sys_device(NULL, (intptr_t)xfd, &io->dev_handle))
+		ERR_EXIT("libusb_wrap_sys_device exit unconditionally!\n");
+
+	curPort = libusb_get_device(io->dev_handle);
+	if (libusb_get_device_descriptor(curPort, &desc))
+		ERR_EXIT("libusb_get_device exit unconditionally!");
+
+	DBG_LOG("Vendor ID: %04x\nProduct ID: %04x\n", desc.idVendor, desc.idProduct);
+	if (desc.idVendor != 0x1782 || desc.idProduct != 0x4d00) {
+		ERR_EXIT("It seems spec device not a spd device!\n");
+	}
+	call_Initialize_libusb(io);
+#else
+#if !USE_LIBUSB
+	bListenLibusb = 0;
 	if (at || bootmode >= 0)
 	{
 		io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
@@ -194,72 +222,89 @@ int main(int argc, char **argv) {
 		curPort = FindPort("SPRD U2S Diag");
 		if (curPort)
 		{
-			for (DWORD* port = ports; *port != 0; port++) { if (call_ConnectChannel(io->handle, *port)) break; }
+			for (DWORD* port = ports; *port != 0; port++)
+			{
+				if (call_ConnectChannel(io->handle, *port))
+				{
+					curPort = *port;
+					break;
+				}
+			}
 			if (!m_bOpened) curPort = 0;
 			free(ports);
 			ports = NULL;
 		}
 	}
+#else
+	if (!libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) { DBG_LOG("hotplug unsupported on this platform\n"); bListenLibusb = 0; bootmode = -1; at = 0; }
+	if (at || bootmode >= 0)
+	{
+		startUsbEventHandle();
+		ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode, at);
+		wait = 30 * REOPEN_FREQ;
+		stage = -1;
+	}
+	else
+	{
+		curPort = FindPort();
+		if (curPort != NULL)
+		{
+			for (libusb_device** port = ports; *port != NULL; port++)
+			{
+				if (libusb_open(*port, &io->dev_handle) >= 0) {
+					call_Initialize_libusb(io);
+					curPort = *port;
+					break;
+				}
+			}
+			if (!m_bOpened) curPort = 0;
+			free(ports);
+			ports = NULL;
+		}
+	}
+	if (bListenLibusb < 0) startUsbEventHandle();
 #endif
 #if _WIN32
-	if (io->hThread == NULL) io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
-	if (io->hThread == NULL) return -1;
-#endif
-#ifndef __ANDROID__
-	if (!m_bOpened) DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
-	for (i = 0; ; i++) {
-#if USE_LIBUSB
-		io->dev_handle = libusb_open_device_with_vid_pid(NULL, 0x1782, 0x4d00);
-		if (io->dev_handle) break;
-		if (i >= wait)
-			ERR_EXIT("libusb_open_device failed\n");
-#else
-		if (io->verbose) DBG_LOG("CurTime: %.1f, CurPort: %d\n", (float)i / REOPEN_FREQ, curPort);
-		if (curPort) break;
-		if (i >= wait)
-			ERR_EXIT("find port failed\n");
-#endif
-		usleep(1000000 / REOPEN_FREQ);
+	if (!bListenLibusb) {
+		if (io->hThread == NULL) io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
+		if (io->hThread == NULL) return -1;
 	}
-#else
-	DBG_LOG("Try to convert termux transfered usb port fd.\n");
-	// handle
-	if (xfd < 0)
-		ERR_EXIT("Example: termux-usb -e \"./spd_dump --usb-fd\" /dev/bus/usb/xxx/xxx\n"
-				 "run on android need provide --usb-fd\n");
+#endif
+	if (!m_bOpened) {
+		DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
+		for (i = 0; ; i++) {
 #if USE_LIBUSB
-	if (libusb_wrap_sys_device(NULL, (intptr_t)xfd, &io->dev_handle))
-		ERR_EXIT("libusb_wrap_sys_device exit unconditionally!\n");
-
-	device = libusb_get_device(io->dev_handle);
-	if (libusb_get_device_descriptor(device, &desc))
-		ERR_EXIT("libusb_get_device exit unconditionally!");
-
-	DBG_LOG("Vendor ID: %04x\nProduct ID: %04x\n", desc.idVendor, desc.idProduct);
-	if (desc.idVendor != 0x1782 || desc.idProduct != 0x4d00) {
-		ERR_EXIT("It seems spec device not a spd device!\n");
+			if (bListenLibusb) {
+				if (curPort) {
+					if (libusb_open(curPort, &io->dev_handle) >= 0) call_Initialize_libusb(io);
+					else ERR_EXIT("Connection failed\n");
+					break;
+				}
+			}
+			else {
+				io->dev_handle = libusb_open_device_with_vid_pid(NULL, 0x1782, 0x4d00);
+				if (io->dev_handle) {
+					curPort = libusb_get_device(io->dev_handle);
+					call_Initialize_libusb(io);
+					break;
+				}
+			}
+			if (i >= wait)
+				ERR_EXIT("libusb_open_device failed\n");
+#else
+			if (io->verbose) DBG_LOG("CurTime: %.1f, CurPort: %d\n", (float)i / REOPEN_FREQ, curPort);
+			if (curPort) {
+				if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
+				break;
+			}
+			if (i >= wait)
+				ERR_EXIT("find port failed\n");
+#endif
+			usleep(1000000 / REOPEN_FREQ);
+		}
 	}
-#endif // USE_LIBUSB
-#endif // __ANDROID__
-
-#if USE_LIBUSB
-	m_bOpened = 1;
-	int endpoints[2];
-	find_endpoints(io->dev_handle, endpoints);
-	io->endp_in = endpoints[0];
-	io->endp_out = endpoints[1];
-#else
-	if (!m_bOpened) if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
 #endif
 	io->flags |= FLAGS_TRANSCODE;
-#if USE_LIBUSB
-	ret = libusb_control_transfer(io->dev_handle,
-			0x21, 34, 0x601, 0, NULL, 0, io->timeout);
-	if (ret < 0)
-		ERR_EXIT("libusb_control_transfer failed : %s\n",
-				libusb_error_name(ret));
-	DBG_LOG("libusb_control_transfer ok\n");
-#endif
 	io->flags &= ~FLAGS_CRC16;
 	if (stage != -1) encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
 	else encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
@@ -334,16 +379,32 @@ int main(int argc, char **argv) {
 		}
 	}
 
+	char** save_argv = NULL;
+	if (fdl1_loaded == -1) argc += 2;
+	if (fdl2_executed == -1) argc += 1;
 	while (1) {
 		if (argc > 1)
 		{
 			str2 = (char**)malloc(argc * sizeof(char*));
-			for (i = 1; i < argc; i++) str2[i] = argv[i];
+			if (fdl1_loaded == -1) {
+				save_argv = argv;
+				str2[1] = "loadfdl";
+				str2[2] = "0x0";
+			}
+			else if (fdl2_executed == -1) {
+				if (!save_argv) save_argv = argv;
+				str2[1] = "exec";
+			}
+			else {
+				if (save_argv) { argv = save_argv; save_argv = NULL; }
+				for (i = 1; i < argc; i++) str2[i] = argv[i];
+			}
 			argcount = argc;
 			in_quote = -1;
 		}
 		else
 		{
+			char ifs = '"';
 			str2 = (char**)malloc(ARGC_MAX * sizeof(char*));
 			memset(str1, 0, sizeof(str1));
 			argcount = 0;
@@ -368,7 +429,8 @@ int main(int argc, char **argv) {
 					if (!str2[argcount]) ERR_EXIT("malloc failed\n");
 					memset(str2[argcount], 0, ARGV_LEN);
 				}
-				if (temp[0] == '"')
+				if (temp[0] == '\'') ifs = '\'';
+				if (temp[0] == ifs)
 				{
 					in_quote = 1;
 					temp += 1;
@@ -378,7 +440,7 @@ int main(int argc, char **argv) {
 					strcat(str2[argcount], " ");
 				}
 
-				if (temp[strlen(temp) - 1] == '"')
+				if (temp[strlen(temp) - 1] == ifs)
 				{
 					in_quote = 0;
 					temp[strlen(temp) - 1] = 0;
@@ -389,9 +451,15 @@ int main(int argc, char **argv) {
 			}
 			argcount++;
 		}
-		if (argcount == 1) { str2[1] = ""; in_quote = -1; }
+		if (argcount == 1)
+		{
+			str2[1] = malloc(1);
+			if (str2[1]) str2[1][0] = '\0';
+			else ERR_EXIT("malloc failed\n");
+			argcount++;
+		}
 
-		if (!strncmp(str2[1], "sendloop", 8)) {
+		if (!strcmp(str2[1], "sendloop")) {
 			const char* fn; uint32_t addr = 0; FILE* fi;
 			if (argcount <= 3) { DBG_LOG("sendloop FILE addr\n"); argc -= 3; argv += 3; continue; }
 
@@ -406,7 +474,7 @@ int main(int argc, char **argv) {
 			}
 			argc -= 3; argv += 3;
 		}
-		else if (!strncmp(str2[1], "send", 4)) {
+		else if (!strcmp(str2[1], "send")) {
 			const char* fn; uint32_t addr = 0; FILE* fi;
 			if (argcount <= 3) { DBG_LOG("send FILE addr\n"); argc -= 3; argv += 3; continue; }
 
@@ -418,22 +486,47 @@ int main(int argc, char **argv) {
 			send_file(io, fn, addr, 0, 528);
 			argc -= 3; argv += 3;
 		}
-		else if (!strncmp(str2[1], "fdl", 3)) {
+		else if (!strncmp(str2[1], "fdl", 3) || !strncmp(str2[1], "loadfdl", 7)) {
 			const char *fn; uint32_t addr = 0; FILE *fi;
-			if (argcount <= 3) { DBG_LOG("fdl FILE addr\n"); argc -= 3; argv += 3; continue; }
+			int addr_in_name = !strncmp(str2[1], "loadfdl", 7);
+			int argchange;
 
 			fn = str2[2];
-			addr = strtoul(str2[3], NULL, 0);
+			if (addr_in_name) {
+				argchange = 2;
+				if (argcount <= argchange) { DBG_LOG("loadfdl FILE\n"); argc -= argchange; argv += argchange; continue; }
+				char* pos = NULL, * last_pos = NULL;
+
+				pos = strstr(fn, "0X");
+				while (pos) {
+					last_pos = pos;
+					pos = strstr(pos + 2, "0X");
+				}
+				if (last_pos == NULL) {
+					pos = strstr(fn, "0x");
+					while (pos) {
+						last_pos = pos;
+						pos = strstr(pos + 2, "0x");
+					}
+				}
+				if (last_pos) addr = strtoul(last_pos, NULL, 16);
+				else { DBG_LOG("\"0x\" not found in name.\n"); argc -= argchange; argv += argchange; continue; }
+			}
+			else {
+				argchange = 3;
+				if (argcount <= argchange) { DBG_LOG("fdl FILE addr\n"); argc -= argchange; argv += argchange; continue; }
+				addr = strtoul(str2[3], NULL, 0);
+			}
 
 			if (fdl2_executed > 0) {
 				DBG_LOG("FDL2 ALREADY EXECUTED, SKIP\n");
-				argc -= 3; argv += 3;
+				argc -= argchange; argv += argchange;
 				continue;
 			} else if (fdl1_loaded > 0) {
 				if (fdl2_executed != -1)
 				{
 					fi = fopen(fn, "r");
-					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 3; argv += 3; continue; }
+					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= argchange; argv += argchange; continue; }
 					else fclose(fi);
 					send_file(io, fn, addr, end_data, blk_size ? blk_size : 528);
 				}
@@ -441,11 +534,12 @@ int main(int argc, char **argv) {
 				if (fdl1_loaded != -1)
 				{
 					fi = fopen(fn, "r");
-					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 3; argv += 3; continue; }
+					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= argchange; argv += argchange; continue; }
 					else fclose(fi);
 					send_file(io, fn, addr, end_data, 528);
 					if (exec_addr) {
 						send_file(io, execfile, exec_addr, 0, 528);
+						free(execfile);
 					} else {
 						encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
 						if (send_and_check(io)) exit(1);
@@ -532,7 +626,7 @@ int main(int argc, char **argv) {
 				}
 				fdl1_loaded = 1;
 			}
-			argc -= 3; argv += 3;
+			argc -= argchange; argv += argchange;
 
 		} else if (!strcmp(str2[1], "exec")) {
 			if (fdl2_executed > 0) {
@@ -561,7 +655,7 @@ int main(int argc, char **argv) {
 						DBG_LOG("DISABLE_TRANSCODE\n");
 					}
 				}
-				if (Da_Info.bSupportRawData == 2) {
+				if (Da_Info.bSupportRawData) {
 					if (fdl2_executed) {
 						Da_Info.bSupportRawData = 0;
 						DBG_LOG("DISABLE_WRITE_RAW_DATA in SPRD4\n");
@@ -613,10 +707,28 @@ int main(int argc, char **argv) {
 			FILE* fi;
 			if (0 == fdl1_loaded && argcount > 2) {
 				exec_addr = strtoul(str2[2], NULL, 0);
-				memset(execfile, 0, sizeof(execfile));
 				sprintf(execfile, "custom_exec_no_verify_%x.bin", exec_addr);
 				fi = fopen(execfile, "r");
-				if (fi == NULL) { DBG_LOG("%s does not exist\n", execfile);exec_addr = 0; }
+				if (fi == NULL) { DBG_LOG("%s does not exist\n", execfile); exec_addr = 0; }
+				else fclose(fi);
+			}
+			DBG_LOG("current exec_addr is 0x%x\n", exec_addr);
+			argc -= 2; argv += 2;
+
+		} else if (!strcmp(str2[1], "loadexec")) {
+			const char* fn; char* ch; FILE* fi;
+			if (argcount <= 2) { DBG_LOG("loadexec FILE\n"); argc -= 2; argv += 2; continue; }
+			if (0 == fdl1_loaded) {
+				strcpy(execfile, str2[2]);
+
+				if ((ch = strrchr(execfile, '/'))) fn = ch + 1;
+				else if ((ch = strrchr(execfile, '\\'))) fn = ch + 1;
+				else fn = execfile;
+				char straddr[9] = { 0 };
+				ret = sscanf(fn, "custom_exec_no_verify_%[0-9a-fA-F]", straddr);
+				exec_addr = strtoul(straddr, NULL, 16);
+				fi = fopen(execfile, "r");
+				if (fi == NULL) { DBG_LOG("%s does not exist\n", execfile); exec_addr = 0; }
 				else fclose(fi);
 			}
 			DBG_LOG("current exec_addr is 0x%x\n", exec_addr);
@@ -664,6 +776,7 @@ int main(int argc, char **argv) {
 			if (argcount <= 2) { DBG_LOG("bad command\n"); argc -= 2; argv += 2; continue; }
 
 			name = str2[2];
+			if (selected_ab < 0) select_ab(io);
 			find_partition_size(io, name);
 			argc -= 2; argv += 2;
 
@@ -734,6 +847,7 @@ int main(int argc, char **argv) {
 			else if (!strcmp(name, "preset_modem")) {
 				if (gpt_failed == 1) ptable = partition_list(io, fn_partlist, &part_count);
 				if (!part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
+				if (selected_ab > 0) { DBG_LOG("saving slot info\n"); dump_partition(io, "misc", 0, 1048576, "misc.bin", blk_size); }
 				for (i = 0; i < part_count; i++)
 					if (0 == strncmp("l_", (*(ptable + i)).name, 2) || 0 == strncmp("nr_", (*(ptable + i)).name, 3)) {
 						char dfile[40];
@@ -771,10 +885,10 @@ int main(int argc, char **argv) {
 					else if (!memcmp((*(ptable + i)).name, "cache", 5)) continue;
 					else if (!memcmp((*(ptable + i)).name, "userdata", 8)) continue;
 					if (selected_ab == 1 && namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_b")) continue;
+					else if (selected_ab == 2 && namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_a")) continue;
 					snprintf(dfile, sizeof(dfile), "%s.bin", (*(ptable + i)).name);
 					dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				}
-				if (selected_ab == 2) DBG_LOG("When the device is in slot B, some partitions in slot A are still in use; therefore, all partitions are dumped.\n");
 				argc -= 2; argv += 2;
 				continue;
 			}
@@ -1057,12 +1171,10 @@ int main(int argc, char **argv) {
 			for (i = 1; i < argcount; i++)
 				free(str2[i]);
 		free(str2);
-#if _WIN32
 		if (m_bOpened == -1) {
 			DBG_LOG("device removed, exiting...\n");
 			break;
 		}
-#endif
 	}
 	free(ptable);
 	spdio_free(io);
