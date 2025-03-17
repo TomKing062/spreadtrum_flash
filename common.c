@@ -1172,7 +1172,7 @@ void load_partition(spdio_t* io, const char* name,
 	FILE* fi;
 
 	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
-	if (strstr(name, "metadata")) { erase_partition(io, name); return; }
+	if (!strcmp(name, "metadata")) { return; } //skip metadata
 	if (!strcmp(name, "calinv")) { return; } //skip calinv
 
 	fi = fopen(fn, "rb");
