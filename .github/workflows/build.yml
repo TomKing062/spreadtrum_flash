@@ -48,11 +48,12 @@ jobs:
     needs: build
     steps:
       - name: Set Release Timestamp
-        run: echo "RELEASE_TAG=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_ENV
+        run: echo "RELEASE_TAG=stable_$(TZ='Asia/Shanghai' date +'%Y%m%d_%H%M')" >> $GITHUB_ENV
 
       - name: Checkout Repository
         uses: actions/checkout@v4
-        path: main
+        with:
+          path: stable
 
       - name: Download Artifacts
         uses: actions/download-artifact@v4
@@ -62,8 +63,8 @@ jobs:
 
       - name: Misc
         run: |
-          cp main/*.md output/
-          cp main/Lib/*.bin output/
+          cp stable/*.md output/
+          cp stable/Lib/*.bin output/
           cd output
           zip -r -v ../spd_dump_${{ env.RELEASE_TAG }}.zip .
 
@@ -71,6 +72,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
           name: Stable Release ${{ env.RELEASE_TAG }}
           draft: false
           prerelease: false
