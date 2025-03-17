@@ -99,8 +99,8 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
   指定nand芯片的4th id参数，该参数影响`read_part(s)`分区大小的算法，默认值为0x15。
 
-- `rawdata {0,2}`（仅限fdl2阶段）
-  rawdata协议用于加速`w`和`write_part`命令，当rawdata为2时，写入速度与blk_size无关（依赖于u-boot/lk，因此默认2的可以改0/2，默认0的不能改2，注意：暂时不支持默认rawdata=1的设备）
+- `rawdata {0,1,2}`（仅限fdl2阶段）
+  rawdata协议用于加速`w`和`write_part`命令，当rawdata为1或2时，写入速度与blk_size无关（依赖于u-boot/lk，请勿手动修改）
 
 - `blk_size byte`（仅限fdl2阶段）
   设置块大小，最大为65535字节。此选项用于加快`r`、`w`、`read_part(s)`和`write_part(s)`命令的速度。
@@ -110,6 +110,7 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
   当分区表可用时：
 
     - `r all`: 全盘备份 (跳过 blackbox, cache, userdata)
+    - `r all_lite`: 全盘备份（不包括非活动槽位, blackbox, cache和userdata）
 
   当分区表不可用时:
 

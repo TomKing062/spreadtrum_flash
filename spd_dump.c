@@ -55,9 +55,9 @@ void print_help(void)
 		"\t\tChanges the save directory for commands like r, read_part(s), read_flash, and read_mem.\n"
 		"\tnand_id [id]\n"
 		"\t\tSpecifies the 4th NAND ID, affecting read_part(s) size calculation, default value is 0x15.\n"
-		"\trawdata {0,2}\n\t\t(fdl2 stage only)\n"
-		"\t\tRawdata protocol helps speed up `w` and `write_part(s)` commands, when rawdata=2, `blk_size` will not effect write speed.\n"
-		"\t\t(rawdata relays on u-boot/lk, so don't set it manually unless its default value is 2. Note: rawdata = 1 is currently not supported.)\n"
+		"\trawdata {0,1,2}\n\t\t(fdl2 stage only)\n"
+		"\t\tRawdata protocol helps speed up `w` and `write_part(s)` commands, when rawdata > 0, `blk_size` will not effect write speed.\n"
+		"\t\t(rawdata relays on u-boot/lk, so don't set it manually.\n"
 		"\tblk_size byte\n\t\t(fdl2 stage only)\n"
 		"\t\tSets the block size, with a maximum of 65535 bytes. This option helps speed up `r`, `w`,`read_part(s)` and `write_part(s)` commands.\n"
 		"\tr all|part_name|part_id\n"
@@ -655,7 +655,7 @@ int main(int argc, char **argv) {
 						DBG_LOG("DISABLE_TRANSCODE\n");
 					}
 				}
-				if (Da_Info.bSupportRawData == 2) {
+				if (Da_Info.bSupportRawData) {
 					if (fdl2_executed) {
 						Da_Info.bSupportRawData = 0;
 						DBG_LOG("DISABLE_WRITE_RAW_DATA in SPRD4\n");
@@ -847,6 +847,7 @@ int main(int argc, char **argv) {
 			else if (!strcmp(name, "preset_modem")) {
 				if (gpt_failed == 1) ptable = partition_list(io, fn_partlist, &part_count);
 				if (!part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
+				if (selected_ab > 0) { DBG_LOG("saving slot info\n"); dump_partition(io, "misc", 0, 1048576, "misc.bin", blk_size); }
 				for (i = 0; i < part_count; i++)
 					if (0 == strncmp("l_", (*(ptable + i)).name, 2) || 0 == strncmp("nr_", (*(ptable + i)).name, 3)) {
 						char dfile[40];
@@ -884,10 +885,10 @@ int main(int argc, char **argv) {
 					else if (!memcmp((*(ptable + i)).name, "cache", 5)) continue;
 					else if (!memcmp((*(ptable + i)).name, "userdata", 8)) continue;
 					if (selected_ab == 1 && namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_b")) continue;
+					else if (selected_ab == 2 && namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_a")) continue;
 					snprintf(dfile, sizeof(dfile), "%s.bin", (*(ptable + i)).name);
 					dump_partition(io, (*(ptable + i)).name, 0, (*(ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				}
-				if (selected_ab == 2) DBG_LOG("When the device is in slot B, some partitions in slot A are still in use; therefore, all partitions are dumped.\n");
 				argc -= 2; argv += 2;
 				continue;
 			}

@@ -678,7 +678,7 @@ unsigned dump_mem(spdio_t* io,
 	int ret;
 	FILE* fo;
 	if (savepath[0]) {
-		char fix_fn[2048];
+		char fix_fn[1024];
 		char* ch;
 		if ((ch = strrchr(fn, '/'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
 		else if ((ch = strrchr(fn, '\\'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
@@ -813,7 +813,7 @@ uint64_t dump_partition(spdio_t* io,
 	if (send_and_check(io)) return 0;
 
 	if (savepath[0]) {
-		char fix_fn[2048];
+		char fix_fn[1024];
 		char* ch;
 		if ((ch = strrchr(fn, '/'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
 		else if ((ch = strrchr(fn, '\\'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
@@ -1172,6 +1172,7 @@ void load_partition(spdio_t* io, const char* name,
 	FILE* fi;
 
 	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
+	if (strstr(name, "metadata")) { erase_partition(io, name); return; }
 	if (!strcmp(name, "calinv")) { return; } //skip calinv
 
 	fi = fopen(fn, "rb");
@@ -1191,9 +1192,12 @@ void load_partition(spdio_t* io, const char* name,
 	if (send_and_check(io)) { fclose(fi); return; }
 
 #if !USE_LIBUSB
-	if (Da_Info.bSupportRawData == 2) {
-		encode_msg(io, BSL_CMD_DLOAD_RAW_START2, NULL, 0);
-		if (send_and_check(io)) { Da_Info.bSupportRawData = 0; goto fallback_load; }
+	if (Da_Info.bSupportRawData) {
+		if (Da_Info.bSupportRawData > 1)
+		{
+			encode_msg(io, BSL_CMD_DLOAD_RAW_START2, NULL, 0);
+			if (send_and_check(io)) { Da_Info.bSupportRawData = 0; goto fallback_load; }
+		}
 		step = Da_Info.dwFlushSize << 10;
 		uint8_t* rawbuf = (uint8_t*)malloc(step + 1);
 		if (!rawbuf) ERR_EXIT("malloc failed\n");
@@ -1203,6 +1207,19 @@ void load_partition(spdio_t* io, const char* name,
 			if (m_bOpened == -1) {
 				spdio_free(io);
 				ERR_EXIT("device removed, exiting...\n");
+			}
+			if (Da_Info.bSupportRawData == 1) {
+				uint32_t data[3];
+				uint32_t t32 = offset >> 32;
+				WRITE32_LE(data, offset);
+				WRITE32_LE(data + 1, t32);
+				WRITE32_LE(data + 2, n);
+				encode_msg(io, BSL_CMD_DLOAD_RAW_START, data, 12);
+				if (send_and_check(io))
+				{
+					if (offset) break;
+					else { free(rawbuf); step = 0xff00; Da_Info.bSupportRawData = 0; goto fallback_load; }
+				}
 			}
 			if (fread(rawbuf, 1, n, fi) != n)
 				ERR_EXIT("fread(load) failed\n");
@@ -1626,6 +1643,7 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) 
 		snprintf(dfile, sizeof(dfile), "%s.bin", partitions[i].name);
 		dump_partition(io, pn, 0, realsize, dfile, blk_size);
 	}
+	if (selected_ab > 0) { DBG_LOG("saving slot info\n"); dump_partition(io, "misc", 0, 1048576, "misc.bin", blk_size); }
 
 	if (savepath[0]) {
 		DBG_LOG("saving dump list\n");
@@ -1642,6 +1660,7 @@ void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size) 
 	free(partitions);
 }
 
+int ab_compare_slots(const slot_metadata* a, const slot_metadata* b);
 void load_partitions(spdio_t* io, const char* path, int blk_size) {
 	typedef struct {
 		char name[36];
@@ -1649,6 +1668,8 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		int written_flag;
 	} partition_info_t;
 
+	char miscname[1024] = { 0 };
+	int VAB = 0;
 	int partition_count = 0;
 	partition_info_t* partitions = malloc(128 * sizeof(partition_info_t));
 	if (partitions == NULL) return;
@@ -1686,6 +1707,15 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 		snprintf(partitions[partition_count].file_path, sizeof(partitions[partition_count].file_path), "%s/%s", path, fn);
 		char* dot = strrchr(fn, '.');
 		if (dot != NULL) *dot = '\0';
+		if (!strcmp(fn, "misc")) snprintf(miscname, 1024, "%s", partitions[partition_count].file_path);
+		if (!VAB) {
+			size_t namelen = strlen(fn);
+			if (namelen > 2)
+			{
+				if(!strcmp(fn + namelen - 2, "_a")) VAB = 1;
+				else if (!strcmp(fn + namelen - 2, "_b")) VAB = 2;
+			}
+		}
 
 		snprintf(partitions[partition_count].name, sizeof(partitions[partition_count].name), "%s", fn);
 		partitions[partition_count].written_flag = 0;
@@ -1698,26 +1728,47 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 #endif
 	int verbose = io->verbose;
 	if (selected_ab < 0) select_ab(io);
+	int load_partitions_selected_ab = 0;
+	bootloader_control* abc = NULL;
+	size_t misclen = 0;
+	if (miscname[0]) {
+		uint8_t* mem = loadfile(miscname, &misclen, 0);
+		if (misclen >= 0x820) {
+			abc = (bootloader_control*)(mem + 0x800);
+			if (abc->nb_slot != 2) load_partitions_selected_ab = 0;
+			if (ab_compare_slots(&abc->slot_info[1], &abc->slot_info[0]) < 0) load_partitions_selected_ab = 2;
+			else load_partitions_selected_ab = 1;
+		}
+		free(mem);
+	}
+	if (!load_partitions_selected_ab)
+	{
+		if (VAB) load_partitions_selected_ab = VAB;
+		else if (selected_ab > 0) load_partitions_selected_ab = selected_ab;
+	}
+
 	for (int i = 0; i < partition_count; i++) {
-		if (strcmp(partitions[i].name, "splloader") == 0
-			|| strcmp(partitions[i].name, "uboot_a") == 0
-			|| strcmp(partitions[i].name, "uboot_b") == 0
-			|| strcmp(partitions[i].name, "vbmeta_a") == 0
-			|| strcmp(partitions[i].name, "vbmeta_b") == 0) {
-			load_partition(io, partitions[i].name, partitions[i].file_path, blk_size);
+		fn = partitions[i].name;
+		size_t namelen = strlen(fn);
+		if (load_partitions_selected_ab == 1 && namelen > 2 && 0 == strcmp(fn + namelen - 2, "_b")) { partitions[i].written_flag = 1; continue; }
+		else if (load_partitions_selected_ab == 2 && namelen > 2 && 0 == strcmp(fn + namelen - 2, "_a")) { partitions[i].written_flag = 1; continue; }
+		if (strcmp(fn, "splloader") == 0
+			|| strcmp(fn, "uboot_a") == 0
+			|| strcmp(fn, "uboot_b") == 0
+			|| strcmp(fn, "vbmeta_a") == 0
+			|| strcmp(fn, "vbmeta_b") == 0) {
+			load_partition(io, fn, partitions[i].file_path, blk_size);
 			partitions[i].written_flag = 1;
-			if (strcmp(partitions[i].name, "vbmeta_b") == 0) break;
 			continue;
 		}
-		if (strcmp(partitions[i].name, "uboot") == 0 || strcmp(partitions[i].name, "vbmeta") == 0) {
+		if (strcmp(fn, "uboot") == 0 || strcmp(fn, "vbmeta") == 0) {
 			uint64_t realsize = 0;
 			char name_ab[36];
 			io->verbose = 0;
-			fn = partitions[i].name;
 			realsize = check_partition(io, fn);
 			if (!realsize) {
-				if (selected_ab > 0) {
-					snprintf(name_ab, sizeof(name_ab), "%s_%c", fn, 96 + selected_ab);
+				if (load_partitions_selected_ab > 0) {
+					snprintf(name_ab, sizeof(name_ab), "%s_%c", fn, 96 + load_partitions_selected_ab);
 					realsize = check_partition(io, name_ab);
 					fn = name_ab;
 				}
@@ -1730,7 +1781,12 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 			io->verbose = verbose;
 			load_partition(io, fn, partitions[i].file_path, blk_size);
 			partitions[i].written_flag = 1;
-			if(strcmp(partitions[i].name, "uboot")) break;
+			if (strcmp(partitions[i].name, "uboot")) break; //fn might be name_ab
+			continue;
+		}
+		if (strncmp(fn, "vbmeta_", 7) == 0) {
+			load_partition(io, fn, partitions[i].file_path, blk_size);
+			partitions[i].written_flag = 1;
 			continue;
 		}
 	}
@@ -1742,8 +1798,8 @@ void load_partitions(spdio_t* io, const char* path, int blk_size) {
 			fn = partitions[i].name;
 			realsize = check_partition(io, fn);
 			if (!realsize) {
-				if (selected_ab > 0) {
-					snprintf(name_ab, sizeof(name_ab), "%s_%c", fn, 96 + selected_ab);
+				if (load_partitions_selected_ab > 0) {
+					snprintf(name_ab, sizeof(name_ab), "%s_%c", fn, 96 + load_partitions_selected_ab);
 					realsize = check_partition(io, name_ab);
 					fn = name_ab;
 				}
@@ -1823,64 +1879,93 @@ void select_ab(spdio_t* io)
 
 void dm_disable(spdio_t* io, int blk_size)
 {
-	const char* list[] = { "vbmeta", "vbmeta_a", "vbmeta_b", NULL };
-	char dfile[40];
-	for (int i = 0; list[i] != NULL; i++) {
-		sprintf(dfile, "%s.bin", list[i]);
-		if (1048576 != dump_partition(io, list[i], 0, 1048576, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE)) {
-			remove(dfile);
-			continue;
+	int verbose = io->verbose;
+	if (selected_ab < 0) select_ab(io);
+	const char* pn = "vbmeta";
+	uint64_t realsize = 0;
+	char name_ab[36];
+	io->verbose = 0;
+	realsize = check_partition(io, pn);
+	if (!realsize) {
+		if (selected_ab > 0) {
+			snprintf(name_ab, sizeof(name_ab), "%s_%c", pn, 96 + selected_ab);
+			realsize = check_partition(io, name_ab);
+			pn = name_ab;
+		}
+		if (!realsize) {
+			DBG_LOG("part not exist\n");
+			io->verbose = verbose;
+			return;
 		}
 	}
-	for (int i = 0; list[i] != NULL; i++) {
-		sprintf(dfile, "%s.bin", list[i]);
-		FILE* vb = fopen(dfile, "r");
-		if (!vb) {
-			DBG_LOG("File %s does not exist, skipping.\n", dfile);
-			continue;
-		}
-		fclose(vb);
-		vb = fopen(dfile, "rb+");
-		if (!vb) ERR_EXIT("fopen %s failed\n", dfile);
-		char header[4];
-		if (fread(header, 1, 4, vb) != 4) ERR_EXIT("Failed to read header\n");
-		if (memcmp(header, "DHTB", 4)) {
-			if (fseek(vb, 0x7B, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
-			char ch = '\1';
-			if (fwrite(&ch, 1, 1, vb) != 1) ERR_EXIT("fwrite failed\n");
-		}
-		else { DBG_LOG("unsupported\n"); break; }
-		fclose(vb);
+	io->verbose = verbose;
 
-		load_partition(io, list[i], dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+	char dfile[40];
+	snprintf(dfile, sizeof(dfile), "vbmeta.bin");
+	if (1048576 != dump_partition(io, pn, 0, 1048576, dfile, blk_size)) {
+		remove(dfile);
+		return;
 	}
+	FILE* vb;
+	char fix_fn[1024];
+	if (savepath[0]) {
+		sprintf(fix_fn, "%s/%s", savepath, dfile);
+		vb = fopen(fix_fn, "rb+");
+	}
+	else vb = fopen(dfile, "rb+");
+	if (!vb) ERR_EXIT("fopen %s failed\n", dfile);
+	char header[4];
+	if (fread(header, 1, 4, vb) != 4) ERR_EXIT("Failed to read header\n");
+	if (memcmp(header, "DHTB", 4)) {
+		if (fseek(vb, 0x7B, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
+		char ch = '\1';
+		if (fwrite(&ch, 1, 1, vb) != 1) ERR_EXIT("fwrite failed\n");
+	}
+	else { DBG_LOG("unsupported\n"); fclose(vb); return; }
+	fclose(vb);
+
+	if (savepath[0]) load_partition(io, pn, fix_fn, blk_size);
+	else load_partition(io, pn, dfile, blk_size);
 }
 
 void dm_enable(spdio_t* io, int blk_size)
 {
-	const char* list[] = { "vbmeta", "vbmeta_a", "vbmeta_b",
-					"vbmeta_system", "vbmeta_system_a", "vbmeta_system_b",
-					"vbmeta_vendor", "vbmeta_vendor_a", "vbmeta_vendor_b",
-					"vbmeta_system_ext", "vbmeta_system_ext_a", "vbmeta_system_ext_b",
-					"vbmeta_product", "vbmeta_product_a", "vbmeta_product_b",
-					"vbmeta_odm", "vbmeta_odm_a", "vbmeta_odm_b", NULL };
-	char dfile[40];
+	const char* list[] = { "vbmeta", "vbmeta_system", "vbmeta_vendor", "vbmeta_system_ext", "vbmeta_product", "vbmeta_odm", NULL };
+	int verbose = io->verbose;
+	if (selected_ab < 0) select_ab(io);
 	for (int i = 0; list[i] != NULL; i++) {
-		sprintf(dfile, "%s.bin", list[i]);
-		if (1048576 != dump_partition(io, list[i], 0, 1048576, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE)) {
+		const char* pn = list[i];
+		uint64_t realsize = 0;
+		char name_ab[36];
+		io->verbose = 0;
+		realsize = check_partition(io, pn);
+		if (!realsize) {
+			if (selected_ab > 0) {
+				snprintf(name_ab, sizeof(name_ab), "%s_%c", pn, 96 + selected_ab);
+				realsize = check_partition(io, name_ab);
+				pn = name_ab;
+			}
+			if (!realsize) {
+				DBG_LOG("part not exist\n");
+				io->verbose = verbose;
+				continue;
+			}
+		}
+		io->verbose = verbose;
+
+		char dfile[40];
+		snprintf(dfile, sizeof(dfile), "%s.bin", list[i]);
+		if (1048576 != dump_partition(io, pn, 0, 1048576, dfile, blk_size)) {
 			remove(dfile);
 			continue;
 		}
-	}
-	for (int i = 0; list[i] != NULL; i++) {
-		sprintf(dfile, "%s.bin", list[i]);
-		FILE* vb = fopen(dfile, "r");
-		if (!vb) {
-			DBG_LOG("File %s does not exist, skipping.\n", dfile);
-			continue;
+		FILE* vb;
+		char fix_fn[1024];
+		if (savepath[0]) {
+			sprintf(fix_fn, "%s/%s", savepath, dfile);
+			vb = fopen(fix_fn, "rb+");
 		}
-		fclose(vb);
-		vb = fopen(dfile, "rb+");
+		else vb = fopen(dfile, "rb+");
 		if (!vb) ERR_EXIT("fopen %s failed\n", dfile);
 		char header[4];
 		if (fread(header, 1, 4, vb) != 4) ERR_EXIT("Failed to read header\n");
@@ -1889,10 +1974,10 @@ void dm_enable(spdio_t* io, int blk_size)
 			char ch = '\0';
 			if (fwrite(&ch, 1, 1, vb) != 1) ERR_EXIT("fwrite failed\n");
 		}
-		else { DBG_LOG("unsupported\n"); break; }
+		else { DBG_LOG("unsupported\n"); fclose(vb); break; }
 		fclose(vb);
-
-		load_partition(io, list[i], dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+		if (savepath[0]) load_partition(io, pn, fix_fn, blk_size);
+		else load_partition(io, pn, dfile, blk_size);
 	}
 }
 

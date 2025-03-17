@@ -50,14 +50,20 @@ jobs:
       - name: Set Release Timestamp
         run: echo "RELEASE_TAG=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_ENV
 
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        path: main
+
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
           path: output
           pattern: spd_dump_*_Release
 
-      - name: Display structure of downloaded files
+      - name: Misc
         run: |
+          cp main/*.md output/
+          cp main/Lib/*.bin output/
           cd output
           zip -r -v ../spd_dump_${{ env.RELEASE_TAG }}.zip .
 
