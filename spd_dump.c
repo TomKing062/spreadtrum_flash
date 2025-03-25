@@ -752,10 +752,8 @@ int main(int argc, char **argv) {
 			offset = str_to_size(str2[3]);
 			size = str_to_size(str2[4]);
 			fn = str2[5];
-			if ((addr | size | offset | (addr + offset + size)) >> 32)
-				{ DBG_LOG("32-bit limit reached\n"); argc -= 5; argv += 5; continue; }
-			dump_flash(io, addr, offset, size, fn,
-					blk_size ? blk_size : 1024);
+			if ((addr | size | offset | (addr + offset + size)) >> 32) { DBG_LOG("32-bit limit reached\n"); argc -= 5; argv += 5; continue; }
+			dump_flash(io, addr, offset, size, fn, blk_size ? blk_size : 1024);
 			argc -= 5; argv += 5;
 
 		} else if (!strcmp(str2[1], "read_mem")) {
@@ -765,15 +763,13 @@ int main(int argc, char **argv) {
 			addr = str_to_size(str2[2]);
 			size = str_to_size(str2[3]);
 			fn = str2[4];
-			if ((addr | size | (addr + size)) >> 32)
-				{ DBG_LOG("32-bit limit reached\n"); argc -= 4; argv += 4; continue; }
-			dump_mem(io, addr, size, fn,
-					blk_size ? blk_size : 1024);
+			if ((addr | size | (addr + size)) >> 32) { DBG_LOG("32-bit limit reached\n"); argc -= 4; argv += 4; continue; }
+			dump_mem(io, addr, size, fn, blk_size ? blk_size : 1024);
 			argc -= 4; argv += 4;
 
-		} else if (!strcmp(str2[1], "part_size")) {
+		} else if (!strcmp(str2[1], "part_size") || !strcmp(str2[1], "size_part")) {
 			const char *name;
-			if (argcount <= 2) { DBG_LOG("bad command\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("size_part part_name\n"); argc -= 2; argv += 2; continue; }
 
 			name = str2[2];
 			if (selected_ab < 0) select_ab(io);
@@ -789,6 +785,15 @@ int main(int argc, char **argv) {
 			}
 			argc -= 1; argv += 1;
 
+		} else if (!strcmp(str2[1], "check_part")) {
+			const char *name;
+			if (argcount <= 2) { DBG_LOG("check_part part_name\n"); argc -= 2; argv += 2; continue; }
+
+			name = str2[2];
+			if (selected_ab < 0) select_ab(io);
+			DBG_LOG("%d\n", check_partition(io, name));
+			argc -= 2; argv += 2;
+
 		} else if (!strcmp(str2[1], "read_part")) {
 			const char *name, *fn; uint64_t offset, size;
 			uint64_t realsize = 0;
@@ -797,28 +802,37 @@ int main(int argc, char **argv) {
 			if (argcount <= 5) { DBG_LOG("read_part part_name offset size FILE\n(read ubi on nand) read_part system 0 ubi40m system.bin\n"); argc -= 5; argv += 5; continue; }
 
 			name = str2[2];
-			if (selected_ab < 0) select_ab(io);
 			io->verbose = 0;
-			realsize = check_partition(io, name);
-			if (!realsize) {
-				if (selected_ab > 0) {
-					snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
-					realsize = check_partition(io, name_ab);
-					name = name_ab;
-				}
+			if (isdigit(name[0])) {
+				if (gpt_failed == 1) ptable = partition_list(io, fn_partlist, &part_count);
+				i = atoi(name);
+				if (i > part_count) { DBG_LOG("part not exist\n"); argc -= 5; argv += 5; continue; }
+				if (i == 0) name = "splloader";
+				else name = (*(ptable + i - 1)).name;
+			}
+			else
+			{
+				if (selected_ab < 0) select_ab(io);
+				realsize = check_partition(io, name);
 				if (!realsize) {
-					DBG_LOG("part not exist\n");
-					io->verbose = verbose;
-					argc -= 5; argv += 5;
-					continue;
+					if (selected_ab > 0) {
+						snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
+						realsize = check_partition(io, name_ab);
+						name = name_ab;
+					}
+					if (!realsize) {
+						DBG_LOG("part not exist\n");
+						io->verbose = verbose;
+						argc -= 5; argv += 5;
+						continue;
+					}
 				}
 			}
 			offset = str_to_size_ubi(str2[3], nand_info);
 			size = str_to_size_ubi(str2[4], nand_info);
 			if (0xffffffff == size) size = find_partition_size(io, name);
 			fn = str2[5];
-			if (offset + size < offset)
-				{ DBG_LOG("64-bit limit reached\n"); argc -= 5; argv += 5; continue; }
+			if (offset + size < offset) { DBG_LOG("64-bit limit reached\n"); argc -= 5; argv += 5; continue; }
 			io->verbose = verbose;
 			dump_partition(io, name, offset, size, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 5; argv += 5;
@@ -827,11 +841,10 @@ int main(int argc, char **argv) {
 			uint64_t realsize = 0;
 			const char* name = str2[2];
 			char name_ab[36];
+			int loop_count = 0, in_loop = 0;
+			const char* list[] = { "vbmeta", "splloader", "uboot", "sml", "trustos", "teecfg", "boot", "recovery" };
 			if (argcount <= 2) { DBG_LOG("r all/all_lite/part_name/part_id\n"); argc -= 2; argv += 2; continue; }
-			if (!memcmp(name, "splloader", 9)) {
-				realsize = 256 * 1024;
-			}
-			else if (isdigit(name[0])) {
+			if (isdigit(name[0])) {
 				if (gpt_failed == 1) ptable = partition_list(io, fn_partlist, &part_count);
 				i = atoi(name);
 				if (i > part_count) { DBG_LOG("part not exist\n"); argc -= 2; argv += 2; continue; }
@@ -892,43 +905,56 @@ int main(int argc, char **argv) {
 				argc -= 2; argv += 2;
 				continue;
 			}
-			else if (part_count) {
-				if (selected_ab > 0) snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
-				for (i = 0; i < part_count; i++) {
-					if (!strcmp(name, (*(ptable + i)).name)) {
-						realsize = (*(ptable + i)).size;
-						break;
+			else {
+				if (!strcmp(name, "preset_resign")) { loop_count = 7; name = list[loop_count]; in_loop = 1; }
+rloop:
+				if (!memcmp(name, "splloader", 9)) realsize = 256 * 1024;
+				else if (part_count) {
+					if (selected_ab > 0) snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
+					for (i = 0; i < part_count; i++) {
+						if (!strcmp(name, (*(ptable + i)).name)) {
+							realsize = (*(ptable + i)).size;
+							break;
+						}
+						if (selected_ab > 0 && !strcmp(name_ab, (*(ptable + i)).name)) {
+							realsize = (*(ptable + i)).size;
+							name = name_ab;
+							break;
+						}
 					}
-					if (selected_ab > 0 && !strcmp(name_ab, (*(ptable + i)).name)) {
-						realsize = (*(ptable + i)).size;
-						name = name_ab;
-						break;
-					}
-				}
-				if (i == part_count) { DBG_LOG("part not exist\n"); argc -= 2; argv += 2; continue; }
-			}
-			else
-			{
-				if (selected_ab < 0) select_ab(io);
-				realsize = check_partition(io, name);
-				if (!realsize) {
-					if (selected_ab > 0) {
-						snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
-						realsize = check_partition(io, name_ab);
-						name = name_ab;
-					}
-					if (!realsize) {
+					if (i == part_count) {
 						DBG_LOG("part not exist\n");
+						if (loop_count) { name = list[--loop_count]; goto rloop; }
 						argc -= 2; argv += 2;
 						continue;
 					}
 				}
-				realsize = find_partition_size(io, name);
+				else
+				{
+					if (selected_ab < 0) select_ab(io);
+					realsize = check_partition(io, name);
+					if (!realsize) {
+						if (selected_ab > 0) {
+							snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
+							realsize = check_partition(io, name_ab);
+							name = name_ab;
+						}
+						if (!realsize) {
+							DBG_LOG("part not exist\n");
+							if (loop_count) { name = list[--loop_count]; goto rloop; }
+							argc -= 2; argv += 2;
+							continue;
+						}
+					}
+					realsize = find_partition_size(io, name);
+				}
 			}
 			char dfile[40];
 			if (isdigit(str2[2][0])) snprintf(dfile, sizeof(dfile), "%s.bin", name);
+			else if (in_loop) snprintf(dfile, sizeof(dfile), "%s.bin", list[loop_count]);
 			else snprintf(dfile, sizeof(dfile), "%s.bin", str2[2]);
 			dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			if (loop_count--) { name = list[loop_count]; goto rloop; }
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(str2[1], "read_parts")) {
@@ -948,7 +974,7 @@ int main(int argc, char **argv) {
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(str2[1], "repartition")) {
-			const char *fn;FILE *fi;
+			const char *fn; FILE *fi;
 			if (argcount <= 2) { DBG_LOG("repartition FILE\n"); argc -= 2; argv += 2; continue; }
 			fn = str2[2];
 			fi = fopen(fn, "r");
@@ -965,18 +991,18 @@ int main(int argc, char **argv) {
 			int verbose = io->verbose;
 			if (argcount <= 2) { DBG_LOG("erase_part part_name/part_id\n"); argc -= 2; argv += 2; continue; }
 			if (selected_ab < 0) select_ab(io);
-			i = -1;
-			if (isdigit(name[0])) {
-				if (part_count) i = atoi(name);
-				else { DBG_LOG("gpt table is empty\n"); argc -= 2; argv += 2; continue; }
-				if (i > part_count) { DBG_LOG("part not exist\n"); argc -= 2; argv += 2; continue; }
-			}
 			if (!skip_confirm)
 				if (!check_confirm("erase partition"))
 				{
 					argc -= 2; argv += 2;
 					continue;
 				}
+			i = -1;
+			if (isdigit(name[0])) {
+				if (part_count) i = atoi(name);
+				else { DBG_LOG("gpt table is empty\n"); argc -= 2; argv += 2; continue; }
+				if (i > part_count) { DBG_LOG("part not exist\n"); argc -= 2; argv += 2; continue; }
+			}
 			if (i == 0) erase_partition(io, "splloader");
 			else if (i > 0) erase_partition(io, (*(ptable + i - 1)).name);
 			else {
@@ -1001,7 +1027,7 @@ int main(int argc, char **argv) {
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(str2[1], "write_part") || !strcmp(str2[1], "w")) {
-			const char *fn;FILE *fi;
+			const char *fn; FILE *fi;
 			uint64_t realsize = 0;
 			const char* name = str2[2];
 			char name_ab[36];
@@ -1012,18 +1038,18 @@ int main(int argc, char **argv) {
 			if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 3; argv += 3; continue; }
 			else fclose(fi);
 			if (selected_ab < 0) select_ab(io);
-			i = -1;
-			if (isdigit(name[0])) {
-				if (part_count) i = atoi(name);
-				else { DBG_LOG("gpt table is empty\n"); argc -= 3; argv += 3; continue; }
-				if (i > part_count) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
-			}
 			if (!skip_confirm)
 				if (!check_confirm("write partition"))
 				{
 					argc -= 3; argv += 3;
 					continue;
 				}
+			i = -1;
+			if (isdigit(name[0])) {
+				if (part_count) i = atoi(name);
+				else { DBG_LOG("gpt table is empty\n"); argc -= 3; argv += 3; continue; }
+				if (i > part_count) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
+			}
 			if (i == 0) load_partition(io, "splloader", str2[3], 4096);
 			else if (i > 0) {
 				if (strstr((*(ptable + i)).name, "fixnv1")) load_nv_partition(io, (*(ptable + i)).name, str2[3], 4096);
@@ -1057,6 +1083,120 @@ int main(int argc, char **argv) {
 			else if (check_confirm("write all partitions")) load_partitions(io, str2[2], blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 2; argv += 2;
 
+		} else if (!strcmp(str2[1], "wof") || !strcmp(str2[1], "wov")) {
+			const char* fn;	FILE* fi;
+			uint64_t offset;
+			uint32_t value, isValue = 0;
+			uint64_t realsize = 0;
+			const char* name = str2[2];
+			char name_ab[36];
+			int verbose = io->verbose;
+			if (argcount <= 4) { DBG_LOG("wof part_name offset FILE\nwov part_name offset Value(max is 0xFFFFFFFF)\n"); argc -= 4; argv += 4; continue; }
+
+			if (isdigit(name[0])) {
+				if (gpt_failed == 1) ptable = partition_list(io, fn_partlist, &part_count);
+				i = atoi(name);
+				if (i > part_count) { DBG_LOG("part not exist\n"); argc -= 4; argv += 4; continue; }
+				if (i == 0) {
+					name = "splloader";
+					realsize = 256 * 1024;
+				}
+				else {
+					name = (*(ptable + i - 1)).name;
+					realsize = (*(ptable + i - 1)).size;
+				}
+			}
+			else {
+				if (!memcmp(name, "splloader", 9)) realsize = 256 * 1024;
+				else if (part_count) {
+					if (selected_ab > 0) snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
+					for (i = 0; i < part_count; i++) {
+						if (!strcmp(name, (*(ptable + i)).name)) {
+							realsize = (*(ptable + i)).size;
+							break;
+						}
+						if (selected_ab > 0 && !strcmp(name_ab, (*(ptable + i)).name)) {
+							realsize = (*(ptable + i)).size;
+							name = name_ab;
+							break;
+						}
+					}
+					if (i == part_count) { DBG_LOG("part not exist\n"); argc -= 4; argv += 4; continue; }
+				}
+				else
+				{
+					if (selected_ab < 0) select_ab(io);
+					io->verbose = 0;
+					realsize = check_partition(io, name);
+					if (!realsize) {
+						if (selected_ab > 0) {
+							snprintf(name_ab, sizeof(name_ab), "%s_%c", name, 96 + selected_ab);
+							realsize = check_partition(io, name_ab);
+							name = name_ab;
+						}
+						if (!realsize) {
+							DBG_LOG("part not exist\n");
+							io->verbose = verbose;
+							argc -= 4; argv += 4;
+							continue;
+						}
+					}
+					realsize = find_partition_size(io, name);
+					io->verbose = verbose;
+				}
+			}
+			char dfile[40];
+			if (isdigit(str2[2][0])) snprintf(dfile, sizeof(dfile), "%s.bin", name);
+			snprintf(dfile, sizeof(dfile), "%s.bin", str2[2]);
+			if (realsize != dump_partition(io, name, 0, realsize, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE)) {
+				remove(dfile);
+				argc -= 4; argv += 4;
+				continue;
+			}
+
+			char fix_fn[1024];
+			if (savepath[0]) {
+				sprintf(fix_fn, "%s/%s", savepath, dfile);
+				fi = fopen(fix_fn, "rb+");
+			}
+			else fi = fopen(dfile, "rb+");
+			if (!fi) ERR_EXIT("fopen %s failed\n", dfile);
+			offset = str_to_size_ubi(str2[3], nand_info);
+
+			size_t leng = 1;
+			uint8_t* src;
+			uint8_t data[4] = { 0 };
+			if (!strcmp(str2[1], "wov")) {
+				isValue = 1;
+				value = strtoul(str2[4], NULL, 0);
+				if (value > 0xFFFFFF) leng = 4;
+				else if (value > 0xFFFF) leng = 3;
+				else if (value > 0xFF) leng = 2;
+				memcpy(data, &value, 4);
+				src = data;
+			}
+			else
+			{
+				fn = str2[4];
+				src = loadfile(fn, &leng, 0);
+				if (!src) { DBG_LOG("fopen %s failed\n", fn); argc -= 4; argv += 4; continue; }
+			}
+			if (offset + leng > realsize) {
+				DBG_LOG("out of range\n");
+				fclose(fi);
+				if(!isValue) free(src);
+				argc -= 4; argv += 4;
+				continue;
+			}
+			if (fseek(fi, offset, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
+			if (fwrite(src, 1, leng, fi) != leng) ERR_EXIT("fwrite failed\n");
+			fclose(fi);
+			if (!isValue) free(src);
+
+			if (savepath[0]) load_partition(io, name, fix_fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			else load_partition(io, name, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			argc -= 4; argv += 4;
+
 		} else if (!strcmp(str2[1], "read_pactime")) {
 			read_pactime(io);
 			argc -= 1; argv += 1;
@@ -1087,6 +1227,11 @@ int main(int argc, char **argv) {
 					}
 				dm_disable(io, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			}
+			argc -= 2; argv += 2;
+
+		} else if (!strcmp(str2[1], "set_active")) {
+			if (argcount <= 2) { DBG_LOG("set_active {a,b}\n"); argc -= 2; argv += 2; continue; }
+			set_active(io, str2[2]);
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(str2[1], "skip_confirm")) {

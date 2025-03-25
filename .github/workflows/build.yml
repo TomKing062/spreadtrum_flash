@@ -61,21 +61,31 @@ jobs:
           path: output
           pattern: spd_dump_*_Release
 
+      - name: Download Debug Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: outputD
+          pattern: spd_dump_*_Debug
+
       - name: Misc
         run: |
           cp stable/*.md output/
           cp stable/Lib/*.bin output/
           cd output
           zip -r -v ../spd_dump_${{ env.RELEASE_TAG }}.zip .
+          cd ../outputD
+          zip -r -v ../spd_dump_${{ env.RELEASE_TAG }}_Debug.zip .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
-          name: Stable Release ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
           draft: false
           prerelease: false
-          files: spd_dump_${{ env.RELEASE_TAG }}.zip
+          files: |
+            spd_dump_${{ env.RELEASE_TAG }}.zip
+            spd_dump_${{ env.RELEASE_TAG }}_Debug.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
