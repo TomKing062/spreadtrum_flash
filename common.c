@@ -1801,7 +1801,10 @@ void load_partitions(spdio_t *io, const char *path, int blk_size) {
 			continue;
 		}
 		if (strncmp(fn, "vbmeta_", 7) == 0) {
-			load_partition(io, fn, partitions[i].file_path, blk_size);
+			get_partition_info(io, fn, 0);
+			if (!gPartInfo.size) continue;
+
+			load_partition(io, gPartInfo.name, partitions[i].file_path, blk_size);
 			partitions[i].written_flag = 1;
 			continue;
 		}
@@ -1809,7 +1812,8 @@ void load_partitions(spdio_t *io, const char *path, int blk_size) {
 
 	for (int i = 0; i < partition_count; i++) {
 		if (!partitions[i].written_flag) {
-			get_partition_info(io, partitions[i].name, 0);
+			fn = partitions[i].name;
+			get_partition_info(io, fn, 0);
 			if (!gPartInfo.size) continue;
 
 			if (strstr(fn, "fixnv1")) load_nv_partition(io, gPartInfo.name, partitions[i].file_path, 4096);

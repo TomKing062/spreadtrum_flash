@@ -869,7 +869,7 @@ rloop:
 			char dfile[40];
 			if (isdigit(str2[2][0])) snprintf(dfile, sizeof(dfile), "%s.bin", gPartInfo.name);
 			else if (in_loop) snprintf(dfile, sizeof(dfile), "%s.bin", list[loop_count]);
-			else snprintf(dfile, sizeof(dfile), "%s.bin", str2[2]);
+			else snprintf(dfile, sizeof(dfile), "%s.bin", name);
 			dump_partition(io, gPartInfo.name, 0, gPartInfo.size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			if (loop_count--) { name = list[loop_count]; goto rloop; }
 			argc -= 2; argv += 2;
@@ -935,8 +935,8 @@ rloop:
 			get_partition_info(io, name, 0);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
 
-			if (strstr(name, "fixnv1")) load_nv_partition(io, gPartInfo.name, str2[3], 4096);
-			else load_partition(io, gPartInfo.name, str2[3], blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			if (strstr(name, "fixnv1")) load_nv_partition(io, gPartInfo.name, fn, 4096);
+			else load_partition(io, gPartInfo.name, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 3; argv += 3;
 
 		}
