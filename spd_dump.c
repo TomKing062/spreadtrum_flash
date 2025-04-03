@@ -765,7 +765,7 @@ int main(int argc, char **argv) {
 		}
 		else if (!strcmp(str2[1], "p") || !strcmp(str2[1], "print")) {
 			if (io->part_count) {
-				DBG_LOG(" 0 %36s 256KB\n", "splloader");
+				DBG_LOG("  0 %36s     256KB\n", "splloader");
 				for (i = 0; i < io->part_count; i++) {
 					DBG_LOG("%3d %36s %7lldMB\n", i + 1, (*(io->ptable + i)).name, ((*(io->ptable + i)).size >> 20));
 				}

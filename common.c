@@ -997,7 +997,7 @@ int gpt_info(partition_t *ptable, const char *fn_xml, int *part_count_ptr) {
 			break;
 		}
 	}
-	DBG_LOG(" 0 %36s 256KB\n", "splloader");
+	DBG_LOG("  0 %36s     256KB\n", "splloader");
 	for (int i = 0; i < n; i++) {
 		efi_entry entry = *(entries + i);
 		copy_from_wstr((*(ptable + i)).name, 36, (uint16_t *)entry.partition_name);
@@ -1082,7 +1082,7 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 		if (divisor == 10) Da_Info.dwStorageType = 0x102;
 		else Da_Info.dwStorageType = 0x103;
 		p = io->raw_buf + 4;
-		DBG_LOG(" 0 %36s 256KB\n", "splloader");
+		DBG_LOG("  0 %36s     256KB\n", "splloader");
 		for (i = 0; i < n; i++, p += 0x4c) {
 			ret = copy_from_wstr((*(ptable + i)).name, 36, (uint16_t *)p);
 			if (ret) ERR_EXIT("bad partition name\n");
@@ -1139,7 +1139,7 @@ void erase_partition(spdio_t *io, const char *name) {
 		strcpy(miscbuf + 0x40, "recovery\n--wipe_data\n");
 		w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
 		free(miscbuf);
-		select_partition(io, name, 1048576, 0, BSL_CMD_ERASE_FLASH);
+		select_partition(io, "persist", 0, 0, BSL_CMD_ERASE_FLASH);
 	}
 	else select_partition(io, name, 0, 0, BSL_CMD_ERASE_FLASH);
 	if (!send_and_check(io)) DBG_LOG("Erase Part Done: %s\n", name);
@@ -1879,61 +1879,17 @@ void select_ab(spdio_t * io) {
 	else selected_ab = 1;
 }
 
-void dm_disable(spdio_t * io, int blk_size) {
-	get_partition_info(io, "vbmeta", 0);
-	if (!gPartInfo.size) return;
-	char dfile[40];
-	strcpy(dfile, "vbmeta.bin");
-	if (1048576 != dump_partition(io, gPartInfo.name, 0, 1048576, dfile, blk_size)) {
-		remove(dfile);
-		return;
-	}
-	FILE *vb;
-	char fix_fn[1024];
-	if (savepath[0]) sprintf(fix_fn, "%s/%s", savepath, dfile);
-	else strcpy(fix_fn, dfile);
-	vb = fopen(fix_fn, "rb+");
-	if (!vb) ERR_EXIT("fopen %s failed\n", dfile);
-	char header[4];
-	if (fread(header, 1, 4, vb) != 4) ERR_EXIT("Failed to read header\n");
-	if (memcmp(header, "DHTB", 4)) {
-		if (fseek(vb, 0x7B, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
-		char ch = '\1';
-		if (fwrite(&ch, 1, 1, vb) != 1) ERR_EXIT("fwrite failed\n");
-	}
-	else { DBG_LOG("unsupported\n"); fclose(vb); return; }
-	fclose(vb);
-	load_partition(io, gPartInfo.name, fix_fn, blk_size);
+void dm_disable(spdio_t *io, int blk_size) {
+	char ch = '\1';
+	w_mem_to_part_offset(io, "vbmeta", 0x7B, (uint8_t *)&ch, 1, blk_size);
+	ch = '\0';
+	w_mem_to_part_offset(io, "vbmeta_bak", 0x7B, (uint8_t *)&ch, 1, blk_size);
 }
 
-void dm_enable(spdio_t * io, int blk_size) {
+void dm_enable(spdio_t *io, int blk_size) {
 	const char *list[] = { "vbmeta", "vbmeta_system", "vbmeta_vendor", "vbmeta_system_ext", "vbmeta_product", "vbmeta_odm", NULL };
-	for (int i = 0; list[i] != NULL; i++) {
-		get_partition_info(io, list[i], 0);
-		if (!gPartInfo.size) return;
-		char dfile[40];
-		snprintf(dfile, sizeof(dfile), "%s.bin", list[i]);
-		if (1048576 != dump_partition(io, gPartInfo.name, 0, 1048576, dfile, blk_size)) {
-			remove(dfile);
-			continue;
-		}
-		FILE *vb;
-		char fix_fn[1024];
-		if (savepath[0]) sprintf(fix_fn, "%s/%s", savepath, dfile);
-		else strcpy(fix_fn, dfile);
-		vb = fopen(fix_fn, "rb+");
-		if (!vb) ERR_EXIT("fopen %s failed\n", dfile);
-		char header[4];
-		if (fread(header, 1, 4, vb) != 4) ERR_EXIT("Failed to read header\n");
-		if (memcmp(header, "DHTB", 4)) {
-			if (fseek(vb, 0x7B, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
-			char ch = '\0';
-			if (fwrite(&ch, 1, 1, vb) != 1) ERR_EXIT("fwrite failed\n");
-		}
-		else { DBG_LOG("unsupported\n"); fclose(vb); break; }
-		fclose(vb);
-		load_partition(io, gPartInfo.name, fix_fn, blk_size);
-	}
+	char ch = '\0';
+	for (int i = 0; list[i] != NULL; i++) w_mem_to_part_offset(io, list[i], 0x7B, (uint8_t *)&ch, 1, blk_size);
 }
 
 uint32_t const crc32_tab[] = {

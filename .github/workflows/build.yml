@@ -84,6 +84,9 @@ jobs:
           name: ${{ env.RELEASE_TAG }}
           draft: false
           prerelease: false
+          body: |
+            x86 ver work with SPRD driver, x64 ver work with libusb driver
+            if you need dev version: https://nightly.link/TomKing062/spreadtrum_flash/workflows/build/main
           files: |
             spd_dump_${{ env.RELEASE_TAG }}.zip
             spd_dump_${{ env.RELEASE_TAG }}_Debug.zip
