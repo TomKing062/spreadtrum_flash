@@ -878,10 +878,11 @@ uint64_t read_pactime(spdio_t *io) {
 	return time;
 }
 
-int scan_xml_partitions(const char *fn, uint8_t *buf, size_t buf_size) {
+int scan_xml_partitions(spdio_t *io, const char *fn, uint8_t *buf, size_t buf_size) {
 	const char *part1 = "Partitions>";
-	char *src, *p, name[36]; size_t fsize = 0;
+	char *src, *p; size_t fsize = 0;
 	int part1_len = strlen(part1), found = 0, stage = 0;
+	if (io->ptable == NULL) io->ptable = malloc(128 * sizeof(partition_t));
 	src = (char *)loadfile(fn, &fsize, 1);
 	if (!src) ERR_EXIT("loadfile failed\n");
 	src[fsize] = 0;
@@ -915,7 +916,7 @@ int scan_xml_partitions(const char *fn, uint8_t *buf, size_t buf_size) {
 			stage++;
 			continue;
 		}
-		i = sscanf(p, "Partition id=\"%35[^\"]\" size=\"%lli\"/%n%c", name, &size, &n, &c);
+		i = sscanf(p, "Partition id=\"%35[^\"]\" size=\"%lli\"/%n%c", (*(io->ptable + found)).name, &size, &n, &c);
 		if (i != 3 || c != '>')
 			ERR_EXIT("xml: unexpected syntax\n");
 		p += n + 1;
@@ -923,13 +924,15 @@ int scan_xml_partitions(const char *fn, uint8_t *buf, size_t buf_size) {
 			ERR_EXIT("xml: too many partitions\n");
 		buf_size -= 0x4c;
 		memset(buf, 0, 36 * 2);
-		for (i = 0; (a = name[i]); i++) buf[i * 2] = a;
+		for (i = 0; (a = (*(io->ptable + found)).name[i]); i++) buf[i * 2] = a;
 		if (!i) ERR_EXIT("empty partition name\n");
 		WRITE32_LE(buf + 0x48, size);
 		buf += 0x4c;
-		DBG_LOG("[%d] %s, %d\n", found, name, (int)size);
+		DBG_LOG("[%d] %s, %d\n", found + 1, (*(io->ptable + found)).name, (int)size);
+		(*(io->ptable + found)).size = size << 20;
 		found++;
 	}
+	io->part_count = found;
 	if (p - 1 != src + fsize) ERR_EXIT("xml: zero byte");
 	if (stage != 2) ERR_EXIT("xml: unexpected syntax\n");
 	free(src);
@@ -1124,7 +1127,7 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 
 void repartition(spdio_t *io, const char *fn) {
 	uint8_t *buf = io->temp_buf;
-	int n = scan_xml_partitions(fn, buf, 0xffff);
+	int n = scan_xml_partitions(io, fn, buf, 0xffff);
 	// print_mem(stderr, io->temp_buf, n * 0x4c);
 	encode_msg(io, BSL_CMD_REPARTITION, buf, n * 0x4c);
 	send_and_check(io);
@@ -1141,6 +1144,7 @@ void erase_partition(spdio_t *io, const char *name) {
 		free(miscbuf);
 		select_partition(io, "persist", 0, 0, BSL_CMD_ERASE_FLASH);
 	}
+	else if (!strcmp(name, "all")) select_partition(io, "erase_all", 0xffffffff, 0, BSL_CMD_ERASE_FLASH);
 	else select_partition(io, name, 0, 0, BSL_CMD_ERASE_FLASH);
 	if (!send_and_check(io)) DBG_LOG("Erase Part Done: %s\n", name);
 }
@@ -1797,7 +1801,6 @@ void load_partitions(spdio_t *io, const char *path, int blk_size) {
 
 			load_partition(io, gPartInfo.name, partitions[i].file_path, blk_size);
 			partitions[i].written_flag = 1;
-			if (strcmp(fn, "uboot")) break;
 			continue;
 		}
 		if (strncmp(fn, "vbmeta_", 7) == 0) {

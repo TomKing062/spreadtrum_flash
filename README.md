@@ -3,7 +3,7 @@
 
 work with Official SPRD U2S Diag Driver or LibUSB Driver.
 
-### [Download prebuilt program (windows)](https://github.com/TomKing062/spreadtrum_flash/releases)
+### Prebuilt program for windows [Release](https://github.com/TomKing062/spreadtrum_flash/releases)|[Dev](https://nightly.link/TomKing062/spreadtrum_flash/workflows/build/main)
 
 ### [Original information of ilyakurdyukov version](https://github.com/ilyakurdyukov/spreadtrum_flash)
 
@@ -85,6 +85,14 @@ Then the prompt should display `FDL2>`.
 
   Sends a file (`splloader`, `fdl1`, `fdl2`, `sml`, `trustos`, `teecfg`) to the specified memory address.
 
+- `loadexec FILE(addr_in_name)`
+
+  Set exec_addr with the address encoded in filename and save exec_file path.
+
+- `loadfdl FILE(addr_in_name)`
+
+  Load FDL file to the address encoded in filename..
+
 - `exec`
 
   Executes a sent file in the fdl1 stage. Typically used with `sml` or `fdl2` (also known as uboot/lk).
@@ -133,9 +141,21 @@ Then the prompt should display `FDL2>`.
 
   Writes all partitions dumped by `read_parts`.
 
+- `wof part_name offset FILE`
+
+  Writes the specified file to a partition at the given offset.
+
+- `wov part_name offset VALUE`
+
+  Writes the specified value (max is 0xFFFFFFFF) to a partition at the given offset.
+
 - `e|erase_part part_name|part_id`
 
   Erases the specified partition.
+
+- `erase_all`
+
+  Erases all partitions. Use with caution!
 
 - `partition_list FILE`
 
@@ -147,19 +167,45 @@ Then the prompt should display `FDL2>`.
 
 - `p|print`
 
-  Prints partition_list
+  Prints partition_list.
+
+- `size_part|part_size part_name`
+
+  Displays the size of the specified partition.
+
+- `check_part part_name`
+
+  Checks if the specified partition exists.
 
 - `verity {0,1}`
 
   Disable or enable `dm-verity` on android 10(+).
 
+- `set_active {a,b}`
+
+  Sets the active slot on VAB devices.
+
+- `firstmode mode_id`
+
+  Sets the mode the device will enter after reboot.
+
 #### Exit Commands
 
-Usable mainly in FDL2 stage; only new FDL1 supports exit
+- `reboot-recovery`
+
+  FDL2 only
+
+- `reboot-fastboot`
+
+  FDL2 only
 
 - `reset`
 
+  FDL2 and new FDL1
+
 - `poweroff`
+
+  FDL2 and new FDL1
 
 ### Android(Termux)
 

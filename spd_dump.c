@@ -48,6 +48,10 @@ void print_help(void) {
 		"\t\tUsed for CVE-2022-38694.\n"
 		"\tfdl FILE addr\n"
 		"\t\tSends a file (splloader, fdl1, fdl2, sml, trustos, teecfg) to the specified memory address.\n"
+		"\tloadexec FILE(addr_in_name)\n"
+		"\t\tSet exec_addr with the address encoded in filename and save exec_file path.\n"
+		"\tloadfdl FILE(addr_in_name)\n"
+		"\t\tLoad FDL file to the address encoded in filename.\n"
 		"\texec\n"
 		"\t\tExecutes a sent file in the fdl1 stage. Typically used with sml or fdl2 (also known as uboot/lk).\n"
 		"\tpath [save_location]\n"
@@ -74,20 +78,35 @@ void print_help(void) {
 		"\t\tWrites the specified file to a partition.\n"
 		"\twrite_parts save_location\n"
 		"\t\tWrites all partitions dumped by read_parts.\n"
+		"\twof part_name offset FILE\n"
+		"\t\tWrites the specified file to a partition at the given offset.\n"
+		"\twov part_name offset VALUE\n"
+		"\t\tWrites the specified value (max is 0xFFFFFFFF) to a partition at the given offset.\n"
 		"\te|erase_part part_name|part_id\n"
 		"\t\tErases the specified partition.\n"
+		"\terase_all\n"
+		"\t\tErases all partitions. Use with caution!\n"
 		"\tpartition_list FILE\n"
 		"\t\tRead the partition list on emmc/ufs, not all fdl2 supports this command.\n"
 		"\trepartition partition_list_xml\n"
 		"\t\tRepartitions based on partition list XML.\n"
 		"\tp|print\n"
 		"\t\tPrints partition_list\n"
+		"\tsize_part|part_size part_name\n"
+		"\t\tDisplays the size of the specified partition.\n"
+		"\tcheck_part part_name\n"
+		"\t\tChecks if the specified partition exists.\n"
 		"\tverity {0,1}\n"
 		"\t\tEnables or disables dm-verity on android 10(+).\n"
+		"\tset_active {a,b}\n"
+		"\t\tSets the active slot on VAB devices.\n"
+		"\tfirstmode mode_id\n"
+		"\t\tSets the mode the device will enter after reboot.\n"
 		"\nExit Commands\n"
-		"\t(Usable mainly in FDL2 stage; only new FDL1 supports exit)\n"
-		"\treset\n"
-		"\tpoweroff\n"
+		"\treboot-recovery\n\t\tFDL2 only\n"
+		"\treboot-fastboot\n\t\tFDL2 only\n"
+		"\treset\n\t\tFDL2 and new FDL1\n"
+		"\tpoweroff\n\t\tFDL2 and new FDL1\n"
 	);
 }
 
@@ -160,7 +179,6 @@ int main(int argc, char **argv) {
 			argc -= 2; argv += 2;
 		}
 		else if (strstr(argv[1], "-r")) {
-			if (argc <= 1) ERR_EXIT("bad option\n");
 			stage = 99;
 			argc -= 1; argv += 1;
 		}
@@ -177,7 +195,6 @@ int main(int argc, char **argv) {
 #endif
 		}
 		else if (!strcmp(argv[1], "--kick")) {
-			if (argc <= 1) ERR_EXIT("bad option\n");
 			at = 1;
 			argc -= 1; argv += 1;
 		}
@@ -908,15 +925,33 @@ rloop:
 		else if (!strcmp(str2[1], "erase_part") || !strcmp(str2[1], "e")) {
 			const char *name = str2[2];
 			if (argcount <= 2) { DBG_LOG("erase_part part_name/part_id\n"); argc -= 2; argv += 2; continue; }
-			if (!skip_confirm)
-				if (!check_confirm("erase partition")) {
+			if (!strcmp(name, "all")) {
+				if (!check_confirm("erase all")) {
 					argc -= 2; argv += 2;
 					continue;
 				}
-			get_partition_info(io, name, 0);
+				strcpy(gPartInfo.name, "all");
+			}
+			else {
+				if (!skip_confirm)
+					if (!check_confirm("erase partition")) {
+						argc -= 2; argv += 2;
+						continue;
+					}
+				get_partition_info(io, name, 0);
+			}
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n"); argc -= 2; argv += 2; continue; }
 			erase_partition(io, gPartInfo.name);
 			argc -= 2; argv += 2;
+
+		}
+		else if (!strcmp(str2[1], "erase_all")) {
+			if (!check_confirm("erase all")) {
+				argc -= 1; argv += 1;
+				continue;
+			}
+			erase_partition(io, "all");
+			argc -= 1; argv += 1;
 
 		}
 		else if (!strcmp(str2[1], "write_part") || !strcmp(str2[1], "w")) {
@@ -952,7 +987,7 @@ rloop:
 			size_t length;
 			uint8_t *src;
 			const char *name = str2[2];
-			if (argcount <= 4) { DBG_LOG("wof part_name offset FILE\nwov part_name offset Value(max is 0xFFFFFFFF)\n"); argc -= 4; argv += 4; continue; }
+			if (argcount <= 4) { DBG_LOG("wof part_name offset FILE\nwov part_name offset VALUE(max is 0xFFFFFFFF)\n"); argc -= 4; argv += 4; continue; }
 			if (strstr(name, "fixnv") || strstr(name, "runtimenv") || strstr(name, "userdata")) {
 				DBG_LOG("blacklist!\n");
 				argc -= 4; argv += 4;
@@ -1017,7 +1052,7 @@ rloop:
 
 		}
 		else if (!strcmp(str2[1], "firstmode")) {
-			if (argcount <= 2) { DBG_LOG("firstmode num\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("firstmode mode_id\n"); argc -= 2; argv += 2; continue; }
 			uint8_t *modebuf = malloc(4);
 			if (!modebuf) ERR_EXIT("malloc failed\n");
 			uint32_t mode = strtol(str2[2], NULL, 0) + 0x53464D00;
