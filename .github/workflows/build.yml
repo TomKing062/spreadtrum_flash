@@ -16,7 +16,7 @@ jobs:
     strategy:
       matrix:
         arch: [x64, x86]
-        config: [Release, Debug]
+        config: [Release, CustDebug]
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -65,7 +65,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: outputD
-          pattern: spd_dump_*_Debug
+          pattern: spd_dump_*_CustDebug
 
       - name: Misc
         run: |
