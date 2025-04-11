@@ -594,34 +594,44 @@ uint8_t *loadfile(const char *fn, size_t *num, size_t extra) {
 	return buf;
 }
 
-void send_file(spdio_t *io, const char *fn,
-	uint32_t start_addr, int end_data, unsigned step) {
-	uint8_t *mem; size_t size = 0;
+void send_buf(spdio_t *io,
+	uint32_t start_addr, int end_data,
+	unsigned step, uint8_t *mem, unsigned size) {
 	uint32_t data[2], i, n;
-
-	mem = loadfile(fn, &size, 0);
-	if (!mem) ERR_EXIT("loadfile(\"%s\") failed\n", fn);
-	if ((uint64_t)size >> 32) ERR_EXIT("file too big\n");
 
 	WRITE32_BE(data, start_addr);
 	WRITE32_BE(data + 1, size);
 
 	encode_msg(io, BSL_CMD_START_DATA, data, 4 * 2);
-	if (send_and_check(io)) { free(mem); return; }
-
+	if (send_and_check(io)) return;
 	for (i = 0; i < size; i += n) {
 		n = size - i;
 		// n = spd_transcode_max(mem + i, size - i, 2048 - 2 - 6);
 		if (n > step) n = step;
 		encode_msg(io, BSL_CMD_MIDST_DATA, mem + i, n);
-		if (send_and_check(io)) { free(mem); return; }
+		if (send_and_check(io)) return;
 	}
-	free(mem);
-
 	if (end_data) {
 		encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
 		send_and_check(io);
 	}
+}
+
+void send_file(spdio_t *io, const char *fn,
+	uint32_t start_addr, int end_data, unsigned step,
+	unsigned src_offs, unsigned src_size) {
+	uint8_t *mem; size_t size = 0;
+	mem = loadfile(fn, &size, 0);
+	if (!mem) ERR_EXIT("loadfile(\"%s\") failed\n", fn);
+	if ((uint64_t)size >> 32) ERR_EXIT("file too big\n");
+	if (size < src_offs) ERR_EXIT("required offset larger than file size\n");
+	size -= src_offs;
+	if (src_size) {
+		if (size < src_size) DBG_LOG("required size larger than file size\n");
+		else size = src_size;
+	}
+	send_buf(io, start_addr, end_data, step, mem + src_offs, size);
+	free(mem);
 	DBG_LOG("SEND %s to 0x%x\n", fn, start_addr);
 }
 
@@ -988,7 +998,7 @@ int gpt_info(partition_t *ptable, const char *fn_xml, int *part_count_ptr) {
 		DBG_LOG("only read %d/%d\n", bytes_read, (int)(header.number_of_partition_entries * sizeof(efi_entry)));
 	FILE *fo = NULL;
 	if (strcmp(fn_xml, "-")) {
-		fo = fopen(fn_xml, "wb");
+		fo = my_fopen(fn_xml, "wb");
 		if (!fo) ERR_EXIT("fopen failed\n");
 		fprintf(fo, "<Partitions>\n");
 	}
@@ -1071,7 +1081,7 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 		fclose(fpkt);
 		n = size / 0x4c;
 		if (strcmp(fn, "-")) {
-			fo = fopen(fn, "wb");
+			fo = my_fopen(fn, "wb");
 			if (!fo) ERR_EXIT("fopen failed\n");
 			fprintf(fo, "<Partitions>\n");
 		}
@@ -1130,10 +1140,11 @@ void repartition(spdio_t *io, const char *fn) {
 	int n = scan_xml_partitions(io, fn, buf, 0xffff);
 	// print_mem(stderr, io->temp_buf, n * 0x4c);
 	encode_msg(io, BSL_CMD_REPARTITION, buf, n * 0x4c);
-	send_and_check(io);
+	if (!send_and_check(io)) gpt_failed = 0;
 }
 
 void erase_partition(spdio_t *io, const char *name) {
+	int timeout0 = io->timeout;
 	if (!memcmp(name, "userdata", 8) || !memcmp(name, "metadata", 8)) {
 		char *miscbuf = malloc(0x800);
 		if (!miscbuf) ERR_EXIT("malloc failed\n");
@@ -1144,9 +1155,13 @@ void erase_partition(spdio_t *io, const char *name) {
 		free(miscbuf);
 		select_partition(io, "persist", 0, 0, BSL_CMD_ERASE_FLASH);
 	}
-	else if (!strcmp(name, "all")) select_partition(io, "erase_all", 0xffffffff, 0, BSL_CMD_ERASE_FLASH);
+	else if (!strcmp(name, "all")) {
+		io->timeout = 100000;
+		select_partition(io, "erase_all", 0xffffffff, 0, BSL_CMD_ERASE_FLASH);
+	}
 	else select_partition(io, name, 0, 0, BSL_CMD_ERASE_FLASH);
 	if (!send_and_check(io)) DBG_LOG("Erase Part Done: %s\n", name);
+	io->timeout = timeout0;
 }
 
 void load_partition(spdio_t *io, const char *name,
@@ -1256,6 +1271,40 @@ fallback_load:
 	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
 	if (!send_and_check(io)) DBG_LOG("Write Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
+}
+
+void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned step) {
+	int i, j; char a;
+	uint8_t *buf = io->temp_buf;
+	char name[] = "w_force";
+	for (i = 0; i < io->part_count; i++) {
+		memset(buf, 0, 36 * 2);
+		if (i == id)
+			for (j = 0; (a = name[j]); j++)
+				buf[j * 2] = a;
+		else
+			for (j = 0; (a = (*(io->ptable + i)).name[j]); j++)
+				buf[j * 2] = a;
+		if (!j) ERR_EXIT("empty partition name\n");
+		if (i + 1 == io->part_count) WRITE32_LE(buf + 0x48, ~0);
+		else WRITE32_LE(buf + 0x48, (*(io->ptable + i)).size >> 20);
+		buf += 0x4c;
+	}
+	encode_msg(io, BSL_CMD_REPARTITION, io->temp_buf, io->part_count * 0x4c);
+	if (send_and_check(io)) return; //repart failed
+	load_partition(io, name, fn, step);
+	buf = io->temp_buf;
+	for (i = 0; i < io->part_count; i++) {
+		memset(buf, 0, 36 * 2);
+		for (j = 0; (a = (*(io->ptable + i)).name[j]); j++)
+			buf[j * 2] = a;
+		if (!j) ERR_EXIT("empty partition name\n");
+		if (i + 1 == io->part_count) WRITE32_LE(buf + 0x48, ~0);
+		else WRITE32_LE(buf + 0x48, (*(io->ptable + i)).size >> 20);
+		buf += 0x4c;
+	}
+	encode_msg(io, BSL_CMD_REPARTITION, io->temp_buf, io->part_count * 0x4c);
+	if (!send_and_check(io)) DBG_LOG("Force Write %s Done\n", (*(io->ptable + id)).name);
 }
 
 unsigned short const crc16_table[256] = {
@@ -2123,7 +2172,19 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				DBG_LOG("read (%d):\n", bytes_read);
 				print_mem(stderr, io->recv_buf, bytes_read);
 			}
-			if (io->recv_buf[2] == BSL_REP_VER) return;
+			if (io->recv_buf[2] == BSL_REP_VER
+				|| io->recv_buf[2] == BSL_REP_VERIFY_ERROR
+				|| io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
+				int chk1, chk2, a = READ16_BE(io->recv_buf + bytes_read - 3);
+				chk1 = spd_crc16(0, io->recv_buf + 1, bytes_read - 4);
+				if (a == chk1) io->flags |= FLAGS_CRC16;
+				else {
+					chk2 = spd_checksum(0, io->recv_buf + 1, bytes_read - 4, CHK_ORIG);
+					if (a == chk2) fdl1_loaded = 1;
+					else ERR_EXIT("bad checksum (0x%04x, expected 0x%04x or 0x%04x)\n", a, chk1, chk2);
+				}
+				return;
+			}
 			payload[8] = 0x82;
 		}
 		else if (at) payload[8] = 0x81;
@@ -2139,7 +2200,20 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				DBG_LOG("read (%d):\n", bytes_read);
 				print_mem(stderr, io->recv_buf, bytes_read);
 			}
-			if (io->recv_buf[2] == BSL_REP_VER) { if (io->recv_buf[9] < '4') return; }
+			if (io->recv_buf[2] == BSL_REP_VER
+				|| io->recv_buf[2] == BSL_REP_VERIFY_ERROR
+				|| io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
+				int chk1, chk2, a = READ16_BE(io->recv_buf + bytes_read - 3);
+				chk1 = spd_crc16(0, io->recv_buf + 1, bytes_read - 4);
+				if (a == chk1) io->flags |= FLAGS_CRC16;
+				else {
+					chk2 = spd_checksum(0, io->recv_buf + 1, bytes_read - 4, CHK_ORIG);
+					if (a == chk2) fdl1_loaded = 1;
+					else ERR_EXIT("bad checksum (0x%04x, expected 0x%04x or 0x%04x)\n", a, chk1, chk2);
+				}
+				if (io->recv_buf[2] == BSL_REP_VER) { if (io->recv_buf[9] < '4') return; }
+				else return;
+			}
 			else if (io->recv_buf[2] != 0x7e) {
 				uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
 				usleep(500000);
@@ -2277,7 +2351,19 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				DBG_LOG("read (%d):\n", bytes_read);
 				print_mem(stderr, io->recv_buf, bytes_read);
 			}
-			if (io->recv_buf[2] == BSL_REP_VER) return;
+			if (io->recv_buf[2] == BSL_REP_VER
+				|| io->recv_buf[2] == BSL_REP_VERIFY_ERROR
+				|| io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
+				int chk1, chk2, a = READ16_BE(io->recv_buf + bytes_read - 3);
+				chk1 = spd_crc16(0, io->recv_buf + 1, bytes_read - 4);
+				if (a == chk1) io->flags |= FLAGS_CRC16;
+				else {
+					chk2 = spd_checksum(0, io->recv_buf + 1, bytes_read - 4, CHK_ORIG);
+					if (a == chk2) fdl1_loaded = 1;
+					else ERR_EXIT("bad checksum (0x%04x, expected 0x%04x or 0x%04x)\n", a, chk1, chk2);
+				}
+				return;
+			}
 			payload[8] = 0x82;
 		}
 		else if (at) payload[8] = 0x81;
@@ -2300,7 +2386,20 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				DBG_LOG("read (%d):\n", bytes_read);
 				print_mem(stderr, io->recv_buf, bytes_read);
 			}
-			if (io->recv_buf[2] == BSL_REP_VER) { if (io->recv_buf[9] < '4') return; }
+			if (io->recv_buf[2] == BSL_REP_VER
+				|| io->recv_buf[2] == BSL_REP_VERIFY_ERROR
+				|| io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
+				int chk1, chk2, a = READ16_BE(io->recv_buf + bytes_read - 3);
+				chk1 = spd_crc16(0, io->recv_buf + 1, bytes_read - 4);
+				if (a == chk1) io->flags |= FLAGS_CRC16;
+				else {
+					chk2 = spd_checksum(0, io->recv_buf + 1, bytes_read - 4, CHK_ORIG);
+					if (a == chk2) fdl1_loaded = 1;
+					else ERR_EXIT("bad checksum (0x%04x, expected 0x%04x or 0x%04x)\n", a, chk1, chk2);
+				}
+				if (io->recv_buf[2] == BSL_REP_VER) { if (io->recv_buf[9] < '4') return; }
+				else return;
+			}
 			else if (io->recv_buf[2] != 0x7e) {
 				uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
 				usleep(500000);

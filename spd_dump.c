@@ -20,6 +20,8 @@ void print_help(void) {
 		"\tInteractive mode\n"
 		"\t\tspd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec\n"
 		"\tThen the prompt should display FDL2>.\n"
+	);
+	DBG_LOG(
 		"\nOptions\n"
 		"\t--wait <seconds>\n"
 		"\t\tSpecifies the time to wait for the device to connect.\n"
@@ -35,6 +37,8 @@ void print_help(void) {
 		"\t\t(mode 0 is `kickto 2` on ums9621, mode 1 = cali_diag, mode 2 = dl_diag; not all devices support mode 2).\n"
 		"\t-?|-h|--help\n"
 		"\t\tShow help and usage information\n"
+	);
+	DBG_LOG(
 		"\nRuntime Commands\n"
 		"\tverbose level\n"
 		"\t\tSets the verbosity level of the output (supports 0, 1, or 2).\n"
@@ -102,6 +106,8 @@ void print_help(void) {
 		"\t\tSets the active slot on VAB devices.\n"
 		"\tfirstmode mode_id\n"
 		"\t\tSets the mode the device will enter after reboot.\n"
+	);
+	DBG_LOG(
 		"\nExit Commands\n"
 		"\treboot-recovery\n\t\tFDL2 only\n"
 		"\treboot-fastboot\n\t\tFDL2 only\n"
@@ -183,7 +189,6 @@ int main(int argc, char **argv) {
 			argc -= 1; argv += 1;
 		}
 		else if (strstr(argv[1], "help") || strstr(argv[1], "-h") || strstr(argv[1], "-?")) {
-			if (argc <= 1) ERR_EXIT("bad option\n");
 			print_help();
 			return 0;
 #ifdef __ANDROID__
@@ -319,16 +324,26 @@ int main(int argc, char **argv) {
 	}
 #endif
 	io->flags |= FLAGS_TRANSCODE;
-	io->flags &= ~FLAGS_CRC16;
-	if (stage != -1) encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
+	if (stage != -1) {
+		io->flags &= ~FLAGS_CRC16;
+		encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
+	}
 	else encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
 	for (i = 0; ; i++) {
 		if (io->recv_buf[2] == BSL_REP_VER) {
 			ret = BSL_REP_VER;
-			io->flags |= FLAGS_CRC16;
 			memcpy(io->raw_buf + 4, io->recv_buf + 5, 5);
 			io->raw_buf[2] = 0;
 			io->raw_buf[3] = 5;
+			io->recv_buf[2] = 0;
+		}
+		else if (io->recv_buf[2] == BSL_REP_VERIFY_ERROR
+			|| io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
+			if (!fdl1_loaded) {
+				ret = io->recv_buf[2];
+				io->recv_buf[2] = 0;
+			}
+			else ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
 		}
 		else {
 			send_msg(io);
@@ -458,30 +473,38 @@ int main(int argc, char **argv) {
 		}
 
 		if (!strcmp(str2[1], "sendloop")) {
-			const char *fn; uint32_t addr = 0; FILE *fi;
-			if (argcount <= 3) { DBG_LOG("sendloop FILE addr\n"); argc -= 3; argv += 3; continue; }
+			uint32_t addr = 0;
+			if (argcount <= 2) { DBG_LOG("sendloop addr\n"); argc = 1; continue; }
 
-			fn = str2[2];
-			fi = fopen(fn, "r");
-			if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 3; argv += 3; continue; }
-			else fclose(fi);
-			addr = strtoul(str2[3], NULL, 0);
+			uint8_t data[4] = { 0 };
+			addr = strtoul(str2[2], NULL, 0);
 			while (1) {
-				send_file(io, fn, addr, 0, 528);
+				send_buf(io, addr, 0, 528, data, 4);
+				DBG_LOG("SEND 4 bytes to 0x%x\n", addr);
 				addr -= 8;
 			}
-			argc -= 3; argv += 3;
+			argc -= 2; argv += 2;
 		}
-		else if (!strcmp(str2[1], "send")) {
+		else if (!strcmp(str2[1], "write_word")) {
+			uint32_t addr, data;
+			if (argc <= 3) { DBG_LOG("write_word addr VALUE(max is 0xFFFFFFFF)\n"); argc = 1; continue; }
+
+			addr = strtoul(str2[2], NULL, 0);
+			data = strtoul(str2[3], NULL, 0);
+			send_buf(io, addr, end_data, 528, (uint8_t *)&data, 4);
+			argc -= 3; argv += 3;
+
+		}
+		else if (!strcmp(str2[1], "send") || !strcmp(str2[1], "write_flash")) {
 			const char *fn; uint32_t addr = 0; FILE *fi;
-			if (argcount <= 3) { DBG_LOG("send FILE addr\n"); argc -= 3; argv += 3; continue; }
+			if (argcount <= 3) { DBG_LOG("send|write_flash FILE addr\n"); argc = 1; continue; }
 
 			fn = str2[2];
 			fi = fopen(fn, "r");
 			if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 3; argv += 3; continue; }
 			else fclose(fi);
 			addr = strtoul(str2[3], NULL, 0);
-			send_file(io, fn, addr, 0, 528);
+			send_file(io, fn, addr, 0, 528, 0, 0);
 			argc -= 3; argv += 3;
 		}
 		else if (!strncmp(str2[1], "fdl", 3) || !strncmp(str2[1], "loadfdl", 7)) {
@@ -492,7 +515,7 @@ int main(int argc, char **argv) {
 			fn = str2[2];
 			if (addr_in_name) {
 				argchange = 2;
-				if (argcount <= argchange) { DBG_LOG("loadfdl FILE\n"); argc -= argchange; argv += argchange; continue; }
+				if (argcount <= argchange) { DBG_LOG("loadfdl FILE\n"); argc = 1; continue; }
 				char *pos = NULL, *last_pos = NULL;
 
 				pos = strstr(fn, "0X");
@@ -512,7 +535,7 @@ int main(int argc, char **argv) {
 			}
 			else {
 				argchange = 3;
-				if (argcount <= argchange) { DBG_LOG("fdl FILE addr\n"); argc -= argchange; argv += argchange; continue; }
+				if (argcount <= argchange) { DBG_LOG("fdl FILE addr\n"); argc = 1; continue; }
 				addr = strtoul(str2[3], NULL, 0);
 			}
 
@@ -526,7 +549,7 @@ int main(int argc, char **argv) {
 					fi = fopen(fn, "r");
 					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= argchange; argv += argchange; continue; }
 					else fclose(fi);
-					send_file(io, fn, addr, end_data, blk_size ? blk_size : 528);
+					send_file(io, fn, addr, end_data, blk_size ? blk_size : 528, 0, 0);
 				}
 			}
 			else {
@@ -534,9 +557,9 @@ int main(int argc, char **argv) {
 					fi = fopen(fn, "r");
 					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= argchange; argv += argchange; continue; }
 					else fclose(fi);
-					send_file(io, fn, addr, end_data, 528);
+					send_file(io, fn, addr, end_data, 528, 0, 0);
 					if (exec_addr) {
-						send_file(io, execfile, exec_addr, 0, 528);
+						send_file(io, execfile, exec_addr, 0, 528, 0, 0);
 						free(execfile);
 					}
 					else {
@@ -578,7 +601,7 @@ int main(int argc, char **argv) {
 				char *pdump;
 				char chdump;
 				FILE *fdump;
-				fdump = fopen("ddd.bin", "wb");
+				fdump = my_fopen("memdump.bin", "wb");
 				encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
 				while (1) {
 					send_msg(io);
@@ -716,7 +739,7 @@ int main(int argc, char **argv) {
 		}
 		else if (!strcmp(str2[1], "loadexec")) {
 			const char *fn; char *ch; FILE *fi;
-			if (argcount <= 2) { DBG_LOG("loadexec FILE\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("loadexec FILE\n"); argc = 1; continue; }
 			if (0 == fdl1_loaded) {
 				strcpy(execfile, str2[2]);
 
@@ -747,7 +770,7 @@ int main(int argc, char **argv) {
 		}
 		else if (!strcmp(str2[1], "read_flash")) {
 			const char *fn; uint64_t addr, offset, size;
-			if (argcount <= 5) { DBG_LOG("bad command\n"); argc -= 5; argv += 5; continue; }
+			if (argcount <= 5) { DBG_LOG("read_flash addr offset size FILE\n"); argc = 1; continue; }
 
 			addr = str_to_size(str2[2]);
 			offset = str_to_size(str2[3]);
@@ -758,9 +781,29 @@ int main(int argc, char **argv) {
 			argc -= 5; argv += 5;
 
 		}
+		else if (!strcmp(str2[1], "erase_flash")) {
+			uint64_t addr, size;
+			if (argc <= 3) { DBG_LOG("erase_flash addr size\n"); argc = 1; continue; }
+			if (!skip_confirm)
+				if (!check_confirm("erase flash")) {
+					argc -= 3; argv += 3;
+					continue;
+				}
+			addr = str_to_size(str2[2]);
+			size = str_to_size(str2[3]);
+			if ((addr | size | (addr + size)) >> 32)
+				ERR_EXIT("32-bit limit reached\n");
+			uint32_t data[2];
+			WRITE32_BE(data, addr);
+			WRITE32_BE(data + 1, size);
+			encode_msg(io, BSL_CMD_ERASE_FLASH, data, 4 * 2);
+			if (!send_and_check(io)) DBG_LOG("Erase Flash Done: 0x%08x\n", (int)addr);
+			argc -= 3; argv += 3;
+
+		}
 		else if (!strcmp(str2[1], "read_mem")) {
 			const char *fn; uint64_t addr, size;
-			if (argcount <= 4) { DBG_LOG("bad command\n"); argc -= 4; argv += 4; continue; }
+			if (argcount <= 4) { DBG_LOG("read_mem addr size FILE\n"); argc = 1; continue; }
 
 			addr = str_to_size(str2[2]);
 			size = str_to_size(str2[3]);
@@ -772,7 +815,7 @@ int main(int argc, char **argv) {
 		}
 		else if (!strcmp(str2[1], "part_size") || !strcmp(str2[1], "size_part")) {
 			const char *name;
-			if (argcount <= 2) { DBG_LOG("size_part part_name\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("size_part part_name\n"); argc = 1; continue; }
 
 			name = str2[2];
 			if (selected_ab < 0) select_ab(io);
@@ -792,7 +835,7 @@ int main(int argc, char **argv) {
 		}
 		else if (!strcmp(str2[1], "check_part")) {
 			const char *name;
-			if (argcount <= 2) { DBG_LOG("check_part part_name\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("check_part part_name\n"); argc = 1; continue; }
 
 			name = str2[2];
 			if (selected_ab < 0) select_ab(io);
@@ -803,7 +846,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(str2[1], "read_part")) {
 			const char *name, *fn; uint64_t offset, size;
 			uint64_t realsize = 0;
-			if (argcount <= 5) { DBG_LOG("read_part part_name offset size FILE\n(read ubi on nand) read_part system 0 ubi40m system.bin\n"); argc -= 5; argv += 5; continue; }
+			if (argcount <= 5) { DBG_LOG("read_part part_name offset size FILE\n(read ubi on nand) read_part system 0 ubi40m system.bin\n"); argc = 1; continue; }
 
 			offset = str_to_size_ubi(str2[3], nand_info);
 			size = str_to_size_ubi(str2[4], nand_info);
@@ -823,7 +866,7 @@ int main(int argc, char **argv) {
 			const char *name = str2[2];
 			int loop_count = 0, in_loop = 0;
 			const char *list[] = { "vbmeta", "splloader", "uboot", "sml", "trustos", "teecfg", "boot", "recovery" };
-			if (argcount <= 2) { DBG_LOG("r all/all_lite/part_name/part_id\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("r all/all_lite/part_name/part_id\n"); argc = 1; continue; }
 			if (!strcmp(name, "preset_modem")) {
 				if (gpt_failed == 1) io->ptable = partition_list(io, fn_partlist, &io->part_count);
 				if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
@@ -894,7 +937,7 @@ rloop:
 		}
 		else if (!strcmp(str2[1], "read_parts")) {
 			const char *fn; FILE *fi;
-			if (argcount <= 2) { DBG_LOG("read_parts partition_list_file\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("read_parts partition_list_file\n"); argc = 1; continue; }
 			fn = str2[2];
 			fi = fopen(fn, "r");
 			if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 2; argv += 2; continue; }
@@ -904,15 +947,29 @@ rloop:
 
 		}
 		else if (!strcmp(str2[1], "partition_list")) {
-			if (argcount <= 2) { DBG_LOG("partition_list FILE\n"); argc -= 2; argv += 2; continue; }
-			if (gpt_failed < 1) { DBG_LOG("partition_list shouldn't run twice\n"); argc -= 2; argv += 2; continue; }
-			io->ptable = partition_list(io, str2[2], &io->part_count);
+			if (argcount <= 2) { DBG_LOG("partition_list FILE\n"); argc = 1; continue; }
+			if (gpt_failed == 1) io->ptable = partition_list(io, str2[2], &io->part_count);
+			if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
+			else {
+				DBG_LOG("  0 %36s     256KB\n", "splloader");
+				FILE *fo = my_fopen(str2[2], "wb");
+				if (!fo) ERR_EXIT("fopen failed\n");
+				fprintf(fo, "<Partitions>\n");
+				for (i = 0; i < io->part_count; i++) {
+					DBG_LOG("%3d %36s %7lldMB\n", i + 1, (*(io->ptable + i)).name, ((*(io->ptable + i)).size >> 20));
+					fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(io->ptable + i)).name);
+					if (i + 1 == io->part_count) fprintf(fo, "0x%x\"/>\n", ~0);
+					else fprintf(fo, "%lld\"/>\n", ((*(io->ptable + i)).size >> 20));
+				}
+				fprintf(fo, "</Partitions>");
+				fclose(fo);
+			}
 			argc -= 2; argv += 2;
 
 		}
 		else if (!strcmp(str2[1], "repartition")) {
 			const char *fn; FILE *fi;
-			if (argcount <= 2) { DBG_LOG("repartition FILE\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("repartition FILE\n"); argc = 1; continue; }
 			fn = str2[2];
 			fi = fopen(fn, "r");
 			if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 2; argv += 2; continue; }
@@ -924,7 +981,7 @@ rloop:
 		}
 		else if (!strcmp(str2[1], "erase_part") || !strcmp(str2[1], "e")) {
 			const char *name = str2[2];
-			if (argcount <= 2) { DBG_LOG("erase_part part_name/part_id\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("erase_part part_name/part_id\n"); argc = 1; continue; }
 			if (!strcmp(name, "all")) {
 				if (!check_confirm("erase all")) {
 					argc -= 2; argv += 2;
@@ -957,7 +1014,7 @@ rloop:
 		else if (!strcmp(str2[1], "write_part") || !strcmp(str2[1], "w")) {
 			const char *fn; FILE *fi;
 			const char *name = str2[2];
-			if (argcount <= 3) { DBG_LOG("write_part part_name/part_id FILE\n"); argc -= 3; argv += 3; continue; }
+			if (argcount <= 3) { DBG_LOG("write_part part_name/part_id FILE\n"); argc = 1; continue; }
 			fn = str2[3];
 			fi = fopen(fn, "r");
 			if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 3; argv += 3; continue; }
@@ -970,16 +1027,41 @@ rloop:
 			get_partition_info(io, name, 0);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
 
-			if (strstr(name, "fixnv1")) load_nv_partition(io, gPartInfo.name, fn, 4096);
+			if (strstr(gPartInfo.name, "fixnv1")) load_nv_partition(io, gPartInfo.name, fn, 4096);
 			else load_partition(io, gPartInfo.name, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 3; argv += 3;
 
 		}
 		else if (!strcmp(str2[1], "write_parts")) {
-			if (argcount <= 2) { DBG_LOG("write_parts save_location\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("write_parts save_location\n"); argc = 1; continue; }
 			if (skip_confirm) load_partitions(io, str2[2], blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			else if (check_confirm("write all partitions")) load_partitions(io, str2[2], blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 2; argv += 2;
+
+		}
+		else if (!strcmp(str2[1], "w_force")) {
+			const char *fn; FILE *fi;
+			const char *name = str2[2];
+			if (argcount <= 3) { DBG_LOG("w_force part_name/part_id FILE\n"); argc = 1; continue; }
+			if (Da_Info.dwStorageType == 0x101) { DBG_LOG("w_force is not allowed on NAND(UBI) devices\n"); argc -= 3; argv += 3; continue; }
+			if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 3; argv += 3; continue; }
+			fn = str2[3];
+			fi = fopen(fn, "r");
+			if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 3; argv += 3; continue; }
+			else fclose(fi);
+			get_partition_info(io, name, 0);
+			if (!gPartInfo.size) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
+
+			if (strstr(gPartInfo.name, "splloader") || strstr(gPartInfo.name, "fixnv1")) { DBG_LOG("blacklist!\n"); argc -= 3; argv += 3; continue; }
+			else if(isdigit(str2[2][0])) load_partition_force(io, atoi(str2[2]) - 1, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			else {
+				for (i = 0; i < io->part_count; i++)
+					if (!strcmp(gPartInfo.name, (*(io->ptable + i)).name)) {
+						load_partition_force(io, i, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+						break;
+					}
+			}
+			argc -= 3; argv += 3;
 
 		}
 		else if (!strcmp(str2[1], "wof") || !strcmp(str2[1], "wov")) {
@@ -987,7 +1069,7 @@ rloop:
 			size_t length;
 			uint8_t *src;
 			const char *name = str2[2];
-			if (argcount <= 4) { DBG_LOG("wof part_name offset FILE\nwov part_name offset VALUE(max is 0xFFFFFFFF)\n"); argc -= 4; argv += 4; continue; }
+			if (argcount <= 4) { DBG_LOG("wof part_name offset FILE\nwov part_name offset VALUE(max is 0xFFFFFFFF)\n"); argc = 1; continue; }
 			if (strstr(name, "fixnv") || strstr(name, "runtimenv") || strstr(name, "userdata")) {
 				DBG_LOG("blacklist!\n");
 				argc -= 4; argv += 4;
@@ -1017,21 +1099,23 @@ rloop:
 
 		}
 		else if (!strcmp(str2[1], "blk_size") || !strcmp(str2[1], "bs")) {
-			if (argcount <= 2) { DBG_LOG("blk_size byte\n\tmax is 65535\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("blk_size byte\n\tmax is 65535\n"); argc = 1; continue; }
 			blk_size = strtol(str2[2], NULL, 0);
+#ifndef _MYDEBUG
 			blk_size = blk_size < 0 ? 0 :
 				blk_size > 0xf800 ? 0xf800 : ((blk_size + 0x7FF) & ~0x7FF);
+#endif
 			argc -= 2; argv += 2;
 
 		}
 		else if (!strcmp(str2[1], "fblk_size") || !strcmp(str2[1], "fbs")) {
-			if (argcount <= 2) { DBG_LOG("fblk_size mb\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("fblk_size mb\n"); argc = 1; continue; }
 			fblk_size = strtoull(str2[2], NULL, 0) * 1024 * 1024;
 			argc -= 2; argv += 2;
 
 		}
 		else if (!strcmp(str2[1], "verity")) {
-			if (argcount <= 2) { DBG_LOG("verity {0,1}\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("verity {0,1}\n"); argc = 1; continue; }
 			if (atoi(str2[2])) dm_enable(io, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			else {
 				DBG_LOG("Warning: disable dm-verity needs a write-verification-disabled FDL2\n");
@@ -1046,13 +1130,13 @@ rloop:
 
 		}
 		else if (!strcmp(str2[1], "set_active")) {
-			if (argcount <= 2) { DBG_LOG("set_active {a,b}\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("set_active {a,b}\n"); argc = 1; continue; }
 			set_active(io, str2[2]);
 			argc -= 2; argv += 2;
 
 		}
 		else if (!strcmp(str2[1], "firstmode")) {
-			if (argcount <= 2) { DBG_LOG("firstmode mode_id\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("firstmode mode_id\n"); argc = 1; continue; }
 			uint8_t *modebuf = malloc(4);
 			if (!modebuf) ERR_EXIT("malloc failed\n");
 			uint32_t mode = strtol(str2[2], NULL, 0) + 0x53464D00;
@@ -1063,19 +1147,19 @@ rloop:
 
 		}
 		else if (!strcmp(str2[1], "skip_confirm")) {
-			if (argcount <= 2) { DBG_LOG("skip_confirm {0,1}\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("skip_confirm {0,1}\n"); argc = 1; continue; }
 			skip_confirm = atoi(str2[2]);
 			argc -= 2; argv += 2;
 
 		}
 		else if (!strcmp(str2[1], "rawdata")) {
-			if (argcount <= 2) { DBG_LOG("rawdata {0,1,2}\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("rawdata {0,1,2}\n"); argc = 1; continue; }
 			Da_Info.bSupportRawData = atoi(str2[2]);
 			argc -= 2; argv += 2;
 
 		}
 		else if (!strcmp(str2[1], "slot")) {
-			if (argcount <= 2) { DBG_LOG("slot {0,1,2}\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("slot {0,1,2}\n"); argc = 1; continue; }
 			selected_ab = atoi(str2[2]);
 			argc -= 2; argv += 2;
 
@@ -1102,28 +1186,28 @@ rloop:
 		}
 		else if (!strcmp(str2[1], "transcode")) {
 			unsigned a, f;
-			if (argcount <= 2) { DBG_LOG("bad command\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("transcode {0,1}\n"); argc = 1; continue; }
 			a = atoi(str2[2]);
-			if (a >> 1) { DBG_LOG("bad command\n"); argc -= 2; argv += 2; continue; }
+			if (a >> 1) { DBG_LOG("transcode {0,1}\n"); argc -= 2; argv += 2; continue; }
 			f = (io->flags & ~FLAGS_TRANSCODE);
 			io->flags = f | (a ? FLAGS_TRANSCODE : 0);
 			argc -= 2; argv += 2;
 
 		}
 		else if (!strcmp(str2[1], "keep_charge")) {
-			if (argcount <= 2) { DBG_LOG("keep_charge {0,1}\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("keep_charge {0,1}\n"); argc = 1; continue; }
 			keep_charge = atoi(str2[2]);
 			argc -= 2; argv += 2;
 
 		}
 		else if (!strcmp(str2[1], "timeout")) {
-			if (argcount <= 2) { DBG_LOG("timeout ms\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("timeout ms\n"); argc = 1; continue; }
 			io->timeout = atoi(str2[2]);
 			argc -= 2; argv += 2;
 
 		}
 		else if (!strcmp(str2[1], "end_data")) {
-			if (argcount <= 2) { DBG_LOG("end_data {0,1}\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("end_data {0,1}\n"); argc = 1; continue; }
 			end_data = atoi(str2[2]);
 			argc -= 2; argv += 2;
 
@@ -1182,7 +1266,7 @@ rloop:
 
 		}
 		else if (!strcmp(str2[1], "verbose")) {
-			if (argcount <= 2) { DBG_LOG("verbose {0,1,2}\n"); argc -= 2; argv += 2; continue; }
+			if (argcount <= 2) { DBG_LOG("verbose {0,1,2}\n"); argc = 1; continue; }
 			io->verbose = atoi(str2[2]);
 			argc -= 2; argv += 2;
 
