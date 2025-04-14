@@ -16,7 +16,7 @@ jobs:
     strategy:
       matrix:
         arch: [x64, x86]
-        config: [Release, Debug]
+        config: [Release, CustDebug]
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -61,21 +61,34 @@ jobs:
           path: output
           pattern: spd_dump_*_Release
 
+      - name: Download Debug Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: outputD
+          pattern: spd_dump_*_CustDebug
+
       - name: Misc
         run: |
           cp stable/*.md output/
           cp stable/Lib/*.bin output/
           cd output
           zip -r -v ../spd_dump_${{ env.RELEASE_TAG }}.zip .
+          cd ../outputD
+          zip -r -v ../spd_dump_${{ env.RELEASE_TAG }}_Debug.zip .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
-          name: Stable Release ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
           draft: false
           prerelease: false
-          files: spd_dump_${{ env.RELEASE_TAG }}.zip
+          body: |
+            x86 ver work with SPRD driver, x64 ver work with libusb driver
+            if you need dev version: https://nightly.link/TomKing062/spreadtrum_flash/workflows/build/main
+          files: |
+            spd_dump_${{ env.RELEASE_TAG }}.zip
+            spd_dump_${{ env.RELEASE_TAG }}_Debug.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -2,7 +2,7 @@
 
 使用官方SPRD U2S Diag驱动程序或LibUSB驱动程序。
 
-### [下载预构建程序(Windows)](https://github.com/TomKing062/spreadtrum_flash/releases)
+### Windows预构建程序下载 [Release](https://github.com/TomKing062/spreadtrum_flash/releases)|[Dev](https://nightly.link/TomKing062/spreadtrum_flash/workflows/build/main)
 
 ### [原作者(ilyakurdyukov)版本的说明信息](https://github.com/ilyakurdyukov/spreadtrum_flash)
 
@@ -14,7 +14,7 @@ spd_dump [选项] [指令] [退出指令]
 
 #### 示例
 
-**单线模式**
+**单行模式**
 
 ```
 spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec path savepath r all reset
@@ -87,6 +87,14 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
   将文件（`splloader`,`fdl1`,`fdl2`,`sml`,`trustos`,`teecfg`）发送到指定的内存地址。
 
+- `loadexec FILE(addr_in_name)`
+
+  以文件名中的地址作为exec_addr，同时在执行fdl1/spl时使用该文件作为exec_file。
+
+- `loadfdl FILE(addr_in_name)`
+
+  以文件名中的地址作为fdl的目标地址并发送该文件到内存。
+
 - `exec`
 
   在fdl1阶段执行已发送的文件。通常与`sml`或`fdl2`（也称为uboot/lk）一起使用。
@@ -135,9 +143,21 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
   写入指定文件夹下所有文件到设备分区，通常由`read_parts`得到。
 
+- `wof part_name offset FILE`
+
+  把文件写入分区偏移位置。
+
+- `wov part_name offset VALUE`
+
+  把数值写入分区偏移位置（最大值为0xFFFFFFFF）。
+
 - `e|erase_part part_name|part_id`
 
   擦除指定分区。
+
+- `erase_all`
+
+  擦除全部分区。
 
 - `partition_list FILE`
 
@@ -149,20 +169,47 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
 - `p|print`
 
-  打印分区列表
+  打印分区列表。
 
+- `size_part|part_size part_name`
+
+  获取分区大小。
+
+- `check_part part_name`
+
+  检测分区是否存在。
 
 - `verity {0,1}`
 
-  在Android 10(+)上禁用或启用`dm-verity`
+  在Android 10(+)上禁用或启用`dm-verity`。
+
+- `set_active {a,b}`
+
+  设置VAB设备上的活动槽位。
+
+- `firstmode mode_id`
+
+  设置重启后设备将进入的模式。
 
 #### 退出指令
 
 一般于FDL2阶段可用可用；只有很新的FDL1才支持
 
+- `reboot-recovery`
+
+  仅FDL2
+
+- `reboot-fastboot`
+
+  仅FDL2
+
 - `reset`
 
+  FDL2和新版FDL1
+
 - `poweroff`
+
+  FDL2和新版FDL1
 
 ### Android(Termux)
 

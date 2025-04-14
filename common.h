@@ -108,13 +108,19 @@ void usleep(unsigned int us);
 	((uint8_t*)(p))[2] << 8 | \
 	((uint8_t*)(p))[3])
 
+
 typedef struct {
-	uint8_t* raw_buf, * enc_buf, * recv_buf, * temp_buf;
+	char name[36];
+	long long size;
+} partition_t;
+
+typedef struct {
+	uint8_t *raw_buf, *enc_buf, *recv_buf, *temp_buf;
 #if USE_LIBUSB
-	libusb_device_handle* dev_handle;
+	libusb_device_handle *dev_handle;
 	int endp_in, endp_out;
 #else
-	ClassHandle* handle;
+	ClassHandle *handle;
 #endif
 #if _WIN32
 	DWORD iThread;
@@ -122,12 +128,9 @@ typedef struct {
 #endif
 	int flags, recv_len, recv_pos;
 	int raw_len, enc_len, verbose, timeout;
+	partition_t *ptable;
+	int part_count;
 } spdio_t;
-
-typedef struct {
-	char name[36];
-	long long size;
-} partition_t;
 
 #pragma pack(1)
 typedef struct {
@@ -157,14 +160,14 @@ typedef struct {
 } efi_entry;
 
 typedef struct {
-	uint32_t   dwVersion;
-	uint32_t   bDisableHDLC;	//0: Enable hdl; 1:Disable hdl
-	uint8_t    bIsOldMemory;
-	uint8_t    bSupportRawData;
-	uint8_t    bReserve[2];
-	uint32_t   dwFlushSize;		//unit KB
-	uint32_t   dwStorageType;
-	uint32_t   dwReserve[59];	//Reserve
+	uint32_t dwVersion;
+	uint32_t bDisableHDLC; //0: Enable hdl; 1:Disable hdl
+	uint8_t bIsOldMemory;
+	uint8_t bSupportRawData;
+	uint8_t bReserve[2];
+	uint32_t dwFlushSize; //unit KB
+	uint32_t dwStorageType;
+	uint32_t dwReserve[59]; //Reserve
 } DA_INFO_T;
 
 typedef struct {
@@ -190,45 +193,51 @@ typedef struct {
 #pragma pack()
 
 #if USE_LIBUSB
-libusb_device* FindPort(void);
+libusb_device *FindPort(void);
 void startUsbEventHandle(void);
 void stopUsbEventHandle(void);
-void find_endpoints(libusb_device_handle* dev_handle, int result[2]);
-void call_Initialize_libusb(spdio_t* io);
+void find_endpoints(libusb_device_handle *dev_handle, int result[2]);
+void call_Initialize_libusb(spdio_t *io);
 #else
-DWORD FindPort(const char* USB_DL);
+DWORD FindPort(const char *USB_DL);
 #endif
 
-void print_string(FILE* f, const void* src, size_t n);
-void ChangeMode(spdio_t* io, int ms, int bootmode, int at);
+void print_string(FILE *f, const void *src, size_t n);
+void ChangeMode(spdio_t *io, int ms, int bootmode, int at);
 
-spdio_t* spdio_init(int flags);
-void spdio_free(spdio_t* io);
+spdio_t *spdio_init(int flags);
+void spdio_free(spdio_t *io);
 
-void encode_msg(spdio_t* io, int type, const void* data, size_t len);
-int send_msg(spdio_t* io);
-int recv_msg(spdio_t* io);
-int recv_msg_timeout(spdio_t* io, int timeout);
-unsigned recv_type(spdio_t* io);
-int send_and_check(spdio_t* io);
-int check_confirm(const char* name);
-void send_file(spdio_t* io, const char* fn, uint32_t start_addr, int end_data, unsigned step);
-unsigned dump_flash(spdio_t* io, uint32_t addr, uint32_t start, uint32_t len, const char* fn, unsigned step);
-unsigned dump_mem(spdio_t* io, uint32_t start, uint32_t len, const char* fn, unsigned step);
-uint64_t dump_partition(spdio_t* io, const char* name, uint64_t start, uint64_t len, const char* fn, unsigned step);
-void dump_partitions(spdio_t* io, const char* fn, int* nand_info, int blk_size);
-uint64_t read_pactime(spdio_t* io);
-partition_t* partition_list(spdio_t* io, const char* fn, int* part_count_ptr);
-void repartition(spdio_t* io, const char* fn);
-void erase_partition(spdio_t* io, const char* name);
-void load_partition(spdio_t* io, const char* name, const char* fn, unsigned step);
-void load_nv_partition(spdio_t* io, const char* name, const char* fn, unsigned step);
-void load_partitions(spdio_t* io, const char* path, int blk_size);
-uint64_t find_partition_size(spdio_t* io, const char* name);
-int check_partition(spdio_t* io, const char* name);
-uint64_t str_to_size(const char* str);
-uint64_t str_to_size_ubi(const char* str, int* nand_info);
-void get_Da_Info(spdio_t* io);
-void select_ab(spdio_t* io);
-void dm_disable(spdio_t* io, int blk_size);
-void dm_enable(spdio_t* io, int blk_size);
+void encode_msg(spdio_t *io, int type, const void *data, size_t len);
+int send_msg(spdio_t *io);
+int recv_msg(spdio_t *io);
+int recv_msg_timeout(spdio_t *io, int timeout);
+unsigned recv_type(spdio_t *io);
+int send_and_check(spdio_t *io);
+int check_confirm(const char *name);
+uint8_t *loadfile(const char *fn, size_t *num, size_t extra);
+void send_buf(spdio_t *io, uint32_t start_addr, int end_data, unsigned step, uint8_t *mem, unsigned size);
+void send_file(spdio_t *io, const char *fn, uint32_t start_addr, int end_data, unsigned step, unsigned src_offs, unsigned src_size);
+FILE *my_fopen(const char *fn, const char *mode);
+unsigned dump_flash(spdio_t *io, uint32_t addr, uint32_t start, uint32_t len, const char *fn, unsigned step);
+unsigned dump_mem(spdio_t *io, uint32_t start, uint32_t len, const char *fn, unsigned step);
+uint64_t dump_partition(spdio_t *io, const char *name, uint64_t start, uint64_t len, const char *fn, unsigned step);
+void dump_partitions(spdio_t *io, const char *fn, int *nand_info, int blk_size);
+uint64_t read_pactime(spdio_t *io);
+partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr);
+void repartition(spdio_t *io, const char *fn);
+void erase_partition(spdio_t *io, const char *name);
+void load_partition(spdio_t *io, const char *name, const char *fn, unsigned step);
+void load_nv_partition(spdio_t *io, const char *name, const char *fn, unsigned step);
+void load_partitions(spdio_t *io, const char *path, int blk_size);
+void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned step);
+uint64_t check_partition(spdio_t *io, const char *name, int need_size);
+void get_partition_info(spdio_t *io, const char *name, int need_size);
+uint64_t str_to_size(const char *str);
+uint64_t str_to_size_ubi(const char *str, int *nand_info);
+void get_Da_Info(spdio_t *io);
+void select_ab(spdio_t *io);
+void dm_disable(spdio_t *io, int blk_size);
+void dm_enable(spdio_t *io, int blk_size);
+void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t *mem, size_t length, int blk_size, int force);
+void set_active(spdio_t *io, char *arg);
