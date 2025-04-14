@@ -675,6 +675,8 @@ int main(int argc, char **argv) {
 					}
 				}
 				if (Da_Info.bSupportRawData) {
+					blk_size = 0xf800;
+					io->ptable = partition_list(io, fn_partlist, &io->part_count);
 					if (fdl2_executed) {
 						Da_Info.bSupportRawData = 0;
 						DBG_LOG("DISABLE_WRITE_RAW_DATA in SPRD4\n");
@@ -683,8 +685,6 @@ int main(int argc, char **argv) {
 						encode_msg(io, BSL_CMD_WRITE_RAW_DATA_ENABLE, NULL, 0);
 						if (!send_and_check(io)) DBG_LOG("ENABLE_WRITE_RAW_DATA\n");
 					}
-					blk_size = 0xf800;
-					io->ptable = partition_list(io, fn_partlist, &io->part_count);
 				}
 				else if (highspeed || Da_Info.dwStorageType == 0x103) {
 					blk_size = 0xf800;
@@ -697,7 +697,13 @@ int main(int argc, char **argv) {
 				if (gpt_failed != 1) {
 					if (selected_ab == 2) DBG_LOG("Device is using slot b\n");
 					else if (selected_ab == 1) DBG_LOG("Device is using slot a\n");
-					else DBG_LOG("Device is not using VAB\n");
+					else {
+						DBG_LOG("Device is not using VAB\n");
+						if (Da_Info.bSupportRawData) {
+							DBG_LOG("RAW_DATA level is %u, but DISABLED for stability, you can set it manually\n", (unsigned)Da_Info.bSupportRawData);
+							Da_Info.bSupportRawData = 0;
+						}
+					}
 				}
 				if (nand_id == DEFAULT_NAND_ID) {
 					nand_info[0] = (uint8_t)pow(2, nand_id & 3); //page size
@@ -819,7 +825,7 @@ int main(int argc, char **argv) {
 
 			name = str2[2];
 			if (selected_ab < 0) select_ab(io);
-			DBG_LOG("%llu\n", check_partition(io, name, 1));
+			DBG_LOG("%lld\n", (long long)check_partition(io, name, 1));
 			argc -= 2; argv += 2;
 
 		}
@@ -839,7 +845,7 @@ int main(int argc, char **argv) {
 
 			name = str2[2];
 			if (selected_ab < 0) select_ab(io);
-			DBG_LOG("%llu\n", check_partition(io, name, 0));
+			DBG_LOG("%lld\n", (long long)check_partition(io, name, 0));
 			argc -= 2; argv += 2;
 
 		}
@@ -1088,7 +1094,7 @@ rloop:
 				src = loadfile(fn, &length, 0);
 				if (!src) { DBG_LOG("fopen %s failed\n", fn); argc -= 4; argv += 4; continue; }
 			}
-			w_mem_to_part_offset(io, name, offset, src, length, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			w_mem_to_part_offset(io, name, offset, src, length, blk_size ? blk_size : DEFAULT_BLK_SIZE, 0);
 			free(src);
 			argc -= 4; argv += 4;
 
@@ -1118,12 +1124,14 @@ rloop:
 			if (argcount <= 2) { DBG_LOG("verity {0,1}\n"); argc = 1; continue; }
 			if (atoi(str2[2])) dm_enable(io, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			else {
-				DBG_LOG("Warning: disable dm-verity needs a write-verification-disabled FDL2\n");
-				if (!skip_confirm)
-					if (!check_confirm("disable dm-verity")) {
-						argc -= 2; argv += 2;
-						continue;
-					}
+				if (!io->part_count) {
+					DBG_LOG("Warning: disable dm-verity needs a valid partition table or a write-verification-disabled FDL2\n");
+					if (!skip_confirm)
+						if (!check_confirm("disable dm-verity")) {
+							argc -= 2; argv += 2;
+							continue;
+						}
+				}
 				dm_disable(io, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			}
 			argc -= 2; argv += 2;
@@ -1141,7 +1149,7 @@ rloop:
 			if (!modebuf) ERR_EXIT("malloc failed\n");
 			uint32_t mode = strtol(str2[2], NULL, 0) + 0x53464D00;
 			memcpy(modebuf, &mode, 4);
-			w_mem_to_part_offset(io, "miscdata", 0x2420, modebuf, 4, 0x1000);
+			w_mem_to_part_offset(io, "miscdata", 0x2420, modebuf, 4, 0x1000, 0);
 			free(modebuf);
 			argc -= 2; argv += 2;
 
@@ -1232,7 +1240,7 @@ rloop:
 			if (!miscbuf) ERR_EXIT("malloc failed\n");
 			memset(miscbuf, 0, 0x800);
 			strcpy(miscbuf, "boot-recovery");
-			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
+			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000, 0);
 			free(miscbuf);
 			encode_msg(io, BSL_CMD_NORMAL_RESET, NULL, 0);
 			if (!send_and_check(io)) break;
@@ -1249,7 +1257,7 @@ rloop:
 			memset(miscbuf, 0, 0x800);
 			strcpy(miscbuf, "boot-recovery");
 			strcpy(miscbuf + 0x40, "recovery\n--fastboot\n");
-			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
+			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000, 0);
 			free(miscbuf);
 			encode_msg(io, BSL_CMD_NORMAL_RESET, NULL, 0);
 			if (!send_and_check(io)) break;

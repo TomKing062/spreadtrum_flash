@@ -793,14 +793,22 @@ uint64_t dump_partition(spdio_t *io,
 		if (dot != NULL) *dot = '2';
 		select_partition(io, name_tmp, 8, 0, BSL_CMD_READ_START);
 		free(name_tmp);
-		if (send_and_check(io)) return 0;
+		if (send_and_check(io)) {
+			encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+			send_and_check(io);
+			return 0;
+		}
 
 		uint32_t data[2] = { 8,0 };
 		encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
 		send_msg(io);
 		ret = recv_msg(io);
 		if (!ret) ERR_EXIT("timeout reached\n");
-		if (recv_type(io) != BSL_REP_READ_FLASH) return 0;
+		if (recv_type(io) != BSL_REP_READ_FLASH) {
+			encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+			send_and_check(io);
+			return 0;
+		}
 		if (*(uint32_t *)(io->raw_buf + 4) == 0x00004e56) {
 			if (dot != NULL) len = *(uint32_t *)(io->raw_buf + 8);
 			else len = 0x200 + *(uint32_t *)(io->raw_buf + 8);
@@ -811,7 +819,11 @@ uint64_t dump_partition(spdio_t *io,
 	}
 
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
-	if (send_and_check(io)) return 0;
+	if (send_and_check(io)) {
+		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		send_and_check(io);
+		return 0;
+	}
 
 	FILE *fo = my_fopen(fn, "wb");
 	if (!fo) ERR_EXIT("fopen(dump) failed\n");
@@ -863,7 +875,11 @@ uint64_t read_pactime(spdio_t *io) {
 	unsigned long long time, unix;
 
 	select_partition(io, "miscdata", offset + len, 0, BSL_CMD_READ_START);
-	if (send_and_check(io)) return 0;
+	if (send_and_check(io)) {
+		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		send_and_check(io);
+		return 0;
+	}
 
 	WRITE32_LE(data, len);
 	WRITE32_LE(data + 1, offset);
@@ -871,8 +887,12 @@ uint64_t read_pactime(spdio_t *io) {
 	send_msg(io);
 	ret = recv_msg(io);
 	if (!ret) ERR_EXIT("timeout reached\n");
-	if ((ret = recv_type(io)) != BSL_REP_READ_FLASH)
-		ERR_EXIT("unexpected response (0x%04x)\n", ret);
+	if ((ret = recv_type(io)) != BSL_REP_READ_FLASH) {
+		DBG_LOG("unexpected response (0x%04x)\n", ret);
+		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		send_and_check(io);
+		return 0;
+	}
 	n = READ16_BE(io->raw_buf + 2);
 	if (n != len) ERR_EXIT("unexpected length\n");
 
@@ -1151,7 +1171,7 @@ void erase_partition(spdio_t *io, const char *name) {
 		memset(miscbuf, 0, 0x800);
 		strcpy(miscbuf, "boot-recovery");
 		strcpy(miscbuf + 0x40, "recovery\n--wipe_data\n");
-		w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
+		w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000, 0);
 		free(miscbuf);
 		select_partition(io, "persist", 0, 0, BSL_CMD_ERASE_FLASH);
 	}
@@ -1427,7 +1447,11 @@ void find_partition_size_new(spdio_t *io, const char *name, unsigned long long *
 	sprintf(name_tmp, "%s_size", name);
 	select_partition(io, name_tmp, 0x80, 0, BSL_CMD_READ_START);
 	free(name_tmp);
-	if (send_and_check(io)) return;
+	if (send_and_check(io)) {
+		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		send_and_check(io);
+		return;
+	}
 
 	uint32_t data[2] = { 0x80,0 };
 	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
@@ -1443,16 +1467,11 @@ void find_partition_size_new(spdio_t *io, const char *name, unsigned long long *
 }
 
 uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
-	uint32_t t32; uint64_t n64, offset = 0;
+	uint32_t t32; uint64_t n64;
+	unsigned long long offset = 0; //uint64_t differs between platforms
 	int ret, i, end = 20;
 
-	if (selected_ab > 0 && strcmp(name, "uboot") == 0) {
-		if (!check_partition(io, "uboot_a", 0)) {
-			DBG_LOG("Fake VAB! Device is not using VAB\n");
-			selected_ab = 0;
-			if (!need_size) return 1;
-		}
-	}
+	if (selected_ab > 0 && strcmp(name, "uboot") == 0) return 0;
 	if (strstr(name, "fixnv")) {
 		if (selected_ab > 0) {
 			size_t namelen = strlen(name);
@@ -1469,7 +1488,11 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 
 	if (!need_size) {
 		select_partition(io, name, 0x8, 0, BSL_CMD_READ_START);
-		if (send_and_check(io)) return 0;
+		if (send_and_check(io)) {
+			encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+			send_and_check(io);
+			return 0;
+		}
 
 		uint32_t data[2] = { 0x8,0 };
 		encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
@@ -1490,7 +1513,11 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 
 	if (!strcmp(name, "ubipac")) end = 10;
 	select_partition(io, name, 128 * 1024, 0, BSL_CMD_READ_START);
-	if (send_and_check(io)) return 0;
+	if (send_and_check(io)) {
+		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		send_and_check(io);
+		return 0;
+	}
 
 	int incrementing = 1;
 	for (i = end; i >= end;) {
@@ -1909,12 +1936,17 @@ int ab_compare_slots(const slot_metadata * a, const slot_metadata * b) {
 	return 0;
 }
 
-void select_ab(spdio_t * io) {
+void select_ab(spdio_t *io) {
 	bootloader_control *abc = NULL;
 	int ret;
 
 	select_partition(io, "misc", 0x820, 0, BSL_CMD_READ_START);
-	if (send_and_check(io)) { selected_ab = 0; return; }
+	if (send_and_check(io)) {
+		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		send_and_check(io);
+		selected_ab = 0;
+		return;
+	}
 
 	uint32_t data[2] = { 0x20,0x800 };
 	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
@@ -1929,19 +1961,24 @@ void select_ab(spdio_t * io) {
 	if (abc->nb_slot != 2) { selected_ab = 0; return; }
 	if (ab_compare_slots(&abc->slot_info[1], &abc->slot_info[0]) < 0) selected_ab = 2;
 	else selected_ab = 1;
+
+	if (selected_ab > 0 && check_partition(io, "uboot_a", 0) == 0) selected_ab = 0;
 }
 
 void dm_disable(spdio_t *io, int blk_size) {
 	char ch = '\1';
-	w_mem_to_part_offset(io, "vbmeta", 0x7B, (uint8_t *)&ch, 1, blk_size);
+	int force = 0;
+	if (io->part_count) force = 1;
+	if (Da_Info.dwStorageType == 0x101) force = 0;
+	w_mem_to_part_offset(io, "vbmeta", 0x7B, (uint8_t *)&ch, 1, blk_size, force);
 	ch = '\0';
-	w_mem_to_part_offset(io, "vbmeta_bak", 0x7B, (uint8_t *)&ch, 1, blk_size);
+	w_mem_to_part_offset(io, "vbmeta_bak", 0x7B, (uint8_t *)&ch, 1, blk_size, 0);
 }
 
 void dm_enable(spdio_t *io, int blk_size) {
 	const char *list[] = { "vbmeta", "vbmeta_system", "vbmeta_vendor", "vbmeta_system_ext", "vbmeta_product", "vbmeta_odm", NULL };
 	char ch = '\0';
-	for (int i = 0; list[i] != NULL; i++) w_mem_to_part_offset(io, list[i], 0x7B, (uint8_t *)&ch, 1, blk_size);
+	for (int i = 0; list[i] != NULL; i++) w_mem_to_part_offset(io, list[i], 0x7B, (uint8_t *)&ch, 1, blk_size, 0);
 }
 
 uint32_t const crc32_tab[] = {
@@ -1989,7 +2026,7 @@ uint32_t crc32(uint32_t crc_in, const uint8_t * buf, int size) {
 	return crc ^ ~0U;
 }
 
-void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t *mem, size_t length, int blk_size) {
+void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t *mem, size_t length, int blk_size, int force) {
 	get_partition_info(io, name, 1);
 	if (!gPartInfo.size) { DBG_LOG("part not exist\n"); return; }
 	else if (gPartInfo.size > 0xffffffff) { DBG_LOG("part too large\n"); return; }
@@ -2014,7 +2051,15 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 	if (fseek(fi, offset, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
 	if (fwrite(mem, 1, length, fi) != length) ERR_EXIT("fwrite failed\n");
 	fclose(fi);
-	load_partition(io, gPartInfo.name, fix_fn, blk_size);
+	if (force) {
+		for (int i = 0; i < io->part_count; i++) {
+			if (!strcmp(gPartInfo.name, io->ptable[i].name)) {
+				load_partition_force(io, i, fix_fn, blk_size);
+				break;
+			}
+		}
+	}
+	else load_partition(io, gPartInfo.name, fix_fn, blk_size);
 }
 
 void set_active(spdio_t *io, char *arg) {
@@ -2030,7 +2075,7 @@ void set_active(spdio_t *io, char *arg) {
 	abc->slot_suffix[1] = *arg;
 	abc->crc32_le = crc32(0, (void *)abc, 0x1C);
 
-	w_mem_to_part_offset(io, "misc", 0x800, (uint8_t *)abc, sizeof(bootloader_control), 0x1000);
+	w_mem_to_part_offset(io, "misc", 0x800, (uint8_t *)abc, sizeof(bootloader_control), 0x1000, 0);
 }
 
 

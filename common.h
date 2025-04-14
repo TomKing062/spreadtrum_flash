@@ -239,5 +239,5 @@ void get_Da_Info(spdio_t *io);
 void select_ab(spdio_t *io);
 void dm_disable(spdio_t *io, int blk_size);
 void dm_enable(spdio_t *io, int blk_size);
-void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t *mem, size_t length, int blk_size);
+void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t *mem, size_t length, int blk_size, int force);
 void set_active(spdio_t *io, char *arg);
