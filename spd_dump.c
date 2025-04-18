@@ -1033,8 +1033,7 @@ rloop:
 			get_partition_info(io, name, 0);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
 
-			if (strstr(gPartInfo.name, "fixnv1")) load_nv_partition(io, gPartInfo.name, fn, 4096);
-			else load_partition(io, gPartInfo.name, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			load_partition_unify(io, gPartInfo.name, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 3; argv += 3;
 
 		}
@@ -1094,7 +1093,7 @@ rloop:
 				src = loadfile(fn, &length, 0);
 				if (!src) { DBG_LOG("fopen %s failed\n", fn); argc -= 4; argv += 4; continue; }
 			}
-			w_mem_to_part_offset(io, name, offset, src, length, blk_size ? blk_size : DEFAULT_BLK_SIZE, 0);
+			w_mem_to_part_offset(io, name, offset, src, length, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			free(src);
 			argc -= 4; argv += 4;
 
@@ -1110,6 +1109,8 @@ rloop:
 #ifndef _MYDEBUG
 			blk_size = blk_size < 0 ? 0 :
 				blk_size > 0xf800 ? 0xf800 : ((blk_size + 0x7FF) & ~0x7FF);
+#else
+			blk_size = blk_size < 0 ? 0 : blk_size;
 #endif
 			argc -= 2; argv += 2;
 
@@ -1149,7 +1150,7 @@ rloop:
 			if (!modebuf) ERR_EXIT("malloc failed\n");
 			uint32_t mode = strtol(str2[2], NULL, 0) + 0x53464D00;
 			memcpy(modebuf, &mode, 4);
-			w_mem_to_part_offset(io, "miscdata", 0x2420, modebuf, 4, 0x1000, 0);
+			w_mem_to_part_offset(io, "miscdata", 0x2420, modebuf, 4, 0x1000);
 			free(modebuf);
 			argc -= 2; argv += 2;
 
@@ -1240,7 +1241,7 @@ rloop:
 			if (!miscbuf) ERR_EXIT("malloc failed\n");
 			memset(miscbuf, 0, 0x800);
 			strcpy(miscbuf, "boot-recovery");
-			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000, 0);
+			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
 			free(miscbuf);
 			encode_msg(io, BSL_CMD_NORMAL_RESET, NULL, 0);
 			if (!send_and_check(io)) break;
@@ -1257,7 +1258,7 @@ rloop:
 			memset(miscbuf, 0, 0x800);
 			strcpy(miscbuf, "boot-recovery");
 			strcpy(miscbuf + 0x40, "recovery\n--fastboot\n");
-			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000, 0);
+			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
 			free(miscbuf);
 			encode_msg(io, BSL_CMD_NORMAL_RESET, NULL, 0);
 			if (!send_and_check(io)) break;
