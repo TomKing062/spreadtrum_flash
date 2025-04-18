@@ -2064,7 +2064,8 @@ int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned
 	if (!strcmp(name, "vbmeta")) isVBMETA = 1;
 	else if (selected_ab > 0
 		|| Da_Info.dwStorageType == 0x101
-		|| io->part_count == 0 ) { load_partition(io, name, fn, step); return 1; }
+		|| io->part_count == 0
+		|| memcmp(name, "splloader", 9) == 0) { load_partition(io, name, fn, step); return 1; }
 
 	strcpy(name0, gPartInfo.name);
 	if (strlen(name0) >= sizeof(name1) - 4) { load_partition(io, name0, fn, step); return 1; }
