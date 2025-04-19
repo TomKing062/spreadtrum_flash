@@ -1057,7 +1057,7 @@ rloop:
 			get_partition_info(io, name, 0);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
 
-			if (strstr(gPartInfo.name, "splloader") || strstr(gPartInfo.name, "fixnv1")) { DBG_LOG("blacklist!\n"); argc -= 3; argv += 3; continue; }
+			if (!memcmp(gPartInfo.name, "splloader", 9)) { DBG_LOG("blacklist!\n"); argc -= 3; argv += 3; continue; }
 			else if(isdigit(str2[2][0])) load_partition_force(io, atoi(str2[2]) - 1, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			else {
 				for (i = 0; i < io->part_count; i++)

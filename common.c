@@ -785,7 +785,7 @@ uint64_t dump_partition(spdio_t *io,
 	int ret, mode64 = (start + len) >> 32;
 
 	if (!memcmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
-	else if (strstr(name, "nv1") || strstr(name, "nv2")) {
+	else if (strstr(name, "nv1")) {
 		char *name_tmp = malloc(strlen(name) + 1);
 		if (name_tmp == NULL) return 0;
 		strcpy(name_tmp, name);
@@ -1478,7 +1478,7 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 	int ret, i, end = 20;
 
 	if (selected_ab > 0 && strcmp(name, "uboot") == 0) return 0;
-	if (strstr(name, "fixnv")) {
+	if (strstr(name, "fixnv1")) {
 		if (selected_ab > 0) {
 			size_t namelen = strlen(name);
 			if (0 == strcmp(name + namelen - 2, "_a") || 0 == strcmp(name + namelen - 2, "_b")) return 1;
