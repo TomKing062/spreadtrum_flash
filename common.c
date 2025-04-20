@@ -783,39 +783,14 @@ uint64_t dump_partition(spdio_t *io,
 	const char *fn, unsigned step) {
 	uint32_t n, nread, t32; uint64_t offset, n64, saved_size = 0;
 	int ret, mode64 = (start + len) >> 32;
+	char name_tmp[36];
 
 	if (!memcmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
 	else if (strstr(name, "nv1")) {
-		char *name_tmp = malloc(strlen(name) + 1);
-		if (name_tmp == NULL) return 0;
 		strcpy(name_tmp, name);
 		char *dot = strrchr(name_tmp, '1');
 		if (dot != NULL) *dot = '2';
-		select_partition(io, name_tmp, 8, 0, BSL_CMD_READ_START);
-		free(name_tmp);
-		if (send_and_check(io)) {
-			encode_msg(io, BSL_CMD_READ_END, NULL, 0);
-			send_and_check(io);
-			return 0;
-		}
-
-		uint32_t data[2] = { 8,0 };
-		encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
-		send_msg(io);
-		ret = recv_msg(io);
-		if (!ret) ERR_EXIT("timeout reached\n");
-		if (recv_type(io) != BSL_REP_READ_FLASH) {
-			encode_msg(io, BSL_CMD_READ_END, NULL, 0);
-			send_and_check(io);
-			return 0;
-		}
-		if (*(uint32_t *)(io->raw_buf + 4) == 0x00004e56) {
-			if (dot != NULL) len = *(uint32_t *)(io->raw_buf + 8);
-			else len = 0x200 + *(uint32_t *)(io->raw_buf + 8);
-			DBG_LOG("nv length: 0x%llx\n", (long long)len);
-		}
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
-		send_and_check(io);
+		name = name_tmp;
 	}
 
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
@@ -1476,82 +1451,111 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 	uint32_t t32; uint64_t n64;
 	unsigned long long offset = 0; //uint64_t differs between platforms
 	int ret, i, end = 20;
+	char name_tmp[36];
 
 	if (selected_ab > 0 && strcmp(name, "uboot") == 0) return 0;
-	if (strstr(name, "fixnv1")) {
+	if (strstr(name, "fixnv")) {
 		if (selected_ab > 0) {
 			size_t namelen = strlen(name);
-			if (0 == strcmp(name + namelen - 2, "_a") || 0 == strcmp(name + namelen - 2, "_b")) return 1;
-			return 0;
+			if (strcmp(name + namelen - 2, "_a") && strcmp(name + namelen - 2, "_b")) return 0;
 		}
-		return 1;
+		strcpy(name_tmp, name);
+		char *dot = strrchr(name_tmp, '1');
+		if (dot != NULL) *dot = '2';
+		name = name_tmp;
 	}
 	else if (strstr(name, "runtimenv")) {
 		size_t namelen = strlen(name);
 		if (0 == strcmp(name + namelen - 2, "_a") || 0 == strcmp(name + namelen - 2, "_b")) return 0;
-		return 1;
-	}
-
-	if (!need_size) {
-		select_partition(io, name, 0x8, 0, BSL_CMD_READ_START);
-		if (send_and_check(io)) {
-			encode_msg(io, BSL_CMD_READ_END, NULL, 0);
-			send_and_check(io);
-			return 0;
-		}
-
-		uint32_t data[2] = { 0x8,0 };
-		encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
-		send_msg(io);
-		ret = recv_msg(io);
-		if (!ret) ERR_EXIT("timeout reached\n");
-		if (recv_type(io) == BSL_REP_READ_FLASH) ret = 1;
-		else ret = 0;
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
-		send_and_check(io);
-		return ret;
+		strcpy(name_tmp, name);
+		char *dot = strrchr(name_tmp, '1');
+		if (dot != NULL) *dot = '2';
+		name = name_tmp;
 	}
 
 	if (selected_ab > 0) {
 		find_partition_size_new(io, name, &offset);
-		if (offset) return offset;
+		if (offset) {
+			if (need_size) return offset;
+			else return 1;
+		}
 	}
 
-	if (!strcmp(name, "ubipac")) end = 10;
-	select_partition(io, name, 128 * 1024, 0, BSL_CMD_READ_START);
+	select_partition(io, name, 0x8, 0, BSL_CMD_READ_START);
 	if (send_and_check(io)) {
 		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
 		send_and_check(io);
 		return 0;
 	}
 
-	int incrementing = 1;
-	for (i = end; i >= end;) {
-		uint32_t data[3];
-		n64 = offset + (1ll << i) - (1ll << end);
-		WRITE32_LE(data, 4);
-		WRITE32_LE(data + 1, n64);
-		t32 = n64 >> 32;
-		WRITE32_LE(data + 2, t32);
+	uint32_t data[2] = {0x8, 0};
+	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
+	send_msg(io);
+	ret = recv_msg(io);
+	if (!ret) ERR_EXIT("timeout reached\n");
+	if (recv_type(io) == BSL_REP_READ_FLASH) ret = 1;
+	else ret = 0;
+	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	send_and_check(io);
+	if (!need_size) return ret;
 
-		encode_msg(io, BSL_CMD_READ_MIDST, data, sizeof(data));
-		send_msg(io);
-		ret = recv_msg(io);
-		if (!ret) ERR_EXIT("timeout reached\n");
-		ret = recv_type(io);
-		if (incrementing) {
-			if (ret != BSL_REP_READ_FLASH) {
-				if (!n64) break;
-				offset += 1ll << (i - 1);
-				i -= 2;
-				incrementing = 0;
+	int incrementing = 1;
+	select_partition(io, name, 0xffffffff, 0, BSL_CMD_READ_START);
+	if (send_and_check(io)) {
+		//NAND flash !!!
+		end = 10;
+		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		send_and_check(io);
+		for (i = 21; i >= end;) {
+			n64 = offset + (1ll << i) - (1ll << end);
+			select_partition(io, name, n64, 0, BSL_CMD_READ_START);
+			send_msg(io);
+			ret = recv_msg(io);
+			if (!ret) ERR_EXIT("timeout reached\n");
+			ret = recv_type(io);
+			if (incrementing) {
+				if (ret != BSL_REP_ACK) {
+					offset += 1ll << (i - 1);
+					i -= 2;
+					incrementing = 0;
+				}
+				else i++;
 			}
-			else if (i == 10) i += 11;
-			else i++;
+			else {
+				if (ret == BSL_REP_ACK) offset += (1ll << i);
+				i--;
+			}
+			encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+			send_and_check(io);
 		}
-		else {
-			if (ret == BSL_REP_READ_FLASH) offset += (1ll << i);
-			i--;
+	}
+	else {
+		if (!strcmp(name, "ubipac")) end = 10;
+		for (i = 21; i >= end;) {
+			uint32_t data[3];
+			n64 = offset + (1ll << i) - (1ll << end);
+			WRITE32_LE(data, 4);
+			WRITE32_LE(data + 1, n64);
+			t32 = n64 >> 32;
+			WRITE32_LE(data + 2, t32);
+
+			encode_msg(io, BSL_CMD_READ_MIDST, data, sizeof(data));
+			send_msg(io);
+			ret = recv_msg(io);
+			if (!ret) ERR_EXIT("timeout reached\n");
+			ret = recv_type(io);
+			if (incrementing) {
+				if (ret != BSL_REP_READ_FLASH) {
+					offset += 1ll << (i - 1);
+					i -= 2;
+					incrementing = 0;
+				}
+				else i++;
+			}
+			else {
+				if (ret == BSL_REP_READ_FLASH) offset += (1ll << i);
+				i--;
+			}
 		}
 	}
 	DBG_LOG("partition_size_pc: %s, 0x%llx\n", name, offset);
