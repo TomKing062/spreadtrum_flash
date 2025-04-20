@@ -1528,9 +1528,9 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 			encode_msg(io, BSL_CMD_READ_END, NULL, 0);
 			send_and_check(io);
 		}
+		offset -= (1ll << end);
 	}
 	else {
-		if (!strcmp(name, "ubipac")) end = 10;
 		for (i = 21; i >= end;) {
 			uint32_t data[3];
 			n64 = offset + (1ll << i) - (1ll << end);

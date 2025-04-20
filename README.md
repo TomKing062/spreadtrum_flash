@@ -119,9 +119,10 @@ Then the prompt should display `FDL2>`.
 
     - `r all`: full backup (excludes blackbox, cache, userdata)
     - `r all_lite`: full backup (excludes inactive slot partitions, blackbox, cache, and userdata)
+    - all/all_lite is not usable on NAND
 
   When the partition table is unavailable:
-    - `r` will auto-calculate part size (supports all partitions on emmc/ufs and only `ubipac` on NAND).
+    - `r` will auto-calculate part size (supports emmc/ufs and NAND).
 
 - `read_part part_name|part_id offset size FILE`
 
