@@ -617,7 +617,7 @@ void send_buf(spdio_t *io,
 	}
 }
 
-void send_file(spdio_t *io, const char *fn,
+size_t send_file(spdio_t *io, const char *fn,
 	uint32_t start_addr, int end_data, unsigned step,
 	unsigned src_offs, unsigned src_size) {
 	uint8_t *mem; size_t size = 0;
@@ -633,6 +633,7 @@ void send_file(spdio_t *io, const char *fn,
 	send_buf(io, start_addr, end_data, step, mem + src_offs, size);
 	free(mem);
 	DBG_LOG("SEND %s to 0x%x\n", fn, start_addr);
+	return size;
 }
 
 FILE *my_fopen(const char *fn, const char *mode) {
@@ -1759,7 +1760,7 @@ void dump_partitions(spdio_t *io, const char *fn, int *nand_info, unsigned step)
 }
 
 int ab_compare_slots(const slot_metadata *a, const slot_metadata *b);
-void load_partitions(spdio_t *io, const char *path, unsigned step) {
+void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab) {
 	typedef struct {
 		char name[36];
 		char file_path[1024];
@@ -1850,19 +1851,22 @@ void load_partitions(spdio_t *io, const char *path, unsigned step) {
 	int selected_ab_bak = selected_ab;
 	bootloader_control *abc = NULL;
 	size_t misclen = 0;
-	if (miscname[0]) {
-		uint8_t *mem = loadfile(miscname, &misclen, 0);
-		if (misclen >= 0x820) {
-			abc = (bootloader_control *)(mem + 0x800);
-			if (abc->nb_slot != 2) selected_ab = 0;
-			if (ab_compare_slots(&abc->slot_info[1], &abc->slot_info[0]) < 0) selected_ab = 2;
-			else selected_ab = 1;
+	if (force_ab && VAB) selected_ab = force_ab;
+	else {
+		if (miscname[0]) {
+			uint8_t *mem = loadfile(miscname, &misclen, 0);
+			if (misclen >= 0x820) {
+				abc = (bootloader_control *)(mem + 0x800);
+				if (abc->nb_slot != 2) selected_ab = 0;
+				if (ab_compare_slots(&abc->slot_info[1], &abc->slot_info[0]) < 0) selected_ab = 2;
+				else selected_ab = 1;
+			}
+			free(mem);
 		}
-		free(mem);
-	}
-	if (!selected_ab) {
-		if (VAB) selected_ab = VAB;
-		else if (selected_ab_bak > 0) selected_ab = selected_ab_bak;
+		if (!selected_ab) {
+			if (VAB) selected_ab = VAB;
+			else if (selected_ab_bak > 0) selected_ab = selected_ab_bak;
+		}
 	}
 
 	for (int i = 0; i < partition_count; i++) {
@@ -1907,6 +1911,8 @@ void load_partitions(spdio_t *io, const char *path, unsigned step) {
 		}
 	}
 	free(partitions);
+	if (selected_ab == 1) set_active(io, "a");
+	else if (selected_ab == 2) set_active(io, "b");
 	selected_ab = selected_ab_bak;
 }
 
@@ -1974,9 +1980,6 @@ void select_ab(spdio_t *io) {
 
 void dm_disable(spdio_t *io, unsigned step) {
 	char ch = '\1';
-	int force = 0;
-	if (io->part_count) force = 1;
-	if (Da_Info.dwStorageType == 0x101) force = 0;
 	w_mem_to_part_offset(io, "vbmeta", 0x7B, (uint8_t *)&ch, 1, step);
 }
 

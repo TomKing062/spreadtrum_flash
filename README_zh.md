@@ -142,7 +142,7 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
 - `write_parts save_location`
 
-  写入指定文件夹下所有文件到设备分区，通常由`read_parts`得到。
+  写入指定文件夹下所有文件到设备分区，通常由`read_parts`得到。用`write_parts_a`或`write_parts_b`可以强制写入的槽位。
 
 - `wof part_name offset FILE`
 

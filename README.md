@@ -140,7 +140,7 @@ Then the prompt should display `FDL2>`.
 
 - `write_parts save_location`
 
-  Writes all partitions dumped by `read_parts`.
+  Writes all partitions dumped by `read_parts`. Use `write_parts_a` or `write_parts_b` to flash slot forcely.
 
 - `wof part_name offset FILE`
 

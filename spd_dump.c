@@ -81,7 +81,7 @@ void print_help(void) {
 		"\t\tReads partitions from a list file (If the file name starts with \"ubi\", the size will be calculated using the NAND ID).\n"
 		"\tw|write_part part_name|part_id FILE\n"
 		"\t\tWrites the specified file to a partition.\n"
-		"\twrite_parts save_location\n"
+		"\twrite_parts|write_parts_a|write_parts_b save_location\n"
 		"\t\tWrites all partitions dumped by read_parts.\n"
 		"\twof part_name offset FILE\n"
 		"\t\tWrites the specified file to a partition at the given offset.\n"
@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
 	int wait = 30 * REOPEN_FREQ;
 	int argcount = 0, stage = -1, nand_id = DEFAULT_NAND_ID;
 	int nand_info[3];
-	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 1, highspeed = 0;
+	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 1, highspeed = 0, exec_addr_new = 0;
 	unsigned exec_addr = 0, baudrate = 0;
 	char *temp;
 	char str1[(ARGC_MAX - 1) * ARGV_LEN];
@@ -558,14 +558,32 @@ int main(int argc, char **argv) {
 					fi = fopen(fn, "r");
 					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= argchange; argv += argchange; continue; }
 					else fclose(fi);
-					send_file(io, fn, addr, end_data, 528, 0, 0);
-					if (exec_addr) {
-						send_file(io, execfile, exec_addr, 0, 528, 0, 0);
-						free(execfile);
+					if (exec_addr_new) {
+						size_t execsize = send_file(io, fn, addr, 0, 528, 0, 0);
+						int n, gapsize = exec_addr - addr - execsize;
+						uint8_t *buf = malloc(gapsize);
+						for (i = 0; i < gapsize; i += n) {
+							n = gapsize - i;
+							if (n > 528) n = 528;
+							encode_msg(io, BSL_CMD_MIDST_DATA, buf + i, n);
+							if (send_and_check(io)) exit(1);
+						}
+						free(buf);
+						buf = loadfile(execfile, &execsize, 0);
+						encode_msg(io, BSL_CMD_MIDST_DATA, buf, execsize);
+						if (send_and_check(io)) exit(1);
+						free(buf);
 					}
 					else {
-						encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
-						if (send_and_check(io)) exit(1);
+						send_file(io, fn, addr, end_data, 528, 0, 0);
+						if (exec_addr) {
+							send_file(io, execfile, exec_addr, 0, 528, 0, 0);
+							free(execfile);
+						}
+						else {
+							encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
+							if (send_and_check(io)) exit(1);
+						}
 					}
 				}
 				else {
@@ -731,7 +749,8 @@ int main(int argc, char **argv) {
 			argc -= 2; argv += 2;
 
 		}
-		else if (!strcmp(str2[1], "exec_addr")) {
+		else if (!strcmp(str2[1], "exec_addr") || !strcmp(str2[1], "exec_addr_new"))
+		{
 			FILE *fi;
 			if (0 == fdl1_loaded && argcount > 2) {
 				exec_addr = strtoul(str2[2], NULL, 0);
@@ -741,10 +760,10 @@ int main(int argc, char **argv) {
 				else fclose(fi);
 			}
 			DBG_LOG("current exec_addr is 0x%x\n", exec_addr);
+			if (!strcmp(str2[1], "exec_addr_new")) exec_addr_new = 1;
 			argc -= 2; argv += 2;
-
 		}
-		else if (!strcmp(str2[1], "loadexec")) {
+		else if (!strcmp(str2[1], "loadexec") || !strcmp(str2[1], "loadexecnew")) {
 			const char *fn; char *ch; FILE *fi;
 			if (argcount <= 2) { DBG_LOG("loadexec FILE\n"); argc = 1; continue; }
 			if (0 == fdl1_loaded) {
@@ -761,6 +780,7 @@ int main(int argc, char **argv) {
 				else fclose(fi);
 			}
 			DBG_LOG("current exec_addr is 0x%x\n", exec_addr);
+			if (!strcmp(str2[1], "loadexecnew")) exec_addr_new = 1;
 			argc -= 2; argv += 2;
 
 		}
@@ -1038,10 +1058,12 @@ rloop:
 			argc -= 3; argv += 3;
 
 		}
-		else if (!strcmp(str2[1], "write_parts")) {
-			if (argcount <= 2) { DBG_LOG("write_parts save_location\n"); argc = 1; continue; }
-			if (skip_confirm) load_partitions(io, str2[2], blk_size ? blk_size : DEFAULT_BLK_SIZE);
-			else if (check_confirm("write all partitions")) load_partitions(io, str2[2], blk_size ? blk_size : DEFAULT_BLK_SIZE);
+		else if (!memcmp(str2[1], "write_parts", 11)) {
+			if (argcount <= 2) { DBG_LOG("write_parts|write_parts_a|write_parts_b save_location\n"); argc = 1; continue; }
+			int force_ab = 0;
+			if (!strcmp(str2[1], "write_parts_a")) force_ab = 1;
+			else if (!strcmp(str2[1], "write_parts_b")) force_ab = 2;
+			if (skip_confirm || check_confirm("write all partitions")) load_partitions(io, str2[2], blk_size ? blk_size : DEFAULT_BLK_SIZE, force_ab);
 			argc -= 2; argv += 2;
 
 		}
