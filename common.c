@@ -786,7 +786,8 @@ uint64_t dump_partition(spdio_t *io,
 	int ret, mode64 = (start + len) >> 32;
 	char name_tmp[36];
 
-	if (!memcmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
+	if (!strcmp(name, "super")) dump_partition(io, "metadata", 0, check_partition(io, "metadata", 1), "metadata.bin", step);
+	else if (!memcmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
 	else if (strstr(name, "nv1")) {
 		strcpy(name_tmp, name);
 		char *dot = strrchr(name_tmp, '1');
@@ -1142,7 +1143,7 @@ void repartition(spdio_t *io, const char *fn) {
 void erase_partition(spdio_t *io, const char *name) {
 	int timeout0 = io->timeout;
 	char name0[36];
-	if (!memcmp(name, "userdata", 8) || !memcmp(name, "metadata", 8)) {
+	if (!strcmp(name, "userdata")) {
 		char *miscbuf = malloc(0x800);
 		if (!miscbuf) ERR_EXIT("malloc failed\n");
 		memset(miscbuf, 0, 0x800);
@@ -1173,7 +1174,6 @@ void load_partition(spdio_t *io, const char *name,
 	FILE *fi;
 
 	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
-	if (!strcmp(name, "metadata")) { return; } //skip metadata
 	if (!strcmp(name, "calinv")) { return; } //skip calinv
 
 	fi = fopen(fn, "rb");
@@ -1900,17 +1900,19 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 			continue;
 		}
 	}
-
+	int metadata_in_dump = 0, super_in_dump = 0;
 	for (int i = 0; i < partition_count; i++) {
 		if (!partitions[i].written_flag) {
 			fn = partitions[i].name;
 			get_partition_info(io, fn, 0);
 			if (!gPartInfo.size) continue;
-
+			if (!strcmp(gPartInfo.name, "metadata")) metadata_in_dump = 1;
+			if (!strcmp(gPartInfo.name, "super")) super_in_dump = 1;
 			load_partition_unify(io, gPartInfo.name, partitions[i].file_path, step);
 		}
 	}
 	free(partitions);
+	if (super_in_dump == 1 && metadata_in_dump == 0) erase_partition(io, "metadata");
 	if (selected_ab == 1) set_active(io, "a");
 	else if (selected_ab == 2) set_active(io, "b");
 	selected_ab = selected_ab_bak;
