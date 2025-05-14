@@ -56,6 +56,7 @@ enum {
 	BSL_CMD_MIDST_DATA = 0x02, /* The midst flag of the data downloading */
 	BSL_CMD_END_DATA = 0x03, /* The end flag of the data downloading */
 	BSL_CMD_EXEC_DATA = 0x04, /* Execute from a certain address */
+	/* End of Data Download command */
 
 	BSL_CMD_NORMAL_RESET = 0x05, /* Reset to normal mode */
 	BSL_CMD_READ_FLASH = 0x06, /* Read flash content */
@@ -85,27 +86,55 @@ enum {
 	BSL_CMD_READ_CU_REF = 0x1F, /* Read CU ref */
 	BSL_CMD_READ_REFINFO = 0x20, /* Read Ref Info */
 	BSL_CMD_DISABLE_TRANSCODE = 0x21, /* Use the non-escape function */
-	BSL_CMD_WRITE_DATETIME = 0x22, /* Write pac file build time to miscdata */
+	BSL_CMD_WRITE_APR_INFO = 0x22, /* Write pac file build time to miscdata for APR */
 	BSL_CMD_CUST_DUMMY = 0x23, /* Customized Dummy */
 	BSL_CMD_READ_RF_TRANSCEIVER_TYPE = 0x24, /* Read RF transceiver type */
-	BSL_CMD_SET_DEBUGINFO = 0x25,
-	BSL_CMD_DDR_CHECK = 0x26,
-	BSL_CMD_SELF_REFRESH = 0x27,
-	BSL_CMD_WRITE_RAW_DATA_ENABLE = 0x28, /* Init for 0x31 and 0x33 */
-	BSL_CMD_READ_NAND_BLOCK_INFO = 0x29,
-	BSL_CMD_SET_FIRST_MODE = 0x2A,
-	BSL_CMD_READ_PARTITION = 0x2D, /* Partition list */
-	BSL_CMD_DLOAD_RAW_START = 0x31, /* Raw packet */
-	BSL_CMD_WRITE_FLUSH_DATA = 0x32,
-	BSL_CMD_DLOAD_RAW_START2 = 0x33, /* Whole raw file */
-	BSL_CMD_READ_LOG = 0x35,
+	BSL_CMD_ENABLE_DEBUG_MODE = 0x25, /* Enable debug mode */
+	BSL_CMD_DDR_CHECK = 0x26, /* DDR check */
+	BSL_CMD_SELF_REFRESH = 0x27, /* Self Refresh */
+	BSL_CMD_ENABLE_RAW_DATA = 0x28, /* Enable Raw Data */
+	BSL_CMD_READ_NAND_BLOCK_INFO = 0x29, /* ReadNandBlockInfo */
+
+	BSL_CMD_SET_FIRST_MODE = 0x2A, /* Set First Mode */
+	BSL_CMD_SET_RANDOM_DATA = 0x2B, /* Set Random Data */
+
+	BSL_CMD_SET_TIME_STAMP = 0x2C, /* Set Time Stamp used for second hand memory check */
+	BSL_CMD_READ_PARTITION = 0x2D, /* Read partition information from phone */
+	BSL_CMD_READ_VCUR_DATA = 0x2E, /* Read Vpac */
+	BSL_CMD_WRITE_VPAC_DATA = 0x2F, /* Write Vpac */
+
+	BSL_CMD_MIDST_RAW_START = 0x31, /* Midst Raw Start */
+	BSL_CMD_FLUSH_DATA = 0x32, /* Flush Data */
+	BSL_CMD_MIDST_RAW_START2 = 0x33, /* Midst Raw Start for V2, only send once */
+	BSL_CMD_ENABLE_UBOOT_LOG = 0x34, /* Enable 0xFF type uboot log */
+	BSL_CMD_DUMP_UBOOT_LOG = 0x35, /* request dump uboot log */
+
+	BSL_CMD_DISABLE_SELINUX = 0x40, /* Disable Selinux */
+
+	BSL_CMD_AUTH_BEGIN = 0x41, /* Begin Auth - Ack M1 */
+	BSL_CMD_AUTH_END = 0x42, /* End Auth - Send Secure */
+
+	BSL_CMD_EMMC_CID = 0x43, /* Read EMMC_CID */
+
+	BSL_CMD_OPEN_WATCH_DOG = 0x44, /* Open WatchDog */
+	BSL_CMD_CLOSE_WATCH_DOG = 0x45, /* Close WatchDog */
+	BSL_CMD_POWEROFF_NOKEY = 0x46, /* no key to dl */
+	BSL_CMD_WRITE_EFUSE = 0x47, /* Write efuse */
+	BSL_CMD_READ_PARTITION_VALUE = 0x48, /* Read Partition Value */
+	BSL_CMD_WRITE_PARTITION_VALUE = 0x49, /* Write Partition Value */
+	BSL_CMD_WRITE_DOWNLOAD_TIMESTAMP = 0x50, /* Write Download Timestamp */
+	BSL_CMD_PARTITION_SIGNATURE = 0x51, /* Partition Signature */
+
+	BSL_CMD_SEND_FLAG = 0xCC, /* SendFlag before Reset */
 
 	BSL_CMD_CHECK_BAUD = 0x7E, /* CheckBaud command, for internal use */
 	BSL_CMD_END_PROCESS = 0x7F, /* End flash process */
 
-	/* response from the phone */
 	BSL_REP_ACK = 0x80, /* The operation acknowledge */
 	BSL_REP_VER = 0x81,
+
+	/* the operation not acknowledge */
+	/* system */
 	BSL_REP_INVALID_CMD = 0x82,
 	BSL_REP_UNKNOW_CMD = 0x83,
 	BSL_REP_OPERATION_FAILED = 0x84,
@@ -138,10 +167,53 @@ enum {
 	BSL_REP_READ_NVITEM = 0x95,
 
 	BSL_REP_INCOMPATIBLE_PARTITION = 0x96,
-	BSL_REP_SIGN_VERIFY_ERROR = 0xA6,
-	BSL_REP_READ_CHIP_UID = 0xAB,
-	BSL_REP_READ_PARTITION = 0xBA,
-	BSL_REP_READ_LOG = 0xBB,
-	BSL_REP_UNSUPPORTED_COMMAND = 0xFE,
-	BSL_REP_LOG = 0xFF,
+	BSL_REP_UNKNOWN_DEVICE = 0x97,
+	BSL_REP_INVALID_DEVICE_SIZE = 0x98,
+	BSL_REP_ILLEGAL_SDRAM = 0x99,
+	BSL_WRONG_SDRAM_PARAMETER = 0x9A,
+	BSL_REP_READ_FLASH_INFO = 0x9B,
+	BSL_REP_READ_SECTOR_SIZE = 0x9C,
+	BSL_REP_READ_FLASH_TYPE = 0x9D,
+	BSL_REP_READ_FLASH_UID = 0x9E,
+	BSL_REP_READ_SOFTSIM_EID = 0x9F,
+
+	/* information returned from FDL when downloading fixed NV */
+	BSL_ERROR_CHECKSUM = 0xA0,
+	BSL_CHECKSUM_DIFF = 0xA1,
+	BSL_WRITE_ERROR = 0xA2,
+	BSL_CHIPID_NOT_MATCH = 0xA3,
+	BSL_FLASH_CFG_ERROR = 0xA4,
+	BSL_REP_DOWN_STL_SIZE_ERROR = 0xA5,
+	BSL_REP_PHONE_IS_ROOTED = 0xA7, /* Phone has been rooted */
+	BSL_REP_SEC_VERIFY_ERROR = 0xAA, /* Security data verify error */
+	BSL_REP_READ_CHIP_UID = 0xAB, /* Received Chip UID */
+	BSL_REP_NOT_ENABLE_WRITE_FLASH = 0xAC, /* Not enable to write flash */
+	BSL_REP_ENABLE_SECUREBOOT_ERROR = 0xAD, /* Enable secure boot fail */
+	BSL_REP_IDENTIFY_START = 0xAE, /* Identify start */
+	BSL_REP_IDENTIFY_END = 0xAF, /* Identify end */
+	BSL_REP_READ_CU_REF = 0xB0, /* Report CU ref */
+	BSL_REP_READ_REFINFO = 0xB1, /* Read Ref Info */
+	BSL_REP_CUST_DUMMY = 0xB2, /* Response Customized Dummy */
+	BSL_REP_FLASH_WRITTEN_PROTECTION = 0xB3, /* Flash written protection */
+	BSL_REP_FLASH_INITIALIZING_FAIL = 0xB4, /* Flash initializing failed */
+	BSL_REP_RF_TRANSCEIVER_TYPE = 0xB5, /* RF transceiver type */
+	BSL_REP_DDR_CHECK_ERROR = 0xB6, /* DDR Check error */
+	BSL_REP_SELF_REFRESH_ERROR = 0xB7, /* Self Refresh error */
+	BSL_REP_READ_NAND_BLOCK_INFO = 0xB8, /* Read Nand Block Info rep */
+	BSL_REP_RANDOM_DATA_ERROR = 0xB9, /* Set Random Data rep */
+	BSL_REP_READ_PARTITION = 0xBA, /* Read partition infor from phone */
+	BSL_REP_DUMP_UBOOT_LOG = 0xBB, /* Dump uboot log data */
+	BSL_REP_READ_VCUR_DATA = 0xBC, /* Read Vpac from device */
+	BSL_REP_AUTH_M1_DATA = 0xBD, /* Auth Data from Device */
+	BSL_REP_READ_PARTITION_VALUE = 0xBE, /* Read Partition Value */
+	BSL_REP_UNSUPPORT_PARTITION = 0xBF, /* Partition is not supported to Read or Write */
+	BSL_REP_EMMC_CID_DATA = 0xC0, /* Read EMMC CID From Device */
+
+	BSL_REP_MAGIC_ERROR = 0xD0,
+	BSL_REP_REPARTITION_ERROR = 0xD1,
+	BSL_REP_READ_FLASH_ERROR = 0xD2,
+	BSL_REP_MALLOC_ERROR = 0xD3,
+
+	BSL_REP_UNSUPPORTED_COMMAND = 0xFE, /* Software has not supported this feature */
+	BSL_REP_LOG = 0xFF /* FDL can output some log info use this type */
 };

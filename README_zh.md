@@ -194,8 +194,6 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
 #### 退出指令
 
-一般于FDL2阶段可用可用；只有很新的FDL1才支持
-
 - `reboot-recovery`
 
   仅FDL2

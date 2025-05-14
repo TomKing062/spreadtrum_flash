@@ -1195,7 +1195,7 @@ void load_partition(spdio_t *io, const char *name,
 #if !USE_LIBUSB
 	if (Da_Info.bSupportRawData) {
 		if (Da_Info.bSupportRawData > 1) {
-			encode_msg(io, BSL_CMD_DLOAD_RAW_START2, NULL, 0);
+			encode_msg(io, BSL_CMD_MIDST_RAW_START2, NULL, 0);
 			if (send_and_check(io)) { Da_Info.bSupportRawData = 0; goto fallback_load; }
 		}
 		step = Da_Info.dwFlushSize << 10;
@@ -1214,7 +1214,7 @@ void load_partition(spdio_t *io, const char *name,
 				WRITE32_LE(data, offset);
 				WRITE32_LE(data + 1, t32);
 				WRITE32_LE(data + 2, n);
-				encode_msg(io, BSL_CMD_DLOAD_RAW_START, data, 12);
+				encode_msg(io, BSL_CMD_MIDST_RAW_START, data, 12);
 				if (send_and_check(io)) {
 					if (offset) break;
 					else { free(rawbuf); step = 0xff00; Da_Info.bSupportRawData = 0; goto fallback_load; }
@@ -1223,8 +1223,8 @@ void load_partition(spdio_t *io, const char *name,
 			if (fread(rawbuf, 1, n, fi) != n)
 				ERR_EXIT("fread(load) failed\n");
 #if USE_LIBUSB
-				int err = libusb_bulk_transfer(io->dev_handle, io->endp_out, rawbuf, n, &ret, io->timeout); //libusb will fail with rawbuf
-				if (err < 0) ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
+			int err = libusb_bulk_transfer(io->dev_handle, io->endp_out, rawbuf, n, &ret, io->timeout); //libusb will fail with rawbuf
+			if (err < 0) ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
 #else
 			ret = call_Write(io->handle, rawbuf, n);
 #endif
@@ -1489,7 +1489,7 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 		return 0;
 	}
 
-	uint32_t data[2] = {0x8, 0};
+	uint32_t data[2] = { 0x8, 0 };
 	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
 	send_msg(io);
 	ret = recv_msg(io);
@@ -1559,6 +1559,7 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 			}
 		}
 	}
+	if (end == 10) Da_Info.dwStorageType = 101;
 	DBG_LOG("partition_size_pc: %s, 0x%llx\n", name, offset);
 	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
 	send_and_check(io);
@@ -1768,7 +1769,7 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 	} partition_info_t;
 	size_t namelen;
 	char miscname[1024] = { 0 };
-	int VAB = 0;
+	int VAB = 0; // slot_in_name
 	int partition_count = 0;
 	partition_info_t *partitions = malloc(128 * sizeof(partition_info_t));
 	if (partitions == NULL) return;
@@ -1787,13 +1788,17 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 	for (fn = findData.cFileName; FindNextFileA(hFind, &findData); fn = findData.cFileName) {
 		if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
 		namelen = strlen(fn);
-		if (namelen >= 4 && strcmp(fn + namelen - 4, ".xml") == 0) continue;
-		if (!memcmp(fn, "pgpt", 4)
-			|| !memcmp(fn, "sprdpart", 8)
-			|| !memcmp(fn, "fdl", 3)
-			|| !memcmp(fn, "lk", 2)
-			|| !memcmp(fn, "0x", 2)
-			|| !memcmp(fn, "custom_exec", 11)) continue;
+		if (namelen >= 4) {
+			if (!strcmp(fn + namelen - 4, ".xml") ||
+				!strcmp(fn + namelen - 4, ".exe") ||
+				!strcmp(fn + namelen - 4, ".txt")) continue;
+		}
+		if (!memcmp(fn, "pgpt", 4) ||
+			!memcmp(fn, "sprdpart", 8) ||
+			!memcmp(fn, "fdl", 3) ||
+			!memcmp(fn, "lk", 2) ||
+			!memcmp(fn, "0x", 2) ||
+			!memcmp(fn, "custom_exec", 11)) continue;
 
 		snprintf(partitions[partition_count].file_path, sizeof(partitions[partition_count].file_path), "%s/%s", path, fn);
 		char *dot = strrchr(fn, '.');
@@ -1801,9 +1806,9 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 		namelen = strlen(fn);
 		if (namelen >= 4 && strcmp(fn + namelen - 4, "_bak") == 0) continue;
 		if (!strcmp(fn, "misc")) snprintf(miscname, 1024, "%s", partitions[partition_count].file_path);
-		if (VAB == 0 && namelen > 2) {
-			if (!strcmp(fn + namelen - 2, "_a")) VAB = 1;
-			else if (!strcmp(fn + namelen - 2, "_b")) VAB = 2;
+		if (namelen > 2) {
+			if (!strcmp(fn + namelen - 2, "_a")) VAB |= 1;
+			else if (!strcmp(fn + namelen - 2, "_b")) VAB |= 2;
 		}
 
 		strcpy(partitions[partition_count].name, fn);
@@ -1822,13 +1827,17 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 	for (fn = entry->d_name; (entry = readdir(dir)); fn = entry->d_name) {
 		if (entry->d_type == DT_DIR) continue;
 		namelen = strlen(fn);
-		if (namelen >= 4 && strcmp(fn + namelen - 4, ".xml") == 0) continue;
-		if (!memcmp(fn, "pgpt", 4)
-			|| !memcmp(fn, "sprdpart", 8)
-			|| !memcmp(fn, "fdl", 3)
-			|| !memcmp(fn, "lk", 2)
-			|| !memcmp(fn, "0x", 2)
-			|| !memcmp(fn, "custom_exec", 11)) continue;
+		if (namelen >= 4) {
+			if (!strcmp(fn + namelen - 4, ".xml") ||
+				!strcmp(fn + namelen - 4, ".exe") ||
+				!strcmp(fn + namelen - 4, ".txt")) continue;
+		}
+		if (!memcmp(fn, "pgpt", 4) ||
+			!memcmp(fn, "sprdpart", 8) ||
+			!memcmp(fn, "fdl", 3) ||
+			!memcmp(fn, "lk", 2) ||
+			!memcmp(fn, "0x", 2) ||
+			!memcmp(fn, "custom_exec", 11)) continue;
 
 		snprintf(partitions[partition_count].file_path, sizeof(partitions[partition_count].file_path), "%s/%s", path, fn);
 		char *dot = strrchr(fn, '.');
@@ -1836,9 +1845,9 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 		namelen = strlen(fn);
 		if (namelen >= 4 && strcmp(fn + namelen - 4, "_bak") == 0) continue;
 		if (!strcmp(fn, "misc")) snprintf(miscname, 1024, "%s", partitions[partition_count].file_path);
-		if (VAB == 0 && namelen > 2) {
-			if (!strcmp(fn + namelen - 2, "_a")) VAB = 1;
-			else if (!strcmp(fn + namelen - 2, "_b")) VAB = 2;
+		if (namelen > 2) {
+			if (!strcmp(fn + namelen - 2, "_a")) VAB |= 1;
+			else if (!strcmp(fn + namelen - 2, "_b")) VAB |= 2;
 		}
 
 		strcpy(partitions[partition_count].name, fn);
@@ -1851,7 +1860,7 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 	int selected_ab_bak = selected_ab;
 	bootloader_control *abc = NULL;
 	size_t misclen = 0;
-	if (force_ab && VAB) selected_ab = force_ab;
+	if (force_ab && (force_ab & VAB)) selected_ab = force_ab;
 	else {
 		if (miscname[0]) {
 			uint8_t *mem = loadfile(miscname, &misclen, 0);
@@ -1864,7 +1873,8 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 			free(mem);
 		}
 		if (!selected_ab) {
-			if (VAB) selected_ab = VAB;
+			if (VAB & 1) selected_ab = 1;
+			else if (VAB & 2) selected_ab = 2;
 			else if (selected_ab_bak > 0) selected_ab = selected_ab_bak;
 		}
 	}
@@ -1874,11 +1884,11 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 		namelen = strlen(fn);
 		if (selected_ab == 1 && namelen > 2 && 0 == strcmp(fn + namelen - 2, "_b")) { partitions[i].written_flag = 1; continue; }
 		else if (selected_ab == 2 && namelen > 2 && 0 == strcmp(fn + namelen - 2, "_a")) { partitions[i].written_flag = 1; continue; }
-		if (strcmp(fn, "splloader") == 0
-			|| strcmp(fn, "uboot_a") == 0
-			|| strcmp(fn, "uboot_b") == 0
-			|| strcmp(fn, "vbmeta_a") == 0
-			|| strcmp(fn, "vbmeta_b") == 0) {
+		if (!strcmp(fn, "splloader") ||
+			!strcmp(fn, "uboot_a") ||
+			!strcmp(fn, "uboot_b") ||
+			!strcmp(fn, "vbmeta_a") ||
+			!strcmp(fn, "vbmeta_b")) {
 			load_partition(io, fn, partitions[i].file_path, step);
 			partitions[i].written_flag = 1;
 			continue;
@@ -1900,25 +1910,29 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 			continue;
 		}
 	}
-	int metadata_in_dump = 0, super_in_dump = 0;
+	int metadata_in_dump = 0, super_in_dump = 0, metadata_id, super_id;
 	for (int i = 0; i < partition_count; i++) {
 		if (!partitions[i].written_flag) {
 			fn = partitions[i].name;
 			get_partition_info(io, fn, 0);
 			if (!gPartInfo.size) continue;
-			if (!strcmp(gPartInfo.name, "metadata")) metadata_in_dump = 1;
-			if (!strcmp(gPartInfo.name, "super")) super_in_dump = 1;
+			if (!strcmp(gPartInfo.name, "metadata")) { metadata_in_dump = 1; metadata_id = i; continue; }
+			if (!strcmp(gPartInfo.name, "super")) { super_in_dump = 1; super_id = i; continue; }
 			load_partition_unify(io, gPartInfo.name, partitions[i].file_path, step);
 		}
 	}
+	if (super_in_dump) {
+		load_partition(io, "super", partitions[super_id].file_path, step);
+		if (metadata_in_dump) load_partition(io, "metadata", partitions[metadata_id].file_path, step);
+		else erase_partition(io, "metadata");
+	}
 	free(partitions);
-	if (super_in_dump == 1 && metadata_in_dump == 0) erase_partition(io, "metadata");
 	if (selected_ab == 1) set_active(io, "a");
 	else if (selected_ab == 2) set_active(io, "b");
 	selected_ab = selected_ab_bak;
 }
 
-void get_Da_Info(spdio_t * io) {
+void get_Da_Info(spdio_t *io) {
 	if (io->raw_len > 6) {
 		if (0x7477656e == *(uint32_t *)(io->raw_buf + 4)) {
 			int len = 8;
@@ -1941,7 +1955,7 @@ void get_Da_Info(spdio_t * io) {
 	DBG_LOG("FDL2: incompatible partition\n");
 }
 
-int ab_compare_slots(const slot_metadata * a, const slot_metadata * b) {
+int ab_compare_slots(const slot_metadata *a, const slot_metadata *b) {
 	if (a->priority != b->priority)
 		return b->priority - a->priority;
 	if (a->successful_boot != b->successful_boot)
@@ -2026,7 +2040,7 @@ uint32_t const crc32_tab[] = {
 	0xb3667a2e, 0xc4614ab8, 0x5d681b02, 0x2a6f2b94, 0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d
 };
 
-uint32_t crc32(uint32_t crc_in, const uint8_t * buf, int size) {
+uint32_t crc32(uint32_t crc_in, const uint8_t *buf, int size) {
 	const uint8_t *p = buf;
 	uint32_t crc;
 
@@ -2057,7 +2071,7 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 		}
 		fi = fopen(fix_fn, "rb+");
 	}
-	if (!fi) ERR_EXIT("fopen %s failed\n", fix_fn);	
+	if (!fi) ERR_EXIT("fopen %s failed\n", fix_fn);
 	if (fseek(fi, offset, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
 	if (fwrite(mem, 1, length, fi) != length) ERR_EXIT("fwrite failed\n");
 	fclose(fi);
@@ -2071,12 +2085,15 @@ int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned
 	int isVBMETA;
 	if (strstr(name, "fixnv1")) { load_nv_partition(io, name, fn, 4096); return 1; }
 	if (!strcmp(name, "vbmeta")) isVBMETA = 1;
-	else if (selected_ab > 0
-		|| Da_Info.dwStorageType == 0x101
-		|| io->part_count == 0
-		|| memcmp(name, "splloader", 9) == 0) { load_partition(io, name, fn, step); return 1; }
+	else if (selected_ab > 0 ||
+		Da_Info.dwStorageType == 0x101 ||
+		io->part_count == 0 ||
+		memcmp(name, "splloader", 9) == 0) {
+		load_partition(io, name, fn, step);
+		return 1;
+	}
 
-	strcpy(name0, gPartInfo.name);
+	strcpy(name0, name);
 	if (strlen(name0) >= sizeof(name1) - 4) { load_partition(io, name0, fn, step); return 1; }
 	snprintf(name1, sizeof(name1), "%s_bak", name0);
 	get_partition_info(io, name1, 1);
@@ -2259,9 +2276,9 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				DBG_LOG("read (%d):\n", bytes_read);
 				print_mem(stderr, io->recv_buf, bytes_read);
 			}
-			if (io->recv_buf[2] == BSL_REP_VER
-				|| io->recv_buf[2] == BSL_REP_VERIFY_ERROR
-				|| io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
+			if (io->recv_buf[2] == BSL_REP_VER ||
+				io->recv_buf[2] == BSL_REP_VERIFY_ERROR ||
+				io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
 				int chk1, chk2, a = READ16_BE(io->recv_buf + bytes_read - 3);
 				chk1 = spd_crc16(0, io->recv_buf + 1, bytes_read - 4);
 				if (a == chk1) io->flags |= FLAGS_CRC16;
@@ -2287,9 +2304,9 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				DBG_LOG("read (%d):\n", bytes_read);
 				print_mem(stderr, io->recv_buf, bytes_read);
 			}
-			if (io->recv_buf[2] == BSL_REP_VER
-				|| io->recv_buf[2] == BSL_REP_VERIFY_ERROR
-				|| io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
+			if (io->recv_buf[2] == BSL_REP_VER ||
+				io->recv_buf[2] == BSL_REP_VERIFY_ERROR ||
+				io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
 				int chk1, chk2, a = READ16_BE(io->recv_buf + bytes_read - 3);
 				chk1 = spd_crc16(0, io->recv_buf + 1, bytes_read - 4);
 				if (a == chk1) io->flags |= FLAGS_CRC16;
@@ -2438,9 +2455,9 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				DBG_LOG("read (%d):\n", bytes_read);
 				print_mem(stderr, io->recv_buf, bytes_read);
 			}
-			if (io->recv_buf[2] == BSL_REP_VER
-				|| io->recv_buf[2] == BSL_REP_VERIFY_ERROR
-				|| io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
+			if (io->recv_buf[2] == BSL_REP_VER ||
+				io->recv_buf[2] == BSL_REP_VERIFY_ERROR ||
+				io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
 				int chk1, chk2, a = READ16_BE(io->recv_buf + bytes_read - 3);
 				chk1 = spd_crc16(0, io->recv_buf + 1, bytes_read - 4);
 				if (a == chk1) io->flags |= FLAGS_CRC16;
@@ -2473,9 +2490,9 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				DBG_LOG("read (%d):\n", bytes_read);
 				print_mem(stderr, io->recv_buf, bytes_read);
 			}
-			if (io->recv_buf[2] == BSL_REP_VER
-				|| io->recv_buf[2] == BSL_REP_VERIFY_ERROR
-				|| io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
+			if (io->recv_buf[2] == BSL_REP_VER ||
+				io->recv_buf[2] == BSL_REP_VERIFY_ERROR ||
+				io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
 				int chk1, chk2, a = READ16_BE(io->recv_buf + bytes_read - 3);
 				chk1 = spd_crc16(0, io->recv_buf + 1, bytes_read - 4);
 				if (a == chk1) io->flags |= FLAGS_CRC16;

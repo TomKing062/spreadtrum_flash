@@ -338,8 +338,8 @@ int main(int argc, char **argv) {
 			io->raw_buf[3] = 5;
 			io->recv_buf[2] = 0;
 		}
-		else if (io->recv_buf[2] == BSL_REP_VERIFY_ERROR
-			|| io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
+		else if (io->recv_buf[2] == BSL_REP_VERIFY_ERROR ||
+			io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
 			if (!fdl1_loaded) {
 				ret = io->recv_buf[2];
 				io->recv_buf[2] = 0;
@@ -686,6 +686,16 @@ int main(int argc, char **argv) {
 				else if (ret != BSL_REP_ACK)
 					ERR_EXIT("unexpected response (0x%04x)\n", ret);
 				DBG_LOG("EXEC FDL2\n");
+				encode_msg(io, BSL_CMD_READ_FLASH_INFO, NULL, 0);
+				send_msg(io);
+				ret = recv_msg(io);
+				if (!ret) {
+					ret = recv_type(io);
+					if (ret != BSL_REP_READ_FLASH_INFO) DBG_LOG("unexpected response (0x%04x)\n", ret);
+					else Da_Info.dwStorageType = 0x101;
+					// need more samples to cover BSL_REP_READ_MCP_TYPE packet to nand_id/nand_info
+					// for nand_id 0x15, packet is 00 9b 00 0c 00 00 00 00 00 02 00 00 00 00 08 00
+				}
 				if (Da_Info.bDisableHDLC) {
 					encode_msg(io, BSL_CMD_DISABLE_TRANSCODE, NULL, 0);
 					if (!send_and_check(io)) {
@@ -701,7 +711,7 @@ int main(int argc, char **argv) {
 						DBG_LOG("DISABLE_WRITE_RAW_DATA in SPRD4\n");
 					}
 					else {
-						encode_msg(io, BSL_CMD_WRITE_RAW_DATA_ENABLE, NULL, 0);
+						encode_msg(io, BSL_CMD_ENABLE_RAW_DATA, NULL, 0);
 						if (!send_and_check(io)) DBG_LOG("ENABLE_WRITE_RAW_DATA\n");
 					}
 				}
@@ -749,8 +759,7 @@ int main(int argc, char **argv) {
 			argc -= 2; argv += 2;
 
 		}
-		else if (!strcmp(str2[1], "exec_addr") || !strcmp(str2[1], "exec_addr_new"))
-		{
+		else if (!strcmp(str2[1], "exec_addr") || !strcmp(str2[1], "exec_addr_new")) {
 			FILE *fi;
 			if (0 == fdl1_loaded && argcount > 2) {
 				exec_addr = strtoul(str2[2], NULL, 0);
@@ -1081,7 +1090,7 @@ rloop:
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
 
 			if (!memcmp(gPartInfo.name, "splloader", 9)) { DBG_LOG("blacklist!\n"); argc -= 3; argv += 3; continue; }
-			else if(isdigit(str2[2][0])) load_partition_force(io, atoi(str2[2]) - 1, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			else if (isdigit(str2[2][0])) load_partition_force(io, atoi(str2[2]) - 1, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			else {
 				for (i = 0; i < io->part_count; i++)
 					if (!strcmp(gPartInfo.name, (*(io->ptable + i)).name)) {
@@ -1109,7 +1118,7 @@ rloop:
 				src = malloc(4);
 				if (!src) { DBG_LOG("malloc failed\n"); argc -= 4; argv += 4; continue; }
 				length = 4;
-				*(uint32_t*)src = strtoul(str2[4], NULL, 0);
+				*(uint32_t *)src = strtoul(str2[4], NULL, 0);
 			}
 			else {
 				const char *fn = str2[4];
