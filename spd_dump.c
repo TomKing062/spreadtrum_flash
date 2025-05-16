@@ -689,7 +689,7 @@ int main(int argc, char **argv) {
 				encode_msg(io, BSL_CMD_READ_FLASH_INFO, NULL, 0);
 				send_msg(io);
 				ret = recv_msg(io);
-				if (!ret) {
+				if (ret) {
 					ret = recv_type(io);
 					if (ret != BSL_REP_READ_FLASH_INFO) DBG_LOG("unexpected response (0x%04x)\n", ret);
 					else Da_Info.dwStorageType = 0x101;
