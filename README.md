@@ -119,9 +119,10 @@ Then the prompt should display `FDL2>`.
 
     - `r all`: full backup (excludes blackbox, cache, userdata)
     - `r all_lite`: full backup (excludes inactive slot partitions, blackbox, cache, and userdata)
+    - all/all_lite is not usable on NAND
 
   When the partition table is unavailable:
-    - `r` will auto-calculate part size (supports all partitions on emmc/ufs and only `ubipac` on NAND).
+    - `r` will auto-calculate part size (supports emmc/ufs and NAND).
 
 - `read_part part_name|part_id offset size FILE`
 
@@ -139,7 +140,7 @@ Then the prompt should display `FDL2>`.
 
 - `write_parts save_location`
 
-  Writes all partitions dumped by `read_parts`.
+  Writes all partitions dumped by `read_parts`. Use `write_parts_a` or `write_parts_b` to flash slot forcely.
 
 - `wof part_name offset FILE`
 

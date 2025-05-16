@@ -119,10 +119,11 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
     - `r all`: 全盘备份 (跳过 blackbox, cache, userdata)
     - `r all_lite`: 全盘备份（不包括非活动槽位, blackbox, cache和userdata）
+    - NAND上all和all_lite不可用
 
   当分区表不可用时:
 
-    - `r` 将自动计算部件大小（支持emmc/ufs上的所有分区，NAND上仅支持`ubipac`分区）
+    - `r` 将自动计算分区大小（emmc/ufs和NAND均可）
 
 - `read_part part_name|part_id offset size FILE`
 
@@ -141,7 +142,7 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
 - `write_parts save_location`
 
-  写入指定文件夹下所有文件到设备分区，通常由`read_parts`得到。
+  写入指定文件夹下所有文件到设备分区，通常由`read_parts`得到。用`write_parts_a`或`write_parts_b`可以强制写入的槽位。
 
 - `wof part_name offset FILE`
 
@@ -192,8 +193,6 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
   设置重启后设备将进入的模式。
 
 #### 退出指令
-
-一般于FDL2阶段可用可用；只有很新的FDL1才支持
 
 - `reboot-recovery`
 

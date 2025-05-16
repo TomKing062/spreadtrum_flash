@@ -71,8 +71,9 @@ void print_help(void) {
 		"\t\tWhen the partition table is available:\n"
 		"\t\t\tr all: full backup (excludes blackbox, cache, userdata)\n"
 		"\t\t\tr all_lite: full backup (excludes inactive slot partitions, blackbox, cache, and userdata)\n"
+		"\t\t\tall/all_lite is not usable on NAND\n"
 		"\t\tWhen the partition table is unavailable:\n"
-		"\t\t\tr will auto-calculate part size (supports all partitions on emmc/ufs and only ubipac on NAND).\n"
+		"\t\t\tr will auto-calculate part size (supports emmc/ufs and NAND).\n"
 		"\tread_part part_name|part_id offset size FILE\n"
 		"\t\tReads a specific partition to a file at the given offset and size.\n"
 		"\t\t(read ubi on nand) read_part system 0 ubi40m system.bin\n"
@@ -80,7 +81,7 @@ void print_help(void) {
 		"\t\tReads partitions from a list file (If the file name starts with \"ubi\", the size will be calculated using the NAND ID).\n"
 		"\tw|write_part part_name|part_id FILE\n"
 		"\t\tWrites the specified file to a partition.\n"
-		"\twrite_parts save_location\n"
+		"\twrite_parts|write_parts_a|write_parts_b save_location\n"
 		"\t\tWrites all partitions dumped by read_parts.\n"
 		"\twof part_name offset FILE\n"
 		"\t\tWrites the specified file to a partition at the given offset.\n"
@@ -133,7 +134,7 @@ int main(int argc, char **argv) {
 	int wait = 30 * REOPEN_FREQ;
 	int argcount = 0, stage = -1, nand_id = DEFAULT_NAND_ID;
 	int nand_info[3];
-	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 1, highspeed = 0;
+	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 1, highspeed = 0, exec_addr_new = 0;
 	unsigned exec_addr = 0, baudrate = 0;
 	char *temp;
 	char str1[(ARGC_MAX - 1) * ARGV_LEN];
@@ -337,8 +338,8 @@ int main(int argc, char **argv) {
 			io->raw_buf[3] = 5;
 			io->recv_buf[2] = 0;
 		}
-		else if (io->recv_buf[2] == BSL_REP_VERIFY_ERROR
-			|| io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
+		else if (io->recv_buf[2] == BSL_REP_VERIFY_ERROR ||
+			io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
 			if (!fdl1_loaded) {
 				ret = io->recv_buf[2];
 				io->recv_buf[2] = 0;
@@ -557,14 +558,32 @@ int main(int argc, char **argv) {
 					fi = fopen(fn, "r");
 					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= argchange; argv += argchange; continue; }
 					else fclose(fi);
-					send_file(io, fn, addr, end_data, 528, 0, 0);
-					if (exec_addr) {
-						send_file(io, execfile, exec_addr, 0, 528, 0, 0);
-						free(execfile);
+					if (exec_addr_new) {
+						size_t execsize = send_file(io, fn, addr, 0, 528, 0, 0);
+						int n, gapsize = exec_addr - addr - execsize;
+						uint8_t *buf = malloc(gapsize);
+						for (i = 0; i < gapsize; i += n) {
+							n = gapsize - i;
+							if (n > 528) n = 528;
+							encode_msg(io, BSL_CMD_MIDST_DATA, buf + i, n);
+							if (send_and_check(io)) exit(1);
+						}
+						free(buf);
+						buf = loadfile(execfile, &execsize, 0);
+						encode_msg(io, BSL_CMD_MIDST_DATA, buf, execsize);
+						if (send_and_check(io)) exit(1);
+						free(buf);
 					}
 					else {
-						encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
-						if (send_and_check(io)) exit(1);
+						send_file(io, fn, addr, end_data, 528, 0, 0);
+						if (exec_addr) {
+							send_file(io, execfile, exec_addr, 0, 528, 0, 0);
+							free(execfile);
+						}
+						else {
+							encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
+							if (send_and_check(io)) exit(1);
+						}
 					}
 				}
 				else {
@@ -667,6 +686,16 @@ int main(int argc, char **argv) {
 				else if (ret != BSL_REP_ACK)
 					ERR_EXIT("unexpected response (0x%04x)\n", ret);
 				DBG_LOG("EXEC FDL2\n");
+				encode_msg(io, BSL_CMD_READ_FLASH_INFO, NULL, 0);
+				send_msg(io);
+				ret = recv_msg(io);
+				if (ret) {
+					ret = recv_type(io);
+					if (ret != BSL_REP_READ_FLASH_INFO) DBG_LOG("unexpected response (0x%04x)\n", ret);
+					else Da_Info.dwStorageType = 0x101;
+					// need more samples to cover BSL_REP_READ_MCP_TYPE packet to nand_id/nand_info
+					// for nand_id 0x15, packet is 00 9b 00 0c 00 00 00 00 00 02 00 00 00 00 08 00
+				}
 				if (Da_Info.bDisableHDLC) {
 					encode_msg(io, BSL_CMD_DISABLE_TRANSCODE, NULL, 0);
 					if (!send_and_check(io)) {
@@ -682,7 +711,7 @@ int main(int argc, char **argv) {
 						DBG_LOG("DISABLE_WRITE_RAW_DATA in SPRD4\n");
 					}
 					else {
-						encode_msg(io, BSL_CMD_WRITE_RAW_DATA_ENABLE, NULL, 0);
+						encode_msg(io, BSL_CMD_ENABLE_RAW_DATA, NULL, 0);
 						if (!send_and_check(io)) DBG_LOG("ENABLE_WRITE_RAW_DATA\n");
 					}
 				}
@@ -730,7 +759,7 @@ int main(int argc, char **argv) {
 			argc -= 2; argv += 2;
 
 		}
-		else if (!strcmp(str2[1], "exec_addr")) {
+		else if (!strcmp(str2[1], "exec_addr") || !strcmp(str2[1], "exec_addr_new")) {
 			FILE *fi;
 			if (0 == fdl1_loaded && argcount > 2) {
 				exec_addr = strtoul(str2[2], NULL, 0);
@@ -740,10 +769,10 @@ int main(int argc, char **argv) {
 				else fclose(fi);
 			}
 			DBG_LOG("current exec_addr is 0x%x\n", exec_addr);
+			if (!strcmp(str2[1], "exec_addr_new")) exec_addr_new = 1;
 			argc -= 2; argv += 2;
-
 		}
-		else if (!strcmp(str2[1], "loadexec")) {
+		else if (!strcmp(str2[1], "loadexec") || !strcmp(str2[1], "loadexecnew")) {
 			const char *fn; char *ch; FILE *fi;
 			if (argcount <= 2) { DBG_LOG("loadexec FILE\n"); argc = 1; continue; }
 			if (0 == fdl1_loaded) {
@@ -760,6 +789,7 @@ int main(int argc, char **argv) {
 				else fclose(fi);
 			}
 			DBG_LOG("current exec_addr is 0x%x\n", exec_addr);
+			if (!strcmp(str2[1], "loadexecnew")) exec_addr_new = 1;
 			argc -= 2; argv += 2;
 
 		}
@@ -1033,15 +1063,16 @@ rloop:
 			get_partition_info(io, name, 0);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
 
-			if (strstr(gPartInfo.name, "fixnv1")) load_nv_partition(io, gPartInfo.name, fn, 4096);
-			else load_partition(io, gPartInfo.name, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			load_partition_unify(io, gPartInfo.name, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 3; argv += 3;
 
 		}
-		else if (!strcmp(str2[1], "write_parts")) {
-			if (argcount <= 2) { DBG_LOG("write_parts save_location\n"); argc = 1; continue; }
-			if (skip_confirm) load_partitions(io, str2[2], blk_size ? blk_size : DEFAULT_BLK_SIZE);
-			else if (check_confirm("write all partitions")) load_partitions(io, str2[2], blk_size ? blk_size : DEFAULT_BLK_SIZE);
+		else if (!memcmp(str2[1], "write_parts", 11)) {
+			if (argcount <= 2) { DBG_LOG("write_parts|write_parts_a|write_parts_b save_location\n"); argc = 1; continue; }
+			int force_ab = 0;
+			if (!strcmp(str2[1], "write_parts_a")) force_ab = 1;
+			else if (!strcmp(str2[1], "write_parts_b")) force_ab = 2;
+			if (skip_confirm || check_confirm("write all partitions")) load_partitions(io, str2[2], blk_size ? blk_size : DEFAULT_BLK_SIZE, force_ab);
 			argc -= 2; argv += 2;
 
 		}
@@ -1058,8 +1089,8 @@ rloop:
 			get_partition_info(io, name, 0);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
 
-			if (strstr(gPartInfo.name, "splloader") || strstr(gPartInfo.name, "fixnv1")) { DBG_LOG("blacklist!\n"); argc -= 3; argv += 3; continue; }
-			else if(isdigit(str2[2][0])) load_partition_force(io, atoi(str2[2]) - 1, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			if (!memcmp(gPartInfo.name, "splloader", 9)) { DBG_LOG("blacklist!\n"); argc -= 3; argv += 3; continue; }
+			else if (isdigit(str2[2][0])) load_partition_force(io, atoi(str2[2]) - 1, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			else {
 				for (i = 0; i < io->part_count; i++)
 					if (!strcmp(gPartInfo.name, (*(io->ptable + i)).name)) {
@@ -1087,14 +1118,14 @@ rloop:
 				src = malloc(4);
 				if (!src) { DBG_LOG("malloc failed\n"); argc -= 4; argv += 4; continue; }
 				length = 4;
-				*(uint32_t*)src = strtoul(str2[4], NULL, 0);
+				*(uint32_t *)src = strtoul(str2[4], NULL, 0);
 			}
 			else {
 				const char *fn = str2[4];
 				src = loadfile(fn, &length, 0);
 				if (!src) { DBG_LOG("fopen %s failed\n", fn); argc -= 4; argv += 4; continue; }
 			}
-			w_mem_to_part_offset(io, name, offset, src, length, blk_size ? blk_size : DEFAULT_BLK_SIZE, 0);
+			w_mem_to_part_offset(io, name, offset, src, length, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			free(src);
 			argc -= 4; argv += 4;
 
@@ -1110,6 +1141,8 @@ rloop:
 #ifndef _MYDEBUG
 			blk_size = blk_size < 0 ? 0 :
 				blk_size > 0xf800 ? 0xf800 : ((blk_size + 0x7FF) & ~0x7FF);
+#else
+			blk_size = blk_size < 0 ? 0 : blk_size;
 #endif
 			argc -= 2; argv += 2;
 
@@ -1149,7 +1182,7 @@ rloop:
 			if (!modebuf) ERR_EXIT("malloc failed\n");
 			uint32_t mode = strtol(str2[2], NULL, 0) + 0x53464D00;
 			memcpy(modebuf, &mode, 4);
-			w_mem_to_part_offset(io, "miscdata", 0x2420, modebuf, 4, 0x1000, 0);
+			w_mem_to_part_offset(io, "miscdata", 0x2420, modebuf, 4, 0x1000);
 			free(modebuf);
 			argc -= 2; argv += 2;
 
@@ -1240,7 +1273,7 @@ rloop:
 			if (!miscbuf) ERR_EXIT("malloc failed\n");
 			memset(miscbuf, 0, 0x800);
 			strcpy(miscbuf, "boot-recovery");
-			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000, 0);
+			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
 			free(miscbuf);
 			encode_msg(io, BSL_CMD_NORMAL_RESET, NULL, 0);
 			if (!send_and_check(io)) break;
@@ -1257,7 +1290,7 @@ rloop:
 			memset(miscbuf, 0, 0x800);
 			strcpy(miscbuf, "boot-recovery");
 			strcpy(miscbuf + 0x40, "recovery\n--fastboot\n");
-			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000, 0);
+			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
 			free(miscbuf);
 			encode_msg(io, BSL_CMD_NORMAL_RESET, NULL, 0);
 			if (!send_and_check(io)) break;
