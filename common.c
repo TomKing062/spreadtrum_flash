@@ -1093,7 +1093,7 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 			ret = copy_from_wstr((*(ptable + i)).name, 36, (uint16_t *)p);
 			if (ret) ERR_EXIT("bad partition name\n");
 			size = READ32_LE(p + 0x48);
-			(*(ptable + i)).size = (size << 20) >> divisor;
+			(*(ptable + i)).size = (long long)size << (20 - divisor);
 			DBG_LOG("%3d %36s %7lldMB\n", i + 1, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
 			if (fo) {
 				fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(ptable + i)).name);
@@ -1358,10 +1358,8 @@ void load_nv_partition(spdio_t *io, const char *name,
 	mem = loadfile(fn, &len, 0);
 	if (!mem) ERR_EXIT("loadfile(\"%s\") failed\n", fn);
 
-	size_t memOffset = 0;
-	uint8_t *output = (uint8_t *)malloc(len);
-	if (!output) ERR_EXIT("malloc failed\n");
-	if (*(uint32_t *)mem == 0x4e56) memOffset = 0x200;
+	uint8_t *mem0 = mem;
+	if (*(uint32_t *)mem == 0x4e56) mem += 0x200;
 	len = 0;
 	len += sizeof(uint32_t);
 
@@ -1369,23 +1367,20 @@ void load_nv_partition(spdio_t *io, const char *name,
 	while (1) {
 		tmp[0] = 0;
 		tmp[1] = 0;
-		memcpy(tmp, mem + memOffset + len, sizeof(tmp));
+		memcpy(tmp, mem + len, sizeof(tmp));
 		if (!tmp[1]) { DBG_LOG("broken NV file, skipping!\n"); return; }
 		len += sizeof(tmp);
 		len += tmp[1];
 
 		uint32_t doffset = ((len + 3) & 0xFFFFFFFC) - len;
 		len += doffset;
-		if (*(uint16_t *)(mem + memOffset + len) == 0xffff) {
+		if (*(uint16_t *)(mem + len) == 0xffff) {
 			len += 8;
 			break;
 		}
 	}
-	crc = crc16(crc, mem + memOffset + 2, len - 2);
+	crc = crc16(crc, mem + 2, len - 2);
 	WRITE16_BE(mem, crc);
-	memcpy(output, mem + memOffset, len);
-	free(mem);
-	mem = output;
 	for (offset = 0; offset < len; offset++) cs += mem[offset];
 	DBG_LOG("file size : 0x%zx\n", len);
 
@@ -1398,7 +1393,7 @@ void load_nv_partition(spdio_t *io, const char *name,
 	WRITE32_LE(&pkt.size, len);
 	WRITE32_LE(&pkt.cs, cs);
 	encode_msg(io, BSL_CMD_START_DATA, &pkt, sizeof(pkt));
-	if (send_and_check(io)) { free(mem); return; }
+	if (send_and_check(io)) { free(mem0); return; }
 
 	for (offset = 0; (rsz = len - offset); offset += n) {
 		n = rsz > step ? step : rsz;
@@ -1412,7 +1407,7 @@ void load_nv_partition(spdio_t *io, const char *name,
 			break;
 		}
 	}
-	free(mem);
+	free(mem0);
 	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
 	if (!send_and_check(io)) DBG_LOG("Write NV_Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
@@ -1438,6 +1433,7 @@ void find_partition_size_new(spdio_t *io, const char *name, unsigned long long *
 	if (!ret) ERR_EXIT("timeout reached\n");
 	if (recv_type(io) == BSL_REP_READ_FLASH) {
 		ret = sscanf((char *)(io->raw_buf + 4), "size:%*[^:]: 0x%llx", offset_ptr);
+		if (ret != 1) ret = sscanf((char *)(io->raw_buf + 4), "partition %*s total size: 0x%llx", offset_ptr); // new lk
 		DBG_LOG("partition_size_device: %s, 0x%llx\n", name, *offset_ptr);
 	}
 	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
@@ -2259,7 +2255,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 	DWORD bytes_written, bytes_read;
 	int done = 0, count = 0;
 
-	while (!done) {
+	while (done != 1) {
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
 			if (curPort) {
@@ -2335,16 +2331,11 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 						print_mem(stderr, autod, sizeof(autod));
 					}
 					if ((bytes_read = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout))) {
-						uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
 						if (io->verbose >= 2) {
 							DBG_LOG("read (%d):\n", bytes_read);
 							print_mem(stderr, io->recv_buf, bytes_read);
 						}
-						if (!memcmp(io->recv_buf + bytes_read - 7, ok, 6)) done = 1;
-						else {
-							DBG_LOG("Unknown response\n");
-							if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
-						}
+						done = -1;
 					}
 				}
 			}
@@ -2365,6 +2356,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				io->recv_buf[2] = 0;
 				curPort = 0;
 				m_bOpened = 0;
+				if (done == -1) done = 1;
 				break;
 			}
 			if (i >= 100) {
@@ -2382,7 +2374,9 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 pthread_t gUsbEventThrd;
 libusb_hotplug_callback_handle gHotplugCbHandle = 0;
 
-// this doesn't fully support 0x4d03
+// SPRD DIAG, bInterfaceNumber 0
+// SPRD LOG, bInterfaceNumber 1
+// Since find_endpoints() ignored bInterfaceNumber 1, 0x4d03 works in HotplugCbFunc()
 int HotplugCbFunc(libusb_context *ctx, libusb_device *device, libusb_hotplug_event event, void *user_data) {
 	if (event == LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED) { if (!curPort) curPort = device; }
 	else { if (curPort == device) m_bOpened = -1; }
@@ -2442,7 +2436,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
 	int done = 0, count = 0;
 
-	while (!done) {
+	while (done != 1) {
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
 			if (curPort) {
@@ -2539,16 +2533,11 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 					else if (err < 0)
 						ERR_EXIT("usb_recv failed : %s\n", libusb_error_name(err));
 					else if (bytes_read) {
-						uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
 						if (io->verbose >= 2) {
 							DBG_LOG("read (%d):\n", bytes_read);
 							print_mem(stderr, io->recv_buf, bytes_read);
 						}
-						if (!memcmp(io->recv_buf + bytes_read - 7, ok, 6)) done = 1;
-						else {
-							DBG_LOG("Unknown response\n");
-							if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
-						}
+						done = -1;
 					}
 				}
 			}
@@ -2569,6 +2558,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				io->recv_buf[2] = 0;
 				curPort = 0;
 				m_bOpened = 0;
+				if (done == -1) done = 1;
 				break;
 			}
 			if (i >= 100) {
