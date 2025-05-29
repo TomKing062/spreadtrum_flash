@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
 	int wait = 30 * REOPEN_FREQ;
 	int argcount = 0, stage = -1, nand_id = DEFAULT_NAND_ID;
 	int nand_info[3];
-	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 1, highspeed = 0, exec_addr_new = 0;
+	int keep_charge = 1, end_data = 1, blk_size = 0, skip_confirm = 1, highspeed = 0, exec_addr_v2 = 0;
 	unsigned exec_addr = 0, baudrate = 0;
 	char *temp;
 	char str1[(ARGC_MAX - 1) * ARGV_LEN];
@@ -143,10 +143,12 @@ int main(int argc, char **argv) {
 	int bootmode = -1, at = 0;
 #if !USE_LIBUSB
 	extern DWORD curPort;
-	extern DWORD *ports;
+	DWORD *ports;
+	extern DWORD *kick_ports;
 #else
 	extern libusb_device *curPort;
-	extern libusb_device **ports;
+	libusb_device **ports;
+	extern libusb_device **kick_ports;
 #endif
 	execfile = malloc(ARGV_LEN);
 	if (!execfile) ERR_EXIT("malloc failed\n");
@@ -246,8 +248,7 @@ int main(int argc, char **argv) {
 		stage = -1;
 	}
 	else {
-		curPort = FindPort("SPRD U2S Diag");
-		if (curPort) {
+		if ((ports = FindPort("SPRD U2S Diag"))) {
 			for (DWORD *port = ports; *port != 0; port++) {
 				if (call_ConnectChannel(io->handle, *port)) {
 					curPort = *port;
@@ -268,8 +269,7 @@ int main(int argc, char **argv) {
 		stage = -1;
 	}
 	else {
-		curPort = FindPort();
-		if (curPort != NULL) {
+		if ((ports = FindPort(0x4d00))) {
 			for (libusb_device **port = ports; *port != NULL; port++) {
 				if (libusb_open(*port, &io->dev_handle) >= 0) {
 					call_Initialize_libusb(io);
@@ -291,6 +291,35 @@ int main(int argc, char **argv) {
 	}
 #endif
 	if (!m_bOpened) {
+#if USE_LIBUSB
+		if ((ports = FindPort(0x4d00))) {
+			for (libusb_device **port = ports; *port != NULL; port++) {
+				for (libusb_device **kick_port = kick_ports; *kick_port != NULL; kick_port++) {
+					if (*kick_port == *port) {
+						curPort = *port;
+						break;
+					}
+				}
+				if (curPort) break;
+			}
+			free(ports);
+			ports = NULL;
+	}
+#else
+		if ((ports = FindPort("SPRD U2S Diag"))) {
+			for (DWORD *port = ports; *port != 0; port++) {
+				for (DWORD *kick_port = kick_ports; *kick_port != 0; kick_port++) {
+					if (*kick_port == *port) {
+						curPort = *port;
+						break;
+					}
+				}
+				if (curPort) break;
+			}
+			free(ports);
+			ports = NULL;
+		}
+#endif
 		DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
 		for (i = 0; ; i++) {
 #if USE_LIBUSB
@@ -505,7 +534,8 @@ int main(int argc, char **argv) {
 			if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 3; argv += 3; continue; }
 			else fclose(fi);
 			addr = strtoul(str2[3], NULL, 0);
-			send_file(io, fn, addr, 0, 528, 0, 0);
+			if (!strcmp(str2[1], "send")) send_file(io, fn, addr, 0, 528, 0, 0);
+			else send_file(io, fn, addr, end_data, 528, 0, 0);
 			argc -= 3; argv += 3;
 		}
 		else if (!strncmp(str2[1], "fdl", 3) || !strncmp(str2[1], "loadfdl", 7)) {
@@ -558,10 +588,10 @@ int main(int argc, char **argv) {
 					fi = fopen(fn, "r");
 					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= argchange; argv += argchange; continue; }
 					else fclose(fi);
-					if (exec_addr_new) {
+					if (exec_addr_v2) {
 						size_t execsize = send_file(io, fn, addr, 0, 528, 0, 0);
 						int n, gapsize = exec_addr - addr - execsize;
-						uint8_t *buf = malloc(gapsize);
+						uint8_t *buf = malloc(528);
 						for (i = 0; i < gapsize; i += n) {
 							n = gapsize - i;
 							if (n > 528) n = 528;
@@ -572,6 +602,7 @@ int main(int argc, char **argv) {
 						buf = loadfile(execfile, &execsize, 0);
 						encode_msg(io, BSL_CMD_MIDST_DATA, buf, execsize);
 						if (send_and_check(io)) exit(1);
+						free(execfile);
 						free(buf);
 					}
 					else {
@@ -759,7 +790,7 @@ int main(int argc, char **argv) {
 			argc -= 2; argv += 2;
 
 		}
-		else if (!strcmp(str2[1], "exec_addr") || !strcmp(str2[1], "exec_addr_new")) {
+		else if (!strncmp(str2[1], "exec_addr", 9)) {
 			FILE *fi;
 			if (0 == fdl1_loaded && argcount > 2) {
 				exec_addr = strtoul(str2[2], NULL, 0);
@@ -769,10 +800,10 @@ int main(int argc, char **argv) {
 				else fclose(fi);
 			}
 			DBG_LOG("current exec_addr is 0x%x\n", exec_addr);
-			if (!strcmp(str2[1], "exec_addr_new")) exec_addr_new = 1;
+			if (!strcmp(str2[1], "exec_addr2")) exec_addr_v2 = 1;
 			argc -= 2; argv += 2;
 		}
-		else if (!strcmp(str2[1], "loadexec") || !strcmp(str2[1], "loadexecnew")) {
+		else if (!strncmp(str2[1], "loadexec", 8)) {
 			const char *fn; char *ch; FILE *fi;
 			if (argcount <= 2) { DBG_LOG("loadexec FILE\n"); argc = 1; continue; }
 			if (0 == fdl1_loaded) {
@@ -789,7 +820,7 @@ int main(int argc, char **argv) {
 				else fclose(fi);
 			}
 			DBG_LOG("current exec_addr is 0x%x\n", exec_addr);
-			if (!strcmp(str2[1], "loadexecnew")) exec_addr_new = 1;
+			if (!strcmp(str2[1], "loadexec2")) exec_addr_v2 = 1;
 			argc -= 2; argv += 2;
 
 		}

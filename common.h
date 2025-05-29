@@ -193,13 +193,13 @@ typedef struct {
 #pragma pack()
 
 #if USE_LIBUSB
-libusb_device *FindPort(void);
+libusb_device **FindPort(int pid);
 void startUsbEventHandle(void);
 void stopUsbEventHandle(void);
 void find_endpoints(libusb_device_handle *dev_handle, int result[2]);
 void call_Initialize_libusb(spdio_t *io);
 #else
-DWORD FindPort(const char *USB_DL);
+DWORD *FindPort(const char *USB_DL);
 #endif
 
 void print_string(FILE *f, const void *src, size_t n);

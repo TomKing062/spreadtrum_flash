@@ -1,13 +1,14 @@
 #include "common.h"
 #if !USE_LIBUSB
 DWORD curPort = 0;
-DWORD *ports = NULL;
-DWORD FindPort(const char *USB_DL) {
+DWORD *kick_ports = NULL;
+DWORD *FindPort(const char *USB_DL) {
 	const GUID GUID_DEVCLASS_PORTS = { 0x4d36e978, 0xe325, 0x11ce,{0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18} };
 	HDEVINFO DeviceInfoSet;
 	SP_DEVINFO_DATA DeviceInfoData;
 	DWORD dwIndex = 0;
 	DWORD count = 0;
+	DWORD *ports = NULL;
 
 	DeviceInfoSet = SetupDiGetClassDevs(&GUID_DEVCLASS_PORTS, NULL, NULL, DIGCF_PRESENT);
 
@@ -37,7 +38,7 @@ DWORD FindPort(const char *USB_DL) {
 				SetupDiDestroyDeviceInfoList(DeviceInfoSet);
 				free(ports);
 				ports = NULL;
-				return 0;
+				return NULL;
 			}
 			ports = temp;
 			ports[count] = portNum;
@@ -47,18 +48,16 @@ DWORD FindPort(const char *USB_DL) {
 	}
 
 	SetupDiDestroyDeviceInfoList(DeviceInfoSet);
-	if (count > 0) {
-		ports[count] = 0;
-		return ports[0];
-	}
-	return 0;
+	if (count > 0) ports[count] = 0;
+	return ports;
 }
 #else
 libusb_device *curPort = NULL;
-libusb_device **ports = NULL;
-libusb_device *FindPort(void) {
+libusb_device **kick_ports = NULL;
+libusb_device **FindPort(int pid) {
 	libusb_device **devs;
 	int usb_cnt, count = 0;
+	libusb_device **ports = NULL;
 
 	usb_cnt = libusb_get_device_list(NULL, &devs);
 	if (usb_cnt < 0) {
@@ -73,7 +72,7 @@ libusb_device *FindPort(void) {
 			DBG_LOG("Failed to get device descriptor\n");
 			continue;
 		}
-		if (desc.idVendor == 0x1782 && desc.idProduct == 0x4d00) {
+		if (desc.idVendor == 0x1782 && (pid == 0 || desc.idProduct == pid)) {
 			libusb_device **temp = (libusb_device **)realloc(ports, (count + 2) * sizeof(libusb_device *));
 			if (temp == NULL) {
 				DBG_LOG("Memory allocation failed.\n");
@@ -87,11 +86,8 @@ libusb_device *FindPort(void) {
 		}
 	}
 	libusb_free_device_list(devs, 1);
-	if (count > 0) {
-		ports[count] = NULL;
-		return ports[0];
-	}
-	return NULL;
+	if (count > 0) ports[count] = NULL;
+	return ports;
 }
 #endif
 
@@ -1097,7 +1093,7 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 			ret = copy_from_wstr((*(ptable + i)).name, 36, (uint16_t *)p);
 			if (ret) ERR_EXIT("bad partition name\n");
 			size = READ32_LE(p + 0x48);
-			(*(ptable + i)).size = (size << 20) >> divisor;
+			(*(ptable + i)).size = (long long)size << (20 - divisor);
 			DBG_LOG("%3d %36s %7lldMB\n", i + 1, (*(ptable + i)).name, ((*(ptable + i)).size >> 20));
 			if (fo) {
 				fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(ptable + i)).name);
@@ -1362,10 +1358,8 @@ void load_nv_partition(spdio_t *io, const char *name,
 	mem = loadfile(fn, &len, 0);
 	if (!mem) ERR_EXIT("loadfile(\"%s\") failed\n", fn);
 
-	size_t memOffset = 0;
-	uint8_t *output = (uint8_t *)malloc(len);
-	if (!output) ERR_EXIT("malloc failed\n");
-	if (*(uint32_t *)mem == 0x4e56) memOffset = 0x200;
+	uint8_t *mem0 = mem;
+	if (*(uint32_t *)mem == 0x4e56) mem += 0x200;
 	len = 0;
 	len += sizeof(uint32_t);
 
@@ -1373,23 +1367,20 @@ void load_nv_partition(spdio_t *io, const char *name,
 	while (1) {
 		tmp[0] = 0;
 		tmp[1] = 0;
-		memcpy(tmp, mem + memOffset + len, sizeof(tmp));
+		memcpy(tmp, mem + len, sizeof(tmp));
 		if (!tmp[1]) { DBG_LOG("broken NV file, skipping!\n"); return; }
 		len += sizeof(tmp);
 		len += tmp[1];
 
 		uint32_t doffset = ((len + 3) & 0xFFFFFFFC) - len;
 		len += doffset;
-		if (*(uint16_t *)(mem + memOffset + len) == 0xffff) {
+		if (*(uint16_t *)(mem + len) == 0xffff) {
 			len += 8;
 			break;
 		}
 	}
-	crc = crc16(crc, mem + memOffset + 2, len - 2);
+	crc = crc16(crc, mem + 2, len - 2);
 	WRITE16_BE(mem, crc);
-	memcpy(output, mem + memOffset, len);
-	free(mem);
-	mem = output;
 	for (offset = 0; offset < len; offset++) cs += mem[offset];
 	DBG_LOG("file size : 0x%zx\n", len);
 
@@ -1402,7 +1393,7 @@ void load_nv_partition(spdio_t *io, const char *name,
 	WRITE32_LE(&pkt.size, len);
 	WRITE32_LE(&pkt.cs, cs);
 	encode_msg(io, BSL_CMD_START_DATA, &pkt, sizeof(pkt));
-	if (send_and_check(io)) { free(mem); return; }
+	if (send_and_check(io)) { free(mem0); return; }
 
 	for (offset = 0; (rsz = len - offset); offset += n) {
 		n = rsz > step ? step : rsz;
@@ -1416,7 +1407,7 @@ void load_nv_partition(spdio_t *io, const char *name,
 			break;
 		}
 	}
-	free(mem);
+	free(mem0);
 	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
 	if (!send_and_check(io)) DBG_LOG("Write NV_Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
@@ -1442,6 +1433,7 @@ void find_partition_size_new(spdio_t *io, const char *name, unsigned long long *
 	if (!ret) ERR_EXIT("timeout reached\n");
 	if (recv_type(io) == BSL_REP_READ_FLASH) {
 		ret = sscanf((char *)(io->raw_buf + 4), "size:%*[^:]: 0x%llx", offset_ptr);
+		if (ret != 1) ret = sscanf((char *)(io->raw_buf + 4), "partition %*s total size: 0x%llx", offset_ptr); // new lk
 		DBG_LOG("partition_size_device: %s, 0x%llx\n", name, *offset_ptr);
 	}
 	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
@@ -2157,17 +2149,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 				pDevInf = (PDEV_BROADCAST_DEVICEINTERFACE)pHdr;
 #if USE_LIBUSB
 				if (DBT_DEVICEREMOVECOMPLETE == wParam) {
-					libusb_device *changedPort = FindPort();
-					if (changedPort == NULL) m_bOpened = -1;
+					libusb_device **currentports = FindPort(0x4d00); // ignore 0x4d03 for win_libusb
+					if (currentports == NULL) m_bOpened = -1;
 					else {
-						libusb_device **port = ports;
+						libusb_device **port = currentports;
 						while (*port != NULL) {
 							if (curPort == *port) break;
 							port++;
 						}
 						if (*port == NULL) m_bOpened = -1;
-						free(ports);
-						ports = NULL;
+						free(currentports);
+						currentports = NULL;
 					}
 				}
 #else
@@ -2182,17 +2174,29 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 			case DBT_DEVTYP_PORT:
 				if (interface_checked) {
 					pDevPort = (PDEV_BROADCAST_PORT)pHdr;
-					DWORD changedPort;
-					if (is_diag) {
-						changedPort = FindPort("SPRD DIAG"); //changedPort = 0 when DBT_DEVICEREMOVECOMPLETE
-						free(ports);
-						ports = NULL;
+					DWORD changedPort = my_strtoul(pDevPort->dbcp_name + 3, NULL, 0);
+					if (DBT_DEVICEARRIVAL == wParam) {
+						if (!curPort) {
+							if (is_diag) {
+								DWORD *currentports = FindPort("SPRD DIAG");
+								if (currentports) {
+									for (DWORD *port = currentports; *port != 0; port++) {
+										if (changedPort == *port) {
+											curPort = changedPort;
+											break;
+										}
+									}
+									free(currentports);
+									currentports = NULL;
+								}
+							}
+							else {
+								curPort = changedPort;
+							}
+						}
 					}
-					else changedPort = my_strtoul(pDevPort->dbcp_name + 3, NULL, 0);
-					if (changedPort == 0) m_bOpened = -1;
 					else {
-						if (DBT_DEVICEARRIVAL == wParam) { if (!curPort) curPort = changedPort; }
-						else { if (curPort == changedPort) m_bOpened = -1; }
+						if (curPort == changedPort) m_bOpened = -1; // no need to judge changedPort for DBT_DEVICEREMOVECOMPLETE
 					}
 					interface_checked = FALSE;
 					is_diag = FALSE;
@@ -2249,9 +2253,9 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam) {
 void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
 	DWORD bytes_written, bytes_read;
-	int done = 0;
+	int done = 0, count = 0;
 
-	while (!done) {
+	while (done != 1) {
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
 			if (curPort) {
@@ -2327,26 +2331,32 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 						print_mem(stderr, autod, sizeof(autod));
 					}
 					if ((bytes_read = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout))) {
-						uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
 						if (io->verbose >= 2) {
 							DBG_LOG("read (%d):\n", bytes_read);
 							print_mem(stderr, io->recv_buf, bytes_read);
 						}
-						if (!memcmp(io->recv_buf + bytes_read - 7, ok, 6)) done = 1;
-						else {
-							DBG_LOG("Unknown response\n");
-							if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
-						}
+						done = -1;
 					}
 				}
 			}
 		}
+		DWORD *temp = (DWORD *)realloc(kick_ports, (count + 2) * sizeof(DWORD));
+		if (temp == NULL) {
+			DBG_LOG("Memory allocation failed.\n");
+			free(kick_ports);
+			kick_ports = NULL;
+			return;
+		}
+		kick_ports = temp;
+		kick_ports[count] = curPort;
+		count++;
 		for (int i = 0; ; i++) {
 			if (m_bOpened == -1) {
 				call_DisconnectChannel(io->handle);
 				io->recv_buf[2] = 0;
 				curPort = 0;
 				m_bOpened = 0;
+				if (done == -1) done = 1;
 				break;
 			}
 			if (i >= 100) {
@@ -2357,12 +2367,16 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 		}
 		if (!at) done = 1;
 	}
+	if (count > 0) kick_ports[count] = 0;
 }
 #else
 #ifndef _MSC_VER
 pthread_t gUsbEventThrd;
 libusb_hotplug_callback_handle gHotplugCbHandle = 0;
 
+// SPRD DIAG, bInterfaceNumber 0
+// SPRD LOG, bInterfaceNumber 1
+// Since find_endpoints() ignored bInterfaceNumber 1, 0x4d03 works in HotplugCbFunc()
 int HotplugCbFunc(libusb_context *ctx, libusb_device *device, libusb_hotplug_event event, void *user_data) {
 	if (event == LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED) { if (!curPort) curPort = device; }
 	else { if (curPort == device) m_bOpened = -1; }
@@ -2420,9 +2434,9 @@ void stopUsbEventHandle(void) {
 void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 	int err, bytes_written, bytes_read;
 	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
-	int done = 0;
+	int done = 0, count = 0;
 
-	while (!done) {
+	while (done != 1) {
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
 			if (curPort) {
@@ -2519,26 +2533,32 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 					else if (err < 0)
 						ERR_EXIT("usb_recv failed : %s\n", libusb_error_name(err));
 					else if (bytes_read) {
-						uint8_t ok[] = { 0xd,0xa,0x4f,0x4b,0xd,0xa };
 						if (io->verbose >= 2) {
 							DBG_LOG("read (%d):\n", bytes_read);
 							print_mem(stderr, io->recv_buf, bytes_read);
 						}
-						if (!memcmp(io->recv_buf + bytes_read - 7, ok, 6)) done = 1;
-						else {
-							DBG_LOG("Unknown response\n");
-							if (io->verbose < 2) print_mem(stderr, io->recv_buf, bytes_read);
-						}
+						done = -1;
 					}
 				}
 			}
 		}
+		libusb_device **temp = (libusb_device **)realloc(kick_ports, (count + 2) * sizeof(libusb_device *));
+		if (temp == NULL) {
+			DBG_LOG("Memory allocation failed.\n");
+			free(kick_ports);
+			kick_ports = NULL;
+			return;
+		}
+		kick_ports = temp;
+		kick_ports[count] = curPort;
+		count++;
 		for (int i = 0; ; i++) {
 			if (m_bOpened == -1) {
 				libusb_close(io->dev_handle);
 				io->recv_buf[2] = 0;
 				curPort = 0;
 				m_bOpened = 0;
+				if (done == -1) done = 1;
 				break;
 			}
 			if (i >= 100) {
@@ -2549,6 +2569,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 		}
 		if (!at) done = 1;
 	}
+	if (count > 0) kick_ports[count] = 0;
 }
 
 void call_Initialize_libusb(spdio_t *io) {
