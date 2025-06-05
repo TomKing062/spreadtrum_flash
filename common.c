@@ -83,6 +83,7 @@ libusb_device **FindPort(int pid) {
 			}
 			ports = temp;
 			ports[count++] = dev;
+			libusb_ref_device(dev);
 		}
 	}
 	libusb_free_device_list(devs, 1);
@@ -789,6 +790,9 @@ uint64_t dump_partition(spdio_t *io,
 		char *dot = strrchr(name_tmp, '1');
 		if (dot != NULL) *dot = '2';
 		name = name_tmp;
+		start = 512;
+		if (len > 512)
+			len -= 512;
 	}
 
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
@@ -2149,7 +2153,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 				pDevInf = (PDEV_BROADCAST_DEVICEINTERFACE)pHdr;
 #if USE_LIBUSB
 				if (DBT_DEVICEREMOVECOMPLETE == wParam) {
-					libusb_device **currentports = FindPort(0x4d00); // ignore 0x4d03 for win_libusb
+					libusb_device **currentports = FindPort(0);
 					if (currentports == NULL) m_bOpened = -1;
 					else {
 						libusb_device **port = currentports;
@@ -2158,7 +2162,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 							port++;
 						}
 						if (*port == NULL) m_bOpened = -1;
-						free(currentports);
+						libusb_free_device_list(currentports, 1);
 						currentports = NULL;
 					}
 				}

@@ -278,7 +278,7 @@ int main(int argc, char **argv) {
 				}
 			}
 			if (!m_bOpened) curPort = 0;
-			free(ports);
+			libusb_free_device_list(ports, 1);
 			ports = NULL;
 		}
 	}
@@ -296,28 +296,37 @@ int main(int argc, char **argv) {
 			for (libusb_device **port = ports; *port != NULL; port++) {
 				for (libusb_device **kick_port = kick_ports; *kick_port != NULL; kick_port++) {
 					if (*kick_port == *port) {
-						curPort = *port;
-						break;
+						if (libusb_open(*port, &io->dev_handle) >= 0) {
+							call_Initialize_libusb(io);
+							curPort = *port;
+							break;
+						}
 					}
 				}
 				if (curPort) break;
 			}
-			free(ports);
+			libusb_free_device_list(ports, 1);
 			ports = NULL;
-	}
+			free(kick_ports);
+			kick_ports = NULL;
+		}
 #else
 		if ((ports = FindPort("SPRD U2S Diag"))) {
 			for (DWORD *port = ports; *port != 0; port++) {
 				for (DWORD *kick_port = kick_ports; *kick_port != 0; kick_port++) {
 					if (*kick_port == *port) {
-						curPort = *port;
-						break;
+						if (call_ConnectChannel(io->handle, *port)) {
+							curPort = *port;
+							break;
+						}
 					}
 				}
 				if (curPort) break;
 			}
 			free(ports);
 			ports = NULL;
+			free(kick_ports);
+			kick_ports = NULL;
 		}
 #endif
 		DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
