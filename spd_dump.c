@@ -604,7 +604,7 @@ int main(int argc, char **argv) {
 						for (i = 0; i < gapsize; i += n) {
 							n = gapsize - i;
 							if (n > 528) n = 528;
-							encode_msg(io, BSL_CMD_MIDST_DATA, buf + i, n);
+							encode_msg(io, BSL_CMD_MIDST_DATA, buf, n);
 							if (send_and_check(io)) exit(1);
 						}
 						free(buf);
