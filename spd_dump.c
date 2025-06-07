@@ -144,11 +144,9 @@ int main(int argc, char **argv) {
 #if !USE_LIBUSB
 	extern DWORD curPort;
 	DWORD *ports;
-	extern DWORD *kick_ports;
 #else
 	extern libusb_device *curPort;
 	libusb_device **ports;
-	extern libusb_device **kick_ports;
 #endif
 	execfile = malloc(ARGV_LEN);
 	if (!execfile) ERR_EXIT("malloc failed\n");
@@ -247,19 +245,6 @@ int main(int argc, char **argv) {
 		wait = 30 * REOPEN_FREQ;
 		stage = -1;
 	}
-	else {
-		if ((ports = FindPort("SPRD U2S Diag"))) {
-			for (DWORD *port = ports; *port != 0; port++) {
-				if (call_ConnectChannel(io->handle, *port)) {
-					curPort = *port;
-					break;
-				}
-			}
-			if (!m_bOpened) curPort = 0;
-			free(ports);
-			ports = NULL;
-		}
-	}
 #else
 	if (!libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) { DBG_LOG("hotplug unsupported on this platform\n"); bListenLibusb = 0; bootmode = -1; at = 0; }
 	if (at || bootmode >= 0) {
@@ -267,20 +252,6 @@ int main(int argc, char **argv) {
 		ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode, at);
 		wait = 30 * REOPEN_FREQ;
 		stage = -1;
-	}
-	else {
-		if ((ports = FindPort(0x4d00))) {
-			for (libusb_device **port = ports; *port != NULL; port++) {
-				if (libusb_open(*port, &io->dev_handle) >= 0) {
-					call_Initialize_libusb(io);
-					curPort = *port;
-					break;
-				}
-			}
-			if (!m_bOpened) curPort = 0;
-			libusb_free_device_list(ports, 1);
-			ports = NULL;
-		}
 	}
 	if (bListenLibusb < 0) startUsbEventHandle();
 #endif
@@ -291,44 +262,6 @@ int main(int argc, char **argv) {
 	}
 #endif
 	if (!m_bOpened) {
-#if USE_LIBUSB
-		if ((ports = FindPort(0x4d00))) {
-			for (libusb_device **port = ports; *port != NULL; port++) {
-				for (libusb_device **kick_port = kick_ports; *kick_port != NULL; kick_port++) {
-					if (*kick_port == *port) {
-						if (libusb_open(*port, &io->dev_handle) >= 0) {
-							call_Initialize_libusb(io);
-							curPort = *port;
-							break;
-						}
-					}
-				}
-				if (curPort) break;
-			}
-			libusb_free_device_list(ports, 1);
-			ports = NULL;
-			free(kick_ports);
-			kick_ports = NULL;
-		}
-#else
-		if ((ports = FindPort("SPRD U2S Diag"))) {
-			for (DWORD *port = ports; *port != 0; port++) {
-				for (DWORD *kick_port = kick_ports; *kick_port != 0; kick_port++) {
-					if (*kick_port == *port) {
-						if (call_ConnectChannel(io->handle, *port)) {
-							curPort = *port;
-							break;
-						}
-					}
-				}
-				if (curPort) break;
-			}
-			free(ports);
-			ports = NULL;
-			free(kick_ports);
-			kick_ports = NULL;
-		}
-#endif
 		DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
 		for (i = 0; ; i++) {
 #if USE_LIBUSB
@@ -339,12 +272,18 @@ int main(int argc, char **argv) {
 					break;
 				}
 			}
-			else {
-				io->dev_handle = libusb_open_device_with_vid_pid(NULL, 0x1782, 0x4d00);
-				if (io->dev_handle) {
-					curPort = libusb_get_device(io->dev_handle);
-					call_Initialize_libusb(io);
-					break;
+			if (!(i % 4)) {
+				if ((ports = FindPort(0x4d00))) {
+					for (libusb_device **port = ports; *port != NULL; port++) {
+						if (libusb_open(*port, &io->dev_handle) >= 0) {
+							call_Initialize_libusb(io);
+							curPort = *port;
+							break;
+						}
+					}
+					libusb_free_device_list(ports, 1);
+					ports = NULL;
+					if (m_bOpened) break;
 				}
 			}
 			if (i >= wait)
@@ -354,6 +293,19 @@ int main(int argc, char **argv) {
 			if (curPort) {
 				if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
 				break;
+			}
+			if (!(i % 4)) {
+				if ((ports = FindPort("SPRD U2S Diag"))) {
+					for (DWORD *port = ports; *port != 0; port++) {
+						if (call_ConnectChannel(io->handle, *port)) {
+							curPort = *port;
+							break;
+						}
+					}
+					free(ports);
+					ports = NULL;
+					if (m_bOpened) break;
+				}
 			}
 			if (i >= wait)
 				ERR_EXIT("find port failed\n");
