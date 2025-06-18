@@ -230,6 +230,10 @@ spdio_t *spdio_init(int flags) {
 	io->verbose = 0;
 	io->timeout = 1000;
 	io->part_count = 0;
+	io->m_hOprEvent = NULL;
+	io->m_dwRecvThreadID = 0;
+	io->m_hRecvThread = NULL;
+	io->m_hRecvThreadState = NULL;
 	memset(io->recv_buf, 0, 8);
 	return io;
 }
@@ -238,7 +242,7 @@ void spdio_free(spdio_t *io) {
 	if (!io) return;
 #if _WIN32
 	if (!bListenLibusb) {
-		PostThreadMessage(io->iThread, THRD_MESSAGE_EXIT, 0, 0);
+		PostThreadMessage(io->iThread, WM_QUIT, 0, 0);
 		WaitForSingleObject(io->hThread, INFINITE);
 		CloseHandle(io->hThread);
 	}
@@ -249,6 +253,7 @@ void spdio_free(spdio_t *io) {
 	libusb_exit(NULL);
 #else
 	call_DisconnectChannel(io->handle);
+	if (io->m_dwRecvThreadID > 0) DestroyRecvThread(io);
 	call_Uninitialize(io->handle);
 	destroyClass(io->handle);
 #endif
@@ -388,42 +393,42 @@ int send_msg(spdio_t *io) {
 	return ret;
 }
 
-extern int fdl1_loaded;
-int recv_msg_orig(spdio_t *io) {
-	int a, pos, len, chk;
-	int esc = 0, nread = 0, head_found = 0, plen = 6;
+int recv_read_data(spdio_t *io) {
+	int len;
 
-	len = io->recv_len;
-	pos = io->recv_pos;
-	memset(io->recv_buf, 0, 8);
-	for (;;) {
-		if (pos >= len) {
-			if (m_bOpened == -1) {
-				spdio_free(io);
-				ERR_EXIT("device removed, exiting...\n");
-			}
+	if (m_bOpened == -1) {
+		spdio_free(io);
+		ERR_EXIT("device removed, exiting...\n");
+	}
 #if USE_LIBUSB
-			int err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &len, io->timeout);
-			if (err == LIBUSB_ERROR_NO_DEVICE)
-				ERR_EXIT("connection closed\n");
-			else if (err < 0) {
-				DBG_LOG("usb_recv failed : %s\n", libusb_error_name(err)); return 0;
-			}
+	int err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &len, io->timeout);
+	if (err == LIBUSB_ERROR_NO_DEVICE)
+		ERR_EXIT("connection closed\n");
+	else if (err < 0) {
+		DBG_LOG("usb_recv failed : %s\n", libusb_error_name(err)); return 0;
+	}
 #else
-			len = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout);
+	len = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout);
 #endif
-			if (len < 0) {
-				DBG_LOG("usb_recv failed, ret = %d\n", len); return 0;
-			}
+	if (len < 0) {
+		DBG_LOG("usb_recv failed, ret = %d\n", len); return 0;
+	}
 
-			if (io->verbose >= 2) {
-				DBG_LOG("recv (%d):\n", len);
-				print_mem(stderr, io->recv_buf, len);
-			}
-			pos = 0;
-			if (!len) break;
-		}
-		a = io->recv_buf[pos++];
+	if (io->verbose >= 2) {
+		DBG_LOG("recv (%d):\n", len);
+		print_mem(stderr, io->recv_buf, len);
+	}
+	io->recv_len = len;
+	return len;
+}
+
+int recv_transcode(spdio_t *io, const uint8_t *buf, int buf_len, int *plen) {
+	int a, pos = 0, nread = io->raw_len, head_found = 0;
+	static int esc = 0;
+	if (nread) head_found = 1;
+
+	while (pos < buf_len) {
+		a = buf[pos++];
 		if (io->flags & FLAGS_TRANSCODE) {
 			if (esc && a != (HDLC_HEADER ^ 0x20) &&
 				a != (HDLC_ESCAPE ^ 0x20)) {
@@ -432,8 +437,8 @@ int recv_msg_orig(spdio_t *io) {
 			if (a == HDLC_HEADER) {
 				if (!head_found) head_found = 1;
 				else if (!nread) continue;
-				else if (nread < plen) {
-					DBG_LOG("recieved message too short\n"); return 0;
+				else if (nread < *plen) {
+					DBG_LOG("received message too short\n"); return 0;
 				}
 				else break;
 			}
@@ -442,8 +447,8 @@ int recv_msg_orig(spdio_t *io) {
 			}
 			else {
 				if (!head_found) continue;
-				if (nread >= plen) {
-					DBG_LOG("recieved message too long\n"); return 0;
+				if (nread >= *plen) {
+					DBG_LOG("received message too long\n"); return 0;
 				}
 				io->raw_buf[nread++] = a ^ esc;
 				esc = 0;
@@ -454,7 +459,7 @@ int recv_msg_orig(spdio_t *io) {
 				head_found = 1;
 				continue;
 			}
-			if (nread == plen) {
+			if (nread == *plen) {
 				if (a != HDLC_HEADER) {
 					DBG_LOG("expected end of message\n"); return 0;
 				}
@@ -464,16 +469,19 @@ int recv_msg_orig(spdio_t *io) {
 		}
 		if (nread == 4) {
 			a = READ16_BE(io->raw_buf + 2); // len
-			plen = a + 6;
+			*plen = a + 6;
 		}
 	}
-	io->recv_len = len;
-	io->recv_pos = pos;
 	io->raw_len = nread;
-	if (!nread) return 0;
+	return nread;
+}
+
+extern int fdl1_loaded;
+int recv_check_crc(spdio_t *io) {
+	int a, nread = io->raw_len, plen = READ16_BE(io->raw_buf + 2) + 6;
 
 	if (nread < 6) {
-		DBG_LOG("recieved message too short\n"); return 0;
+		DBG_LOG("received message too short\n"); return 0;
 	}
 
 	if (nread != plen) {
@@ -495,10 +503,9 @@ int recv_msg_orig(spdio_t *io) {
 		}
 	}
 	else {
-		if (io->flags & FLAGS_CRC16)
-			chk = spd_crc16(0, io->raw_buf, plen - 2);
-		else
-			chk = spd_checksum(0, io->raw_buf, plen - 2, CHK_ORIG);
+		int chk = (io->flags & FLAGS_CRC16) ?
+			spd_crc16(0, io->raw_buf, plen - 2) :
+			spd_checksum(0, io->raw_buf, plen - 2, CHK_ORIG);
 		if (a != chk) {
 			DBG_LOG("bad checksum (0x%04x, expected 0x%04x)\n", a, chk);
 			return 0;
@@ -512,26 +519,75 @@ int recv_msg_orig(spdio_t *io) {
 	return nread;
 }
 
+int recv_msg_orig(spdio_t *io) {
+	int plen = 6;
+	io->raw_len = 0;
+	memset(io->recv_buf, 0, 8);
+	while (1) {
+		if (!recv_read_data(io)) return 0;
+		if (!recv_transcode(io, io->recv_buf, io->recv_len, &plen)) return 0;
+		if (plen == io->raw_len) break;
+	}
+	return recv_check_crc(io);
+}
+
 extern int fdl2_executed;
 int recv_msg(spdio_t *io) {
 	int ret;
-	for (;;) {
-		ret = recv_msg_orig(io);
-		// only retry in fdl2 stage
-		if (!ret) {
-			if (fdl2_executed) {
-#if !USE_LIBUSB
-				if (io->raw_len) call_Clear(io->handle); //io->raw_len = nread in recv_msg_orig()
-#endif
-				send_msg(io);
-				ret = recv_msg_orig(io);
-				if (!ret) break;
+	if (io->m_dwRecvThreadID > 0) {
+		DWORD bWaitCode;
+		for (;;) {
+			bWaitCode = WaitForSingleObject(io->m_hOprEvent, io->timeout);
+			if (bWaitCode != WAIT_OBJECT_0) {
+				ret = 0; // timeout
 			}
-			else break;
+			else {
+				ResetEvent(io->m_hOprEvent);
+				ret = io->raw_len;
+			}
+			// only retry in fdl2 stage
+			if (!ret) {
+				if (fdl2_executed) {
+#if !USE_LIBUSB
+					if (io->raw_len) call_Clear(io->handle); //io->raw_len = nread in recv_msg_orig()
+#endif
+					send_msg(io);
+					bWaitCode = WaitForSingleObject(io->m_hOprEvent, io->timeout);
+					if (bWaitCode != WAIT_OBJECT_0) {
+						ret = 0; // timeout
+					}
+					else {
+						ResetEvent(io->m_hOprEvent);
+						ret = io->raw_len;
+					}
+					if (!ret) break;
+				}
+				else break;
+			}
+			if (recv_type(io) != BSL_REP_LOG) break;
+			DBG_LOG("BSL_REP_LOG: ");
+			print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
 		}
-		if (recv_type(io) != BSL_REP_LOG) break;
-		DBG_LOG("BSL_REP_LOG: ");
-		print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+	}
+	else {
+		for (;;) {
+			ret = recv_msg_orig(io);
+			// only retry in fdl2 stage
+			if (!ret) {
+				if (fdl2_executed) {
+#if !USE_LIBUSB
+					if (io->raw_len) call_Clear(io->handle); //io->raw_len = nread in recv_msg_orig()
+#endif
+					send_msg(io);
+					ret = recv_msg_orig(io);
+					if (!ret) break;
+				}
+				else break;
+			}
+			if (recv_type(io) != BSL_REP_LOG) break;
+			DBG_LOG("BSL_REP_LOG: ");
+			print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+		}
 	}
 	return ret;
 }
@@ -754,13 +810,16 @@ void select_partition(spdio_t *io, const char *name,
 
 #define PROGRESS_BAR_WIDTH 40
 
-void print_progress_bar(float progress) {
+void print_progress_bar(uint64_t done, uint64_t total) {
 	static int completed0 = 0;
-	if (completed0 == PROGRESS_BAR_WIDTH) completed0 = 0;
-	int completed = (int)(PROGRESS_BAR_WIDTH * progress);
-	int remaining;
+	static uint64_t done0 = 0;
+	static ULONGLONG time0 = 0;
+	ULONGLONG time = GetTickCount64();
+	if (!time0) time0 = time;
+	if (completed0 == PROGRESS_BAR_WIDTH) { completed0 = 0; done0 = 0; }
+	int completed = (int)(PROGRESS_BAR_WIDTH * done / (double)total);
 	if (completed != completed0) {
-		remaining = PROGRESS_BAR_WIDTH - completed;
+		int remaining = PROGRESS_BAR_WIDTH - completed;
 		DBG_LOG("[");
 		for (int i = 0; i < completed; i++) {
 			DBG_LOG("=");
@@ -768,9 +827,11 @@ void print_progress_bar(float progress) {
 		for (int i = 0; i < remaining; i++) {
 			DBG_LOG(" ");
 		}
-		DBG_LOG("] %.1f%%\n", 100 * progress);
+		DBG_LOG("]%6.1f%% Speed:%6.2fMb/s\n", 100 * done / (double)total, (double)1000 * (done - done0) / (time - time0) / 1024 / 1024);
+		completed0 = completed;
+		done0 = done;
+		time0 = time;
 	}
-	completed0 = completed;
 }
 
 extern uint64_t fblk_size;
@@ -825,7 +886,7 @@ uint64_t dump_partition(spdio_t *io,
 			ERR_EXIT("unexpected length\n");
 		if (fwrite(io->raw_buf + 4, 1, nread, fo) != nread)
 			ERR_EXIT("fwrite(dump) failed\n");
-		print_progress_bar((offset + nread - start) / (float)len);
+		print_progress_bar(offset + nread - start, len);
 		offset += nread;
 		if (n != nread) break;
 
@@ -1239,7 +1300,7 @@ void load_partition(spdio_t *io, const char *name,
 				DBG_LOG("unexpected response (0x%04x)\n", ret);
 				break;
 			}
-			print_progress_bar((offset + n) / (float)len);
+			print_progress_bar(offset + n, len);
 		}
 		free(rawbuf);
 	}
@@ -1262,7 +1323,7 @@ fallback_load:
 				DBG_LOG("unexpected response (0x%04x)\n", ret);
 				break;
 			}
-			print_progress_bar((offset + n) / (float)len);
+			print_progress_bar(offset + n, len);
 		}
 #if !USE_LIBUSB
 	}
@@ -1492,7 +1553,7 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 	else ret = 0;
 	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
 	send_and_check(io);
-	if (!need_size) return ret;
+	if (0 == ret || 0 == need_size) return ret;
 
 	int incrementing = 1;
 	select_partition(io, name, 0xffffffff, 0, BSL_CMD_READ_START);
@@ -2242,7 +2303,6 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam) {
 
 	MSG msg;
 	while (GetMessage(&msg, NULL, 0, 0)) {
-		if (msg.message == THRD_MESSAGE_EXIT) break;
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
@@ -2261,7 +2321,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
 			if (curPort) {
-				if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
+				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, &io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
 				break;
 			}
 			if (100 * i >= ms) ERR_EXIT("find port failed\n");
@@ -2359,6 +2419,80 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 		}
 		if (!at) done = 1;
 	}
+}
+
+DWORD WINAPI RcvDataThreadProc(LPVOID lpParam) {
+	spdio_t *io = (spdio_t *)lpParam;
+
+	MSG msg;
+	PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE);
+
+	SetEvent(io->m_hRecvThreadState);
+
+	while (GetMessage(&msg, NULL, 0, 0)) {
+		switch (msg.message) {
+		case WM_RCV_CHANNEL_DATA:
+			int plen = 6;
+			io->raw_len = 0;
+			if (!recv_transcode(io, (const uint8_t *)msg.wParam, (int)msg.lParam, &plen)) break;
+			if (plen == io->raw_len) {
+				if (recv_check_crc(io)) SetEvent(io->m_hOprEvent);
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	SetEvent(io->m_hRecvThreadState);
+
+	return 0;
+}
+
+BOOL CreateRecvThread(spdio_t *io) {
+	io->m_hRecvThreadState = CreateEvent(NULL, TRUE, FALSE, NULL);
+	io->m_hOprEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+	io->m_hRecvThread = CreateThread(NULL, 0, RcvDataThreadProc, io, 0, &io->m_dwRecvThreadID);
+	if (io->m_hRecvThread == NULL) {
+		return FALSE;
+	}
+
+	DWORD bWaitCode = WaitForSingleObject(io->m_hRecvThreadState, 5000);
+	if (bWaitCode != WAIT_OBJECT_0) {
+		return FALSE;
+	}
+	else {
+		ResetEvent(io->m_hRecvThreadState);
+	}
+	return TRUE;
+}
+
+void DestroyRecvThread(spdio_t *io) {
+	if (io->m_hRecvThread == NULL) {
+		return;
+	}
+
+	PostThreadMessage(io->m_dwRecvThreadID, WM_QUIT, 0, 0);
+
+	WaitForSingleObject(io->m_hRecvThreadState, INFINITE);
+	ResetEvent(io->m_hRecvThreadState);
+
+	if (io->m_hRecvThread) {
+		CloseHandle(io->m_hRecvThread);
+		io->m_hRecvThread = NULL;
+	}
+
+	if (io->m_hRecvThreadState) {
+		CloseHandle(io->m_hRecvThreadState);
+		io->m_hRecvThreadState = NULL;
+	}
+
+	if (io->m_hOprEvent) {
+		CloseHandle(io->m_hOprEvent);
+		io->m_hOprEvent = NULL;
+	}
+
+	io->m_dwRecvThreadID = 0;
 }
 #else
 #ifndef _MSC_VER

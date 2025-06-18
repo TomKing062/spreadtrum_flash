@@ -388,7 +388,7 @@ public:
 	void Uninitialize();
 	int Read(UCHAR *m_RecvData, int max_len, int dwTimeout);
 	int Write(UCHAR *lpData, int iDataSize);
-	BOOL ConnectChannel(DWORD dwPort);
+	BOOL ConnectChannel(DWORD dwPort, ULONG ulMsgId, LPCVOID pReceiver);
 	BOOL DisconnectChannel();
 	BOOL GetProperty(LONG lFlags, DWORD dwPropertyID, LPVOID pValue);
 	BOOL SetProperty(LONG lFlags, DWORD dwPropertyID, LPCVOID pValue);

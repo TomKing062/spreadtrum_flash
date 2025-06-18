@@ -23,7 +23,8 @@
 #include <Windows.h>
 #include <Dbt.h>
 #include <tchar.h>
-#define THRD_MESSAGE_EXIT WM_USER + 1
+#define WM_RCV_CHANNEL_DATA WM_USER + 1
+
 DWORD WINAPI ThrdFunc(LPVOID lpParam);
 #if UNICODE
 #define my_strstr wcsstr
@@ -125,6 +126,10 @@ typedef struct {
 #if _WIN32
 	DWORD iThread;
 	HANDLE hThread;
+	HANDLE m_hOprEvent;
+	DWORD m_dwRecvThreadID;
+	HANDLE m_hRecvThreadState;
+	HANDLE m_hRecvThread;
 #endif
 	int flags, recv_len, recv_pos;
 	int raw_len, enc_len, verbose, timeout;
@@ -200,6 +205,8 @@ void find_endpoints(libusb_device_handle *dev_handle, int result[2]);
 void call_Initialize_libusb(spdio_t *io);
 #else
 DWORD *FindPort(const char *USB_DL);
+BOOL CreateRecvThread(spdio_t *io);
+void DestroyRecvThread(spdio_t *io);
 #endif
 
 void print_string(FILE *f, const void *src, size_t n);
