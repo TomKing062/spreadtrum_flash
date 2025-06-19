@@ -221,19 +221,11 @@ spdio_t *spdio_init(int flags) {
 	memset(io, 0, sizeof(spdio_t));
 	p += sizeof(spdio_t);
 	io->flags = flags;
-	io->recv_len = 0;
-	io->recv_pos = 0;
 	io->recv_buf = p; p += RECV_BUF_LEN;
 	io->temp_buf = p + 4;
 	io->raw_buf = p; p += 4 + 0x10000 + 2;
 	io->enc_buf = p;
-	io->verbose = 0;
 	io->timeout = 1000;
-	io->part_count = 0;
-	io->m_hOprEvent = NULL;
-	io->m_dwRecvThreadID = 0;
-	io->m_hRecvThread = NULL;
-	io->m_hRecvThreadState = NULL;
 	memset(io->recv_buf, 0, 8);
 	return io;
 }
@@ -253,7 +245,7 @@ void spdio_free(spdio_t *io) {
 	libusb_exit(NULL);
 #else
 	call_DisconnectChannel(io->handle);
-	if (io->m_dwRecvThreadID > 0) DestroyRecvThread(io);
+	if (io->m_dwRecvThreadID) DestroyRecvThread(io);
 	call_Uninitialize(io->handle);
 	destroyClass(io->handle);
 #endif
@@ -425,6 +417,7 @@ int recv_read_data(spdio_t *io) {
 int recv_transcode(spdio_t *io, const uint8_t *buf, int buf_len, int *plen) {
 	int a, pos = 0, nread = io->raw_len, head_found = 0;
 	static int esc = 0;
+	if (*plen == 6) nread = 0;
 	if (nread) head_found = 1;
 
 	while (pos < buf_len) {
@@ -521,7 +514,6 @@ int recv_check_crc(spdio_t *io) {
 
 int recv_msg_orig(spdio_t *io) {
 	int plen = 6;
-	io->raw_len = 0;
 	memset(io->recv_buf, 0, 8);
 	while (1) {
 		if (!recv_read_data(io)) return 0;
@@ -531,63 +523,39 @@ int recv_msg_orig(spdio_t *io) {
 	return recv_check_crc(io);
 }
 
+int recv_msg_async(spdio_t *io) {
+	DWORD bWaitCode = WaitForSingleObject(io->m_hOprEvent, io->timeout);
+	if (bWaitCode != WAIT_OBJECT_0) {
+		return 0;
+	}
+	else {
+		ResetEvent(io->m_hOprEvent);
+		return io->raw_len;
+	}
+}
+
 extern int fdl2_executed;
 int recv_msg(spdio_t *io) {
 	int ret;
-	if (io->m_dwRecvThreadID > 0) {
-		DWORD bWaitCode;
-		for (;;) {
-			bWaitCode = WaitForSingleObject(io->m_hOprEvent, io->timeout);
-			if (bWaitCode != WAIT_OBJECT_0) {
-				ret = 0; // timeout
-			}
-			else {
-				ResetEvent(io->m_hOprEvent);
-				ret = io->raw_len;
-			}
-			// only retry in fdl2 stage
-			if (!ret) {
-				if (fdl2_executed) {
+	for (;;) {
+		if (io->m_dwRecvThreadID) ret = recv_msg_async(io);
+		else ret = recv_msg_orig(io);
+		// only retry in fdl2 stage
+		if (!ret) {
+			if (fdl2_executed) {
 #if !USE_LIBUSB
-					if (io->raw_len) call_Clear(io->handle); //io->raw_len = nread in recv_msg_orig()
+				if (io->raw_len) { call_Clear(io->handle); io->raw_len = 0; }
 #endif
-					send_msg(io);
-					bWaitCode = WaitForSingleObject(io->m_hOprEvent, io->timeout);
-					if (bWaitCode != WAIT_OBJECT_0) {
-						ret = 0; // timeout
-					}
-					else {
-						ResetEvent(io->m_hOprEvent);
-						ret = io->raw_len;
-					}
-					if (!ret) break;
-				}
-				else break;
+				send_msg(io);
+				if (io->m_dwRecvThreadID) ret = recv_msg_async(io);
+				else ret = recv_msg_orig(io);
+				if (!ret) break;
 			}
-			if (recv_type(io) != BSL_REP_LOG) break;
-			DBG_LOG("BSL_REP_LOG: ");
-			print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+			else break;
 		}
-	}
-	else {
-		for (;;) {
-			ret = recv_msg_orig(io);
-			// only retry in fdl2 stage
-			if (!ret) {
-				if (fdl2_executed) {
-#if !USE_LIBUSB
-					if (io->raw_len) call_Clear(io->handle); //io->raw_len = nread in recv_msg_orig()
-#endif
-					send_msg(io);
-					ret = recv_msg_orig(io);
-					if (!ret) break;
-				}
-				else break;
-			}
-			if (recv_type(io) != BSL_REP_LOG) break;
-			DBG_LOG("BSL_REP_LOG: ");
-			print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
-		}
+		if (recv_type(io) != BSL_REP_LOG) break;
+		DBG_LOG("BSL_REP_LOG: ");
+		print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
 	}
 	return ret;
 }
@@ -2423,6 +2391,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 
 DWORD WINAPI RcvDataThreadProc(LPVOID lpParam) {
 	spdio_t *io = (spdio_t *)lpParam;
+	static int plen = 6;
 
 	MSG msg;
 	PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE);
@@ -2432,11 +2401,12 @@ DWORD WINAPI RcvDataThreadProc(LPVOID lpParam) {
 	while (GetMessage(&msg, NULL, 0, 0)) {
 		switch (msg.message) {
 		case WM_RCV_CHANNEL_DATA:
-			int plen = 6;
-			io->raw_len = 0;
 			if (!recv_transcode(io, (const uint8_t *)msg.wParam, (int)msg.lParam, &plen)) break;
 			if (plen == io->raw_len) {
-				if (recv_check_crc(io)) SetEvent(io->m_hOprEvent);
+				if (recv_check_crc(io)) {
+					plen = 6;
+					SetEvent(io->m_hOprEvent);
+				}
 			}
 			break;
 		default:
