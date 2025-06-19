@@ -2321,7 +2321,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
 			if (curPort) {
-				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, &io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
+				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, (LPVOID)io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
 				break;
 			}
 			if (100 * i >= ms) ERR_EXIT("find port failed\n");

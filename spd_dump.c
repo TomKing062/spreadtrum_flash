@@ -302,13 +302,13 @@ int main(int argc, char **argv) {
 #else
 			if (io->verbose) DBG_LOG("CurTime: %.1f, CurPort: %d\n", (float)i / REOPEN_FREQ, curPort);
 			if (curPort) {
-				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, &io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
+				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, (LPVOID)io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
 				break;
 			}
 			if (!(i % 4)) {
 				if ((ports = FindPort("SPRD U2S Diag"))) {
 					for (DWORD *port = ports; *port != 0; port++) {
-						if (call_ConnectChannel(io->handle, *port, WM_RCV_CHANNEL_DATA, &io->m_dwRecvThreadID)) {
+						if (call_ConnectChannel(io->handle, *port, WM_RCV_CHANNEL_DATA, (LPVOID)io->m_dwRecvThreadID)) {
 							curPort = *port;
 							break;
 						}
