@@ -96,7 +96,7 @@ BOOL CBootModeOpr::SetProperty(LONG lFlags, DWORD dwPropertyID, LPCVOID pValue) 
 BOOL CBootModeOpr::ConnectChannel(DWORD dwPort, ULONG ulMsgId, LPCVOID pReceiver) {
 	if (!dwPort) return FALSE;
 
-	if (*(DWORD *)pReceiver > 0) m_pChannel->SetReceiver(ulMsgId, TRUE, pReceiver);
+	if ((DWORD)pReceiver > 0) m_pChannel->SetReceiver(ulMsgId, TRUE, pReceiver);
 	CHANNEL_ATTRIBUTE ca;
 	ca.ChannelType = CHANNEL_TYPE_COM;
 	ca.Com.dwPortNum = dwPort;
