@@ -140,7 +140,7 @@ int main(int argc, char **argv) {
 	char str1[(ARGC_MAX - 1) * ARGV_LEN];
 	char **str2;
 	char *execfile;
-	int bootmode = -1, at = 0, async = 0;
+	int bootmode = -1, at = 0, async = 1;
 #if !USE_LIBUSB
 	extern DWORD curPort;
 	DWORD *ports;
@@ -209,10 +209,6 @@ int main(int argc, char **argv) {
 			bootmode = strtol(argv[2], NULL, 0); at = 0;
 			argc -= 2; argv += 2;
 		}
-		else if (!strcmp(argv[1], "--async")) {
-			async = 1;
-			argc -= 1; argv += 1;
-		}
 		else break;
 	}
 #if defined(_MYDEBUG) && defined(USE_LIBUSB)
@@ -265,8 +261,9 @@ int main(int argc, char **argv) {
 		if (io->hThread == NULL) return -1;
 	}
 #if !USE_LIBUSB
-	if (async) {
+	if (!m_bOpened && async) {
 		if (FALSE == CreateRecvThread(io)) {
+			io->m_dwRecvThreadID = 0;
 			DBG_LOG("Create Receive Thread Fail.\n");
 		}
 	}
@@ -302,13 +299,13 @@ int main(int argc, char **argv) {
 #else
 			if (io->verbose) DBG_LOG("CurTime: %.1f, CurPort: %d\n", (float)i / REOPEN_FREQ, curPort);
 			if (curPort) {
-				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, (LPVOID)io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
+				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
 				break;
 			}
 			if (!(i % 4)) {
 				if ((ports = FindPort("SPRD U2S Diag"))) {
 					for (DWORD *port = ports; *port != 0; port++) {
-						if (call_ConnectChannel(io->handle, *port, WM_RCV_CHANNEL_DATA, (LPVOID)io->m_dwRecvThreadID)) {
+						if (call_ConnectChannel(io->handle, *port, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) {
 							curPort = *port;
 							break;
 						}
@@ -1070,7 +1067,7 @@ rloop:
 			argc -= 3; argv += 3;
 
 		}
-		else if (!memcmp(str2[1], "write_parts", 11)) {
+		else if (!strncmp(str2[1], "write_parts", 11)) {
 			if (argcount <= 2) { DBG_LOG("write_parts|write_parts_a|write_parts_b save_location\n"); argc = 1; continue; }
 			int force_ab = 0;
 			if (!strcmp(str2[1], "write_parts_a")) force_ab = 1;

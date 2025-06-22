@@ -32,9 +32,9 @@ int call_Write(ClassHandle *handle, UCHAR *lpData, int iDataSize) {
 	return obj->Write(lpData, iDataSize);
 }
 
-BOOL call_ConnectChannel(ClassHandle *handle, DWORD dwPort, ULONG ulMsgId, LPCVOID pReceiver) {
+BOOL call_ConnectChannel(ClassHandle *handle, DWORD dwPort, ULONG ulMsgId, DWORD Receiver) {
 	CBootModeOpr *obj = static_cast<CBootModeOpr *>(handle->obj);
-	return obj->ConnectChannel(dwPort, ulMsgId, pReceiver);
+	return obj->ConnectChannel(dwPort, ulMsgId, Receiver);
 }
 
 BOOL call_DisconnectChannel(ClassHandle *handle) {

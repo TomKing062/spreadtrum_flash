@@ -523,6 +523,7 @@ int recv_msg_orig(spdio_t *io) {
 	return recv_check_crc(io);
 }
 
+#if !USE_LIBUSB
 int recv_msg_async(spdio_t *io) {
 	DWORD bWaitCode = WaitForSingleObject(io->m_hOprEvent, io->timeout);
 	if (bWaitCode != WAIT_OBJECT_0) {
@@ -533,6 +534,11 @@ int recv_msg_async(spdio_t *io) {
 		return io->raw_len;
 	}
 }
+#else
+int recv_msg_async(spdio_t *io) {
+	return 0;
+}
+#endif
 
 extern int fdl2_executed;
 int recv_msg(spdio_t *io) {
@@ -776,13 +782,21 @@ void select_partition(spdio_t *io, const char *name,
 		sizeof(pkt.name) + (mode64 ? 16 : 4));
 }
 
+#if !_WIN32
+unsigned long long GetTickCount64() {
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+#endif
+
 #define PROGRESS_BAR_WIDTH 40
 
 void print_progress_bar(uint64_t done, uint64_t total) {
 	static int completed0 = 0;
 	static uint64_t done0 = 0;
-	static ULONGLONG time0 = 0;
-	ULONGLONG time = GetTickCount64();
+	static unsigned long long time0 = 0;
+	unsigned long long time = GetTickCount64();
 	if (!time0) time0 = time;
 	if (completed0 == PROGRESS_BAR_WIDTH) { completed0 = 0; done0 = 0; }
 	int completed = (int)(PROGRESS_BAR_WIDTH * done / (double)total);
@@ -795,7 +809,7 @@ void print_progress_bar(uint64_t done, uint64_t total) {
 		for (int i = 0; i < remaining; i++) {
 			DBG_LOG(" ");
 		}
-		DBG_LOG("]%6.1f%% Speed:%6.2fMb/s\n", 100 * done / (double)total, (double)1000 * (done - done0) / (time - time0) / 1024 / 1024);
+		DBG_LOG("]%6.1f%% Speed:%6.2fMb/s\r", 100 * done / (double)total, (double)1000 * (done - done0) / (time - time0) / 1024 / 1024);
 		completed0 = completed;
 		done0 = done;
 		time0 = time;
@@ -863,7 +877,7 @@ uint64_t dump_partition(spdio_t *io,
 			if (saved_size >= fblk_size) { usleep(1000000); saved_size = 0; }
 		}
 	}
-	DBG_LOG("Read Part Done: %s+0x%llx, target: 0x%llx, read: 0x%llx\n",
+	DBG_LOG("\nRead Part Done: %s+0x%llx, target: 0x%llx, read: 0x%llx\n",
 		name, (long long)start, (long long)len,
 		(long long)(offset - start));
 	fclose(fo);
@@ -1298,7 +1312,7 @@ fallback_load:
 #endif
 	fclose(fi);
 	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
-	if (!send_and_check(io)) DBG_LOG("Write Part Done: %s, target: 0x%llx, written: 0x%llx\n",
+	if (!send_and_check(io)) DBG_LOG("\nWrite Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
 }
 
@@ -1933,7 +1947,7 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 			continue;
 		}
 	}
-	int metadata_in_dump = 0, super_in_dump = 0, metadata_id, super_id;
+	int metadata_in_dump = 0, super_in_dump = 0, metadata_id = -1, super_id = -1;
 	for (int i = 0; i < partition_count; i++) {
 		if (!partitions[i].written_flag) {
 			fn = partitions[i].name;
@@ -2103,9 +2117,9 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 
 // 1 main written and _bak not written, 2 both written
 int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned step) {
-	char name0[36], name1[36];
+	char name0[36], name1[40];
 	unsigned size0, size1;
-	int isVBMETA;
+	int isVBMETA = 0;
 	if (strstr(name, "fixnv1")) { load_nv_partition(io, name, fn, 4096); return 1; }
 	if (!strcmp(name, "vbmeta")) isVBMETA = 1;
 	else if (selected_ab > 0 ||
@@ -2289,7 +2303,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
 			if (curPort) {
-				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, (LPVOID)io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
+				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
 				break;
 			}
 			if (100 * i >= ms) ERR_EXIT("find port failed\n");
@@ -2423,7 +2437,7 @@ BOOL CreateRecvThread(spdio_t *io) {
 	io->m_hRecvThreadState = CreateEvent(NULL, TRUE, FALSE, NULL);
 	io->m_hOprEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 	io->m_hRecvThread = CreateThread(NULL, 0, RcvDataThreadProc, io, 0, &io->m_dwRecvThreadID);
-	if (io->m_hRecvThread == NULL) {
+	if (io->m_hRecvThreadState == NULL || io->m_hOprEvent == NULL || io->m_hRecvThread == NULL) {
 		return FALSE;
 	}
 

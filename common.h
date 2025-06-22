@@ -120,16 +120,17 @@ typedef struct {
 #if USE_LIBUSB
 	libusb_device_handle *dev_handle;
 	int endp_in, endp_out;
+	int m_dwRecvThreadID;
 #else
 	ClassHandle *handle;
-#endif
-#if _WIN32
-	DWORD iThread;
-	HANDLE hThread;
 	HANDLE m_hOprEvent;
 	DWORD m_dwRecvThreadID;
 	HANDLE m_hRecvThreadState;
 	HANDLE m_hRecvThread;
+#endif
+#if _WIN32
+	DWORD iThread;
+	HANDLE hThread;
 #endif
 	int flags, recv_len, recv_pos;
 	int raw_len, enc_len, verbose, timeout;

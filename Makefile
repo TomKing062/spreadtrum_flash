@@ -2,7 +2,7 @@
 LIBUSB = 1
 CFLAGS = -O2 -Wall -Wextra -std=c99 -pedantic -Wno-unused
 CFLAGS += -DUSE_LIBUSB=$(LIBUSB)
-LIBS = -lm
+LIBS = -lm -lpthread
 APPNAME = spd_dump
 
 ifeq ($(LIBUSB), 1)
