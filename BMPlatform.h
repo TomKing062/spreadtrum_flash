@@ -393,6 +393,7 @@ public:
 	BOOL GetProperty(LONG lFlags, DWORD dwPropertyID, LPVOID pValue);
 	BOOL SetProperty(LONG lFlags, DWORD dwPropertyID, LPCVOID pValue);
 	void Clear();
+	void FreeMem(LPVOID pMemBlock);
 private:
 	ICommChannel *m_pChannel;
 };

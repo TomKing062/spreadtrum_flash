@@ -116,3 +116,7 @@ BOOL CBootModeOpr::DisconnectChannel() {
 void CBootModeOpr::Clear() {
 	m_pChannel->Clear();
 }
+
+void CBootModeOpr::FreeMem(LPVOID pMemBlock) {
+	m_pChannel->FreeMem(pMemBlock);
+}

@@ -209,6 +209,10 @@ int main(int argc, char **argv) {
 			bootmode = strtol(argv[2], NULL, 0); at = 0;
 			argc -= 2; argv += 2;
 		}
+		else if (!strcmp(argv[1], "--sync")) {
+			async = 0;
+			argc -= 1; argv += 1;
+		}
 		else break;
 	}
 #if defined(_MYDEBUG) && defined(USE_LIBUSB)

@@ -56,3 +56,8 @@ void call_Clear(ClassHandle *handle) {
 	CBootModeOpr *obj = static_cast<CBootModeOpr *>(handle->obj);
 	obj->Clear();
 }
+
+void call_FreeMem(ClassHandle *handle, LPVOID pMemBlock) {
+	CBootModeOpr *obj = static_cast<CBootModeOpr *>(handle->obj);
+	obj->FreeMem(pMemBlock);
+}

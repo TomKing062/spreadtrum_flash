@@ -2415,13 +2415,15 @@ DWORD WINAPI RcvDataThreadProc(LPVOID lpParam) {
 	while (GetMessage(&msg, NULL, 0, 0)) {
 		switch (msg.message) {
 		case WM_RCV_CHANNEL_DATA:
-			if (!recv_transcode(io, (const uint8_t *)msg.wParam, (int)msg.lParam, &plen)) break;
-			if (plen == io->raw_len) {
-				if (recv_check_crc(io)) {
-					plen = 6;
-					SetEvent(io->m_hOprEvent);
+			if (recv_transcode(io, (const uint8_t *)msg.wParam, (int)msg.lParam, &plen)) {
+				if (plen == io->raw_len) {
+					if (recv_check_crc(io)) {
+						plen = 6;
+						SetEvent(io->m_hOprEvent);
+					}
 				}
 			}
+			call_FreeMem(io->handle, (LPVOID)msg.wParam);
 			break;
 		default:
 			break;
