@@ -1,7 +1,6 @@
 #include "common.h"
 #if !USE_LIBUSB
 DWORD curPort = 0;
-DWORD *kick_ports = NULL;
 DWORD *FindPort(const char *USB_DL) {
 	const GUID GUID_DEVCLASS_PORTS = { 0x4d36e978, 0xe325, 0x11ce,{0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18} };
 	HDEVINFO DeviceInfoSet;
@@ -53,7 +52,6 @@ DWORD *FindPort(const char *USB_DL) {
 }
 #else
 libusb_device *curPort = NULL;
-libusb_device **kick_ports = NULL;
 libusb_device **FindPort(int pid) {
 	libusb_device **devs;
 	int usb_cnt, count = 0;
@@ -223,15 +221,11 @@ spdio_t *spdio_init(int flags) {
 	memset(io, 0, sizeof(spdio_t));
 	p += sizeof(spdio_t);
 	io->flags = flags;
-	io->recv_len = 0;
-	io->recv_pos = 0;
 	io->recv_buf = p; p += RECV_BUF_LEN;
 	io->temp_buf = p + 4;
 	io->raw_buf = p; p += 4 + 0x10000 + 2;
 	io->enc_buf = p;
-	io->verbose = 0;
 	io->timeout = 1000;
-	io->part_count = 0;
 	memset(io->recv_buf, 0, 8);
 	return io;
 }
@@ -240,7 +234,7 @@ void spdio_free(spdio_t *io) {
 	if (!io) return;
 #if _WIN32
 	if (!bListenLibusb) {
-		PostThreadMessage(io->iThread, THRD_MESSAGE_EXIT, 0, 0);
+		PostThreadMessage(io->iThread, WM_QUIT, 0, 0);
 		WaitForSingleObject(io->hThread, INFINITE);
 		CloseHandle(io->hThread);
 	}
@@ -251,6 +245,7 @@ void spdio_free(spdio_t *io) {
 	libusb_exit(NULL);
 #else
 	call_DisconnectChannel(io->handle);
+	if (io->m_dwRecvThreadID) DestroyRecvThread(io);
 	call_Uninitialize(io->handle);
 	destroyClass(io->handle);
 #endif
@@ -390,42 +385,43 @@ int send_msg(spdio_t *io) {
 	return ret;
 }
 
-extern int fdl1_loaded;
-int recv_msg_orig(spdio_t *io) {
-	int a, pos, len, chk;
-	int esc = 0, nread = 0, head_found = 0, plen = 6;
+int recv_read_data(spdio_t *io) {
+	int len;
 
-	len = io->recv_len;
-	pos = io->recv_pos;
-	memset(io->recv_buf, 0, 8);
-	for (;;) {
-		if (pos >= len) {
-			if (m_bOpened == -1) {
-				spdio_free(io);
-				ERR_EXIT("device removed, exiting...\n");
-			}
+	if (m_bOpened == -1) {
+		spdio_free(io);
+		ERR_EXIT("device removed, exiting...\n");
+	}
 #if USE_LIBUSB
-			int err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &len, io->timeout);
-			if (err == LIBUSB_ERROR_NO_DEVICE)
-				ERR_EXIT("connection closed\n");
-			else if (err < 0) {
-				DBG_LOG("usb_recv failed : %s\n", libusb_error_name(err)); return 0;
-			}
+	int err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &len, io->timeout);
+	if (err == LIBUSB_ERROR_NO_DEVICE)
+		ERR_EXIT("connection closed\n");
+	else if (err < 0) {
+		DBG_LOG("usb_recv failed : %s\n", libusb_error_name(err)); return 0;
+	}
 #else
-			len = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout);
+	len = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout);
 #endif
-			if (len < 0) {
-				DBG_LOG("usb_recv failed, ret = %d\n", len); return 0;
-			}
+	if (len < 0) {
+		DBG_LOG("usb_recv failed, ret = %d\n", len); return 0;
+	}
 
-			if (io->verbose >= 2) {
-				DBG_LOG("recv (%d):\n", len);
-				print_mem(stderr, io->recv_buf, len);
-			}
-			pos = 0;
-			if (!len) break;
-		}
-		a = io->recv_buf[pos++];
+	if (io->verbose >= 2) {
+		DBG_LOG("recv (%d):\n", len);
+		print_mem(stderr, io->recv_buf, len);
+	}
+	io->recv_len = len;
+	return len;
+}
+
+int recv_transcode(spdio_t *io, const uint8_t *buf, int buf_len, int *plen) {
+	int a, pos = 0, nread = io->raw_len, head_found = 0;
+	static int esc = 0;
+	if (*plen == 6) nread = 0;
+	if (nread) head_found = 1;
+
+	while (pos < buf_len) {
+		a = buf[pos++];
 		if (io->flags & FLAGS_TRANSCODE) {
 			if (esc && a != (HDLC_HEADER ^ 0x20) &&
 				a != (HDLC_ESCAPE ^ 0x20)) {
@@ -434,8 +430,8 @@ int recv_msg_orig(spdio_t *io) {
 			if (a == HDLC_HEADER) {
 				if (!head_found) head_found = 1;
 				else if (!nread) continue;
-				else if (nread < plen) {
-					DBG_LOG("recieved message too short\n"); return 0;
+				else if (nread < *plen) {
+					DBG_LOG("received message too short\n"); return 0;
 				}
 				else break;
 			}
@@ -444,8 +440,8 @@ int recv_msg_orig(spdio_t *io) {
 			}
 			else {
 				if (!head_found) continue;
-				if (nread >= plen) {
-					DBG_LOG("recieved message too long\n"); return 0;
+				if (nread >= *plen) {
+					DBG_LOG("received message too long\n"); return 0;
 				}
 				io->raw_buf[nread++] = a ^ esc;
 				esc = 0;
@@ -456,7 +452,7 @@ int recv_msg_orig(spdio_t *io) {
 				head_found = 1;
 				continue;
 			}
-			if (nread == plen) {
+			if (nread == *plen) {
 				if (a != HDLC_HEADER) {
 					DBG_LOG("expected end of message\n"); return 0;
 				}
@@ -466,16 +462,19 @@ int recv_msg_orig(spdio_t *io) {
 		}
 		if (nread == 4) {
 			a = READ16_BE(io->raw_buf + 2); // len
-			plen = a + 6;
+			*plen = a + 6;
 		}
 	}
-	io->recv_len = len;
-	io->recv_pos = pos;
 	io->raw_len = nread;
-	if (!nread) return 0;
+	return nread;
+}
+
+extern int fdl1_loaded;
+int recv_check_crc(spdio_t *io) {
+	int a, nread = io->raw_len, plen = READ16_BE(io->raw_buf + 2) + 6;
 
 	if (nread < 6) {
-		DBG_LOG("recieved message too short\n"); return 0;
+		DBG_LOG("received message too short\n"); return 0;
 	}
 
 	if (nread != plen) {
@@ -497,10 +496,9 @@ int recv_msg_orig(spdio_t *io) {
 		}
 	}
 	else {
-		if (io->flags & FLAGS_CRC16)
-			chk = spd_crc16(0, io->raw_buf, plen - 2);
-		else
-			chk = spd_checksum(0, io->raw_buf, plen - 2, CHK_ORIG);
+		int chk = (io->flags & FLAGS_CRC16) ?
+			spd_crc16(0, io->raw_buf, plen - 2) :
+			spd_checksum(0, io->raw_buf, plen - 2, CHK_ORIG);
 		if (a != chk) {
 			DBG_LOG("bad checksum (0x%04x, expected 0x%04x)\n", a, chk);
 			return 0;
@@ -514,19 +512,49 @@ int recv_msg_orig(spdio_t *io) {
 	return nread;
 }
 
+int recv_msg_orig(spdio_t *io) {
+	int plen = 6;
+	memset(io->recv_buf, 0, 8);
+	while (1) {
+		if (!recv_read_data(io)) return 0;
+		if (!recv_transcode(io, io->recv_buf, io->recv_len, &plen)) return 0;
+		if (plen == io->raw_len) break;
+	}
+	return recv_check_crc(io);
+}
+
+#if !USE_LIBUSB
+int recv_msg_async(spdio_t *io) {
+	DWORD bWaitCode = WaitForSingleObject(io->m_hOprEvent, io->timeout);
+	if (bWaitCode != WAIT_OBJECT_0) {
+		return 0;
+	}
+	else {
+		ResetEvent(io->m_hOprEvent);
+		return io->raw_len;
+	}
+}
+#else
+int recv_msg_async(spdio_t *io) {
+	return 0;
+}
+#endif
+
 extern int fdl2_executed;
 int recv_msg(spdio_t *io) {
 	int ret;
 	for (;;) {
-		ret = recv_msg_orig(io);
+		if (io->m_dwRecvThreadID) ret = recv_msg_async(io);
+		else ret = recv_msg_orig(io);
 		// only retry in fdl2 stage
 		if (!ret) {
 			if (fdl2_executed) {
 #if !USE_LIBUSB
-				if (io->raw_len) call_Clear(io->handle); //io->raw_len = nread in recv_msg_orig()
+				if (io->raw_len) { call_Clear(io->handle); io->raw_len = 0; }
 #endif
 				send_msg(io);
-				ret = recv_msg_orig(io);
+				if (io->m_dwRecvThreadID) ret = recv_msg_async(io);
+				else ret = recv_msg_orig(io);
 				if (!ret) break;
 			}
 			else break;
@@ -754,15 +782,24 @@ void select_partition(spdio_t *io, const char *name,
 		sizeof(pkt.name) + (mode64 ? 16 : 4));
 }
 
+#if !_WIN32
+unsigned long long GetTickCount64() {
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+#endif
+
 #define PROGRESS_BAR_WIDTH 40
 
-void print_progress_bar(float progress) {
+void print_progress_bar(uint64_t done, uint64_t total, unsigned long long time0) {
 	static int completed0 = 0;
-	if (completed0 == PROGRESS_BAR_WIDTH) completed0 = 0;
-	int completed = (int)(PROGRESS_BAR_WIDTH * progress);
-	int remaining;
+	static uint64_t done0 = 0;
+	unsigned long long time = GetTickCount64();
+	if (completed0 == PROGRESS_BAR_WIDTH) { completed0 = 0; done0 = 0; }
+	int completed = (int)(PROGRESS_BAR_WIDTH * done / (double)total);
 	if (completed != completed0) {
-		remaining = PROGRESS_BAR_WIDTH - completed;
+		int remaining = PROGRESS_BAR_WIDTH - completed;
 		DBG_LOG("[");
 		for (int i = 0; i < completed; i++) {
 			DBG_LOG("=");
@@ -770,9 +807,10 @@ void print_progress_bar(float progress) {
 		for (int i = 0; i < remaining; i++) {
 			DBG_LOG(" ");
 		}
-		DBG_LOG("] %.1f%%\n", 100 * progress);
+		DBG_LOG("]%6.1f%% Speed:%6.2fMb/s\r", 100 * done / (double)total, (double)1000 * done / (time - time0) / 1024 / 1024);
+		completed0 = completed;
+		done0 = done;
 	}
-	completed0 = completed;
 }
 
 extern uint64_t fblk_size;
@@ -784,7 +822,7 @@ uint64_t dump_partition(spdio_t *io,
 	char name_tmp[36];
 
 	if (!strcmp(name, "super")) dump_partition(io, "metadata", 0, check_partition(io, "metadata", 1), "metadata.bin", step);
-	else if (!memcmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
+	else if (!strncmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
 	else if (strstr(name, "nv1")) {
 		strcpy(name_tmp, name);
 		char *dot = strrchr(name_tmp, '1');
@@ -805,6 +843,7 @@ uint64_t dump_partition(spdio_t *io,
 	FILE *fo = my_fopen(fn, "wb");
 	if (!fo) ERR_EXIT("fopen(dump) failed\n");
 
+	unsigned long long time_start = GetTickCount64();
 	for (offset = start; (n64 = start + len - offset); ) {
 		uint32_t data[3];
 		n = (uint32_t)(n64 > step ? step : n64);
@@ -827,7 +866,7 @@ uint64_t dump_partition(spdio_t *io,
 			ERR_EXIT("unexpected length\n");
 		if (fwrite(io->raw_buf + 4, 1, nread, fo) != nread)
 			ERR_EXIT("fwrite(dump) failed\n");
-		print_progress_bar((offset + nread - start) / (float)len);
+		print_progress_bar(offset + nread - start, len, time_start);
 		offset += nread;
 		if (n != nread) break;
 
@@ -836,7 +875,7 @@ uint64_t dump_partition(spdio_t *io,
 			if (saved_size >= fblk_size) { usleep(1000000); saved_size = 0; }
 		}
 	}
-	DBG_LOG("Read Part Done: %s+0x%llx, target: 0x%llx, read: 0x%llx\n",
+	DBG_LOG("\nRead Part Done: %s+0x%llx, target: 0x%llx, read: 0x%llx\n",
 		name, (long long)start, (long long)len,
 		(long long)(offset - start));
 	fclose(fo);
@@ -1192,6 +1231,7 @@ void load_partition(spdio_t *io, const char *name,
 	select_partition(io, name, len, mode64, BSL_CMD_START_DATA);
 	if (send_and_check(io)) { fclose(fi); return; }
 
+	unsigned long long time_start = GetTickCount64();
 #if !USE_LIBUSB
 	if (Da_Info.bSupportRawData) {
 		if (Da_Info.bSupportRawData > 1) {
@@ -1241,7 +1281,7 @@ void load_partition(spdio_t *io, const char *name,
 				DBG_LOG("unexpected response (0x%04x)\n", ret);
 				break;
 			}
-			print_progress_bar((offset + n) / (float)len);
+			print_progress_bar(offset + n, len, time_start);
 		}
 		free(rawbuf);
 	}
@@ -1264,14 +1304,14 @@ fallback_load:
 				DBG_LOG("unexpected response (0x%04x)\n", ret);
 				break;
 			}
-			print_progress_bar((offset + n) / (float)len);
+			print_progress_bar(offset + n, len, time_start);
 		}
 #if !USE_LIBUSB
 	}
 #endif
 	fclose(fi);
 	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
-	if (!send_and_check(io)) DBG_LOG("Write Part Done: %s, target: 0x%llx, written: 0x%llx\n",
+	if (!send_and_check(io)) DBG_LOG("\nWrite Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
 }
 
@@ -1494,7 +1534,7 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 	else ret = 0;
 	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
 	send_and_check(io);
-	if (!need_size) return ret;
+	if (0 == ret || 0 == need_size) return ret;
 
 	int incrementing = 1;
 	select_partition(io, name, 0xffffffff, 0, BSL_CMD_READ_START);
@@ -1589,7 +1629,7 @@ void get_partition_info(spdio_t *io, const char *name, int need_size) {
 		return;
 	}
 
-	if (!memcmp(name, "splloader", 9)) {
+	if (!strncmp(name, "splloader", 9)) {
 		strcpy(gPartInfo.name, name);
 		gPartInfo.size = 256 * 1024;
 		io->verbose = verbose;
@@ -1728,11 +1768,11 @@ void dump_partitions(spdio_t *io, const char *fn, int *nand_info, unsigned step)
 
 	for (int i = 0; i < found; i++) {
 		DBG_LOG("Partition %d: name=%s, size=%llim\n", i + 1, partitions[i].name, partitions[i].size);
-		if (!memcmp(partitions[i].name, "userdata", 8)) continue;
+		if (!strncmp(partitions[i].name, "userdata", 8)) continue;
 
 		get_partition_info(io, partitions[i].name, 0);
 		if (!gPartInfo.size) continue;
-		if (!memcmp(partitions[i].name, "splloader", 9)) gPartInfo.size = 256 * 1024;
+		if (!strncmp(partitions[i].name, "splloader", 9)) gPartInfo.size = 256 * 1024;
 		else if (0xffffffff == partitions[i].size) gPartInfo.size = check_partition(io, gPartInfo.name, 1);
 		else if (ubi) {
 			int block = (int)(partitions[i].size * (1024 / nand_info[2]) + partitions[i].size * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1);
@@ -1789,12 +1829,12 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 				!strcmp(fn + namelen - 4, ".exe") ||
 				!strcmp(fn + namelen - 4, ".txt")) continue;
 		}
-		if (!memcmp(fn, "pgpt", 4) ||
-			!memcmp(fn, "sprdpart", 8) ||
-			!memcmp(fn, "fdl", 3) ||
-			!memcmp(fn, "lk", 2) ||
-			!memcmp(fn, "0x", 2) ||
-			!memcmp(fn, "custom_exec", 11)) continue;
+		if (!strncmp(fn, "pgpt", 4) ||
+			!strncmp(fn, "sprdpart", 8) ||
+			!strncmp(fn, "fdl", 3) ||
+			!strncmp(fn, "lk", 2) ||
+			!strncmp(fn, "0x", 2) ||
+			!strncmp(fn, "custom_exec", 11)) continue;
 
 		snprintf(partitions[partition_count].file_path, sizeof(partitions[partition_count].file_path), "%s/%s", path, fn);
 		char *dot = strrchr(fn, '.');
@@ -1828,12 +1868,12 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 				!strcmp(fn + namelen - 4, ".exe") ||
 				!strcmp(fn + namelen - 4, ".txt")) continue;
 		}
-		if (!memcmp(fn, "pgpt", 4) ||
-			!memcmp(fn, "sprdpart", 8) ||
-			!memcmp(fn, "fdl", 3) ||
-			!memcmp(fn, "lk", 2) ||
-			!memcmp(fn, "0x", 2) ||
-			!memcmp(fn, "custom_exec", 11)) continue;
+		if (!strncmp(fn, "pgpt", 4) ||
+			!strncmp(fn, "sprdpart", 8) ||
+			!strncmp(fn, "fdl", 3) ||
+			!strncmp(fn, "lk", 2) ||
+			!strncmp(fn, "0x", 2) ||
+			!strncmp(fn, "custom_exec", 11)) continue;
 
 		snprintf(partitions[partition_count].file_path, sizeof(partitions[partition_count].file_path), "%s/%s", path, fn);
 		char *dot = strrchr(fn, '.');
@@ -1906,7 +1946,7 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 			continue;
 		}
 	}
-	int metadata_in_dump = 0, super_in_dump = 0, metadata_id, super_id;
+	int metadata_in_dump = 0, super_in_dump = 0, metadata_id = -1, super_id = -1;
 	for (int i = 0; i < partition_count; i++) {
 		if (!partitions[i].written_flag) {
 			fn = partitions[i].name;
@@ -2076,15 +2116,15 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 
 // 1 main written and _bak not written, 2 both written
 int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned step) {
-	char name0[36], name1[36];
+	char name0[36], name1[40];
 	unsigned size0, size1;
-	int isVBMETA;
+	int isVBMETA = 0;
 	if (strstr(name, "fixnv1")) { load_nv_partition(io, name, fn, 4096); return 1; }
 	if (!strcmp(name, "vbmeta")) isVBMETA = 1;
 	else if (selected_ab > 0 ||
 		Da_Info.dwStorageType == 0x101 ||
 		io->part_count == 0 ||
-		memcmp(name, "splloader", 9) == 0) {
+		strncmp(name, "splloader", 9) == 0) {
 		load_partition(io, name, fn, step);
 		return 1;
 	}
@@ -2244,7 +2284,6 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam) {
 
 	MSG msg;
 	while (GetMessage(&msg, NULL, 0, 0)) {
-		if (msg.message == THRD_MESSAGE_EXIT) break;
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
@@ -2257,13 +2296,13 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam) {
 void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
 	DWORD bytes_written, bytes_read;
-	int done = 0, count = 0;
+	int done = 0;
 
 	while (done != 1) {
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
 		for (int i = 0; ; i++) {
 			if (curPort) {
-				if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
+				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
 				break;
 			}
 			if (100 * i >= ms) ERR_EXIT("find port failed\n");
@@ -2344,16 +2383,6 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				}
 			}
 		}
-		DWORD *temp = (DWORD *)realloc(kick_ports, (count + 2) * sizeof(DWORD));
-		if (temp == NULL) {
-			DBG_LOG("Memory allocation failed.\n");
-			free(kick_ports);
-			kick_ports = NULL;
-			return;
-		}
-		kick_ports = temp;
-		kick_ports[count] = curPort;
-		count++;
 		for (int i = 0; ; i++) {
 			if (m_bOpened == -1) {
 				call_DisconnectChannel(io->handle);
@@ -2371,7 +2400,84 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 		}
 		if (!at) done = 1;
 	}
-	if (count > 0) kick_ports[count] = 0;
+}
+
+DWORD WINAPI RcvDataThreadProc(LPVOID lpParam) {
+	spdio_t *io = (spdio_t *)lpParam;
+	static int plen = 6;
+
+	MSG msg;
+	PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE);
+
+	SetEvent(io->m_hRecvThreadState);
+
+	while (GetMessage(&msg, NULL, 0, 0)) {
+		switch (msg.message) {
+		case WM_RCV_CHANNEL_DATA:
+			if (recv_transcode(io, (const uint8_t *)msg.wParam, (int)msg.lParam, &plen)) {
+				if (plen == io->raw_len) {
+					if (recv_check_crc(io)) {
+						plen = 6;
+						SetEvent(io->m_hOprEvent);
+					}
+				}
+			}
+			call_FreeMem(io->handle, (LPVOID)msg.wParam);
+			break;
+		default:
+			break;
+		}
+	}
+
+	SetEvent(io->m_hRecvThreadState);
+
+	return 0;
+}
+
+BOOL CreateRecvThread(spdio_t *io) {
+	io->m_hRecvThreadState = CreateEvent(NULL, TRUE, FALSE, NULL);
+	io->m_hOprEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+	io->m_hRecvThread = CreateThread(NULL, 0, RcvDataThreadProc, io, 0, &io->m_dwRecvThreadID);
+	if (io->m_hRecvThreadState == NULL || io->m_hOprEvent == NULL || io->m_hRecvThread == NULL) {
+		return FALSE;
+	}
+
+	DWORD bWaitCode = WaitForSingleObject(io->m_hRecvThreadState, 5000);
+	if (bWaitCode != WAIT_OBJECT_0) {
+		return FALSE;
+	}
+	else {
+		ResetEvent(io->m_hRecvThreadState);
+	}
+	return TRUE;
+}
+
+void DestroyRecvThread(spdio_t *io) {
+	if (io->m_hRecvThread == NULL) {
+		return;
+	}
+
+	PostThreadMessage(io->m_dwRecvThreadID, WM_QUIT, 0, 0);
+
+	WaitForSingleObject(io->m_hRecvThreadState, INFINITE);
+	ResetEvent(io->m_hRecvThreadState);
+
+	if (io->m_hRecvThread) {
+		CloseHandle(io->m_hRecvThread);
+		io->m_hRecvThread = NULL;
+	}
+
+	if (io->m_hRecvThreadState) {
+		CloseHandle(io->m_hRecvThreadState);
+		io->m_hRecvThreadState = NULL;
+	}
+
+	if (io->m_hOprEvent) {
+		CloseHandle(io->m_hOprEvent);
+		io->m_hOprEvent = NULL;
+	}
+
+	io->m_dwRecvThreadID = 0;
 }
 #else
 #ifndef _MSC_VER
@@ -2438,7 +2544,7 @@ void stopUsbEventHandle(void) {
 void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 	int err, bytes_written, bytes_read;
 	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
-	int done = 0, count = 0;
+	int done = 0;
 
 	while (done != 1) {
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
@@ -2546,16 +2652,6 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				}
 			}
 		}
-		libusb_device **temp = (libusb_device **)realloc(kick_ports, (count + 2) * sizeof(libusb_device *));
-		if (temp == NULL) {
-			DBG_LOG("Memory allocation failed.\n");
-			free(kick_ports);
-			kick_ports = NULL;
-			return;
-		}
-		kick_ports = temp;
-		kick_ports[count] = curPort;
-		count++;
 		for (int i = 0; ; i++) {
 			if (m_bOpened == -1) {
 				libusb_close(io->dev_handle);
@@ -2573,7 +2669,6 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 		}
 		if (!at) done = 1;
 	}
-	if (count > 0) kick_ports[count] = 0;
 }
 
 void call_Initialize_libusb(spdio_t *io) {

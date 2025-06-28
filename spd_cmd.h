@@ -59,13 +59,13 @@ enum {
 	/* End of Data Download command */
 
 	BSL_CMD_NORMAL_RESET = 0x05, /* Reset to normal mode */
-	BSL_CMD_READ_FLASH = 0x06, /* Read flash content */
+	BSL_CMD_READ_FLASH = 0x06, /* Read flash content */ // id based nand-flash
 	BSL_CMD_READ_CHIP_TYPE = 0x07, /* Read chip type */
 	BSL_CMD_READ_NVITEM = 0x08, /* Lookup a nvitem in specified area */
 	BSL_CMD_CHANGE_BAUD = 0x09, /* Change baudrate */
 	BSL_CMD_ERASE_FLASH = 0x0A, /* Erase an area of flash */
 	BSL_CMD_REPARTITION = 0x0B, /* Repartition nand flash */
-	BSL_CMD_READ_FLASH_TYPE = 0x0C, /* Read flash type */
+	BSL_CMD_READ_FLASH_TYPE = 0x0C, /* Read flash type */ // customer
 	BSL_CMD_READ_FLASH_INFO = 0x0D, /* Read flash infomation */
 	BSL_CMD_READ_SECTOR_SIZE = 0x0F, /* Read Nor flash sector size */
 	BSL_CMD_READ_START = 0x10, /* Read flash start */
@@ -77,47 +77,47 @@ enum {
 	BSL_CMD_READ_FLASH_UID = 0x15, /* Read flash UID */
 	BSL_CMD_READ_SOFTSIM_EID = 0x16, /* Read softSIM EID */
 	BSL_CMD_POWER_OFF = 0x17, /* Power Off */
-	BSL_CMD_CHECK_ROOT = 0x19, /* Check Root */
+	BSL_CMD_CHECK_ROOT = 0x19, /* Check Root */ // miscdata related, rerutn 0xA7 if ROOT_MAGIC matches, otherwise return 0x80
 	BSL_CMD_READ_CHIP_UID = 0x1A, /* Read Chip UID */
-	BSL_CMD_ENABLE_WRITE_FLASH = 0x1B, /* Enable flash */
+	BSL_CMD_ENABLE_WRITE_FLASH = 0x1B, /* Enable flash */ // disable write protect, return 0x80
 	BSL_CMD_ENABLE_SECUREBOOT = 0x1C, /* Enable secure boot */
 	BSL_CMD_IDENTIFY_START = 0x1D, /* Identify start */
 	BSL_CMD_IDENTIFY_END = 0x1E, /* Identify end */
 	BSL_CMD_READ_CU_REF = 0x1F, /* Read CU ref */
-	BSL_CMD_READ_REFINFO = 0x20, /* Read Ref Info */
+	BSL_CMD_READ_REFINFO = 0x20, /* Read Ref Info */ // miscdata related
 	BSL_CMD_DISABLE_TRANSCODE = 0x21, /* Use the non-escape function */
-	BSL_CMD_WRITE_APR_INFO = 0x22, /* Write pac file build time to miscdata for APR */
+	BSL_CMD_WRITE_APR_INFO = 0x22, /* Write pac file build time to miscdata for APR */ // miscdata related
 	BSL_CMD_CUST_DUMMY = 0x23, /* Customized Dummy */
 	BSL_CMD_READ_RF_TRANSCEIVER_TYPE = 0x24, /* Read RF transceiver type */
-	BSL_CMD_ENABLE_DEBUG_MODE = 0x25, /* Enable debug mode */
+	BSL_CMD_ENABLE_DEBUG_MODE = 0x25, /* Enable debug mode */ // miscdata related
 	BSL_CMD_DDR_CHECK = 0x26, /* DDR check */
 	BSL_CMD_SELF_REFRESH = 0x27, /* Self Refresh */
 	BSL_CMD_ENABLE_RAW_DATA = 0x28, /* Enable Raw Data */
 	BSL_CMD_READ_NAND_BLOCK_INFO = 0x29, /* ReadNandBlockInfo */
 
-	BSL_CMD_SET_FIRST_MODE = 0x2A, /* Set First Mode */
-	BSL_CMD_SET_RANDOM_DATA = 0x2B, /* Set Random Data */
+	BSL_CMD_SET_FIRST_MODE = 0x2A, /* Set First Mode */ // miscdata related
+	BSL_CMD_SET_RANDOM_DATA = 0x2B, /* Set Random Data */ // handshake related, device send encrypted data in 0x96 packet to PC, PC send 0x2B decrypted data, device return 0x80 or 0xB9
 
-	BSL_CMD_SET_TIME_STAMP = 0x2C, /* Set Time Stamp used for second hand memory check */
+	BSL_CMD_SET_TIME_STAMP = 0x2C, /* Set Time Stamp used for second hand memory check */ // miscdata related
 	BSL_CMD_READ_PARTITION = 0x2D, /* Read partition information from phone */
-	BSL_CMD_READ_VCUR_DATA = 0x2E, /* Read Vpac */
-	BSL_CMD_WRITE_VPAC_DATA = 0x2F, /* Write Vpac */
+	BSL_CMD_READ_VCUR_DATA = 0x2E, /* Read Vpac */ // miscdata related
+	BSL_CMD_WRITE_VPAC_DATA = 0x2F, /* Write Vpac */ // miscdata related
 
 	BSL_CMD_MIDST_RAW_START = 0x31, /* Midst Raw Start */
-	BSL_CMD_FLUSH_DATA = 0x32, /* Flush Data */
+	BSL_CMD_FLUSH_DATA = 0x32, /* Flush Data */ // sha256 a small packet before download raw data (unused currently)
 	BSL_CMD_MIDST_RAW_START2 = 0x33, /* Midst Raw Start for V2, only send once */
-	BSL_CMD_ENABLE_UBOOT_LOG = 0x34, /* Enable 0xFF type uboot log */
+	BSL_CMD_ENABLE_UBOOT_LOG = 0x34, /* Enable 0xFF type uboot log */ // return 0x80
 	BSL_CMD_DUMP_UBOOT_LOG = 0x35, /* request dump uboot log */
 
-	BSL_CMD_DISABLE_SELINUX = 0x40, /* Disable Selinux */
+	BSL_CMD_DISABLE_SELINUX = 0x40, /* Disable Selinux */ // miscdata related
 
-	BSL_CMD_AUTH_BEGIN = 0x41, /* Begin Auth - Ack M1 */
-	BSL_CMD_AUTH_END = 0x42, /* End Auth - Send Secure */
+	BSL_CMD_AUTH_BEGIN = 0x41, /* Begin Auth - Ack M1 */ // handshake related
+	BSL_CMD_AUTH_END = 0x42, /* End Auth - Send Secure */ // handshake related
 
 	BSL_CMD_EMMC_CID = 0x43, /* Read EMMC_CID */
 
-	BSL_CMD_OPEN_WATCH_DOG = 0x44, /* Open WatchDog */
-	BSL_CMD_CLOSE_WATCH_DOG = 0x45, /* Close WatchDog */
+	BSL_CMD_OPEN_WATCH_DOG = 0x44, /* Open WatchDog */ // miscdata related
+	BSL_CMD_CLOSE_WATCH_DOG = 0x45, /* Close WatchDog */ // miscdata related
 	BSL_CMD_POWEROFF_NOKEY = 0x46, /* no key to dl */
 	BSL_CMD_WRITE_EFUSE = 0x47, /* Write efuse */
 	BSL_CMD_READ_PARTITION_VALUE = 0x48, /* Read Partition Value */

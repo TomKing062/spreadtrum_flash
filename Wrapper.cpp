@@ -32,9 +32,9 @@ int call_Write(ClassHandle *handle, UCHAR *lpData, int iDataSize) {
 	return obj->Write(lpData, iDataSize);
 }
 
-BOOL call_ConnectChannel(ClassHandle *handle, DWORD dwPort) {
+BOOL call_ConnectChannel(ClassHandle *handle, DWORD dwPort, ULONG ulMsgId, DWORD Receiver) {
 	CBootModeOpr *obj = static_cast<CBootModeOpr *>(handle->obj);
-	return obj->ConnectChannel(dwPort);
+	return obj->ConnectChannel(dwPort, ulMsgId, Receiver);
 }
 
 BOOL call_DisconnectChannel(ClassHandle *handle) {
@@ -55,4 +55,9 @@ BOOL call_SetProperty(ClassHandle *handle, LONG lFlags, DWORD dwPropertyID, LPCV
 void call_Clear(ClassHandle *handle) {
 	CBootModeOpr *obj = static_cast<CBootModeOpr *>(handle->obj);
 	obj->Clear();
+}
+
+void call_FreeMem(ClassHandle *handle, LPVOID pMemBlock) {
+	CBootModeOpr *obj = static_cast<CBootModeOpr *>(handle->obj);
+	obj->FreeMem(pMemBlock);
 }

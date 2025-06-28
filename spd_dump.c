@@ -140,15 +140,13 @@ int main(int argc, char **argv) {
 	char str1[(ARGC_MAX - 1) * ARGV_LEN];
 	char **str2;
 	char *execfile;
-	int bootmode = -1, at = 0;
+	int bootmode = -1, at = 0, async = 1;
 #if !USE_LIBUSB
 	extern DWORD curPort;
 	DWORD *ports;
-	extern DWORD *kick_ports;
 #else
 	extern libusb_device *curPort;
 	libusb_device **ports;
-	extern libusb_device **kick_ports;
 #endif
 	execfile = malloc(ARGV_LEN);
 	if (!execfile) ERR_EXIT("malloc failed\n");
@@ -211,6 +209,10 @@ int main(int argc, char **argv) {
 			bootmode = strtol(argv[2], NULL, 0); at = 0;
 			argc -= 2; argv += 2;
 		}
+		else if (!strcmp(argv[1], "--sync")) {
+			async = 0;
+			argc -= 1; argv += 1;
+		}
 		else break;
 	}
 #if defined(_MYDEBUG) && defined(USE_LIBUSB)
@@ -247,19 +249,6 @@ int main(int argc, char **argv) {
 		wait = 30 * REOPEN_FREQ;
 		stage = -1;
 	}
-	else {
-		if ((ports = FindPort("SPRD U2S Diag"))) {
-			for (DWORD *port = ports; *port != 0; port++) {
-				if (call_ConnectChannel(io->handle, *port)) {
-					curPort = *port;
-					break;
-				}
-			}
-			if (!m_bOpened) curPort = 0;
-			free(ports);
-			ports = NULL;
-		}
-	}
 #else
 	if (!libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) { DBG_LOG("hotplug unsupported on this platform\n"); bListenLibusb = 0; bootmode = -1; at = 0; }
 	if (at || bootmode >= 0) {
@@ -268,20 +257,6 @@ int main(int argc, char **argv) {
 		wait = 30 * REOPEN_FREQ;
 		stage = -1;
 	}
-	else {
-		if ((ports = FindPort(0x4d00))) {
-			for (libusb_device **port = ports; *port != NULL; port++) {
-				if (libusb_open(*port, &io->dev_handle) >= 0) {
-					call_Initialize_libusb(io);
-					curPort = *port;
-					break;
-				}
-			}
-			if (!m_bOpened) curPort = 0;
-			libusb_free_device_list(ports, 1);
-			ports = NULL;
-		}
-	}
 	if (bListenLibusb < 0) startUsbEventHandle();
 #endif
 #if _WIN32
@@ -289,46 +264,16 @@ int main(int argc, char **argv) {
 		if (io->hThread == NULL) io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
 		if (io->hThread == NULL) return -1;
 	}
+#if !USE_LIBUSB
+	if (!m_bOpened && async) {
+		if (FALSE == CreateRecvThread(io)) {
+			io->m_dwRecvThreadID = 0;
+			DBG_LOG("Create Receive Thread Fail.\n");
+		}
+	}
+#endif
 #endif
 	if (!m_bOpened) {
-#if USE_LIBUSB
-		if ((ports = FindPort(0x4d00))) {
-			for (libusb_device **port = ports; *port != NULL; port++) {
-				for (libusb_device **kick_port = kick_ports; *kick_port != NULL; kick_port++) {
-					if (*kick_port == *port) {
-						if (libusb_open(*port, &io->dev_handle) >= 0) {
-							call_Initialize_libusb(io);
-							curPort = *port;
-							break;
-						}
-					}
-				}
-				if (curPort) break;
-			}
-			libusb_free_device_list(ports, 1);
-			ports = NULL;
-			free(kick_ports);
-			kick_ports = NULL;
-		}
-#else
-		if ((ports = FindPort("SPRD U2S Diag"))) {
-			for (DWORD *port = ports; *port != 0; port++) {
-				for (DWORD *kick_port = kick_ports; *kick_port != 0; kick_port++) {
-					if (*kick_port == *port) {
-						if (call_ConnectChannel(io->handle, *port)) {
-							curPort = *port;
-							break;
-						}
-					}
-				}
-				if (curPort) break;
-			}
-			free(ports);
-			ports = NULL;
-			free(kick_ports);
-			kick_ports = NULL;
-		}
-#endif
 		DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
 		for (i = 0; ; i++) {
 #if USE_LIBUSB
@@ -339,12 +284,18 @@ int main(int argc, char **argv) {
 					break;
 				}
 			}
-			else {
-				io->dev_handle = libusb_open_device_with_vid_pid(NULL, 0x1782, 0x4d00);
-				if (io->dev_handle) {
-					curPort = libusb_get_device(io->dev_handle);
-					call_Initialize_libusb(io);
-					break;
+			if (!(i % 4)) {
+				if ((ports = FindPort(0x4d00))) {
+					for (libusb_device **port = ports; *port != NULL; port++) {
+						if (libusb_open(*port, &io->dev_handle) >= 0) {
+							call_Initialize_libusb(io);
+							curPort = *port;
+							break;
+						}
+					}
+					libusb_free_device_list(ports, 1);
+					ports = NULL;
+					if (m_bOpened) break;
 				}
 			}
 			if (i >= wait)
@@ -352,8 +303,21 @@ int main(int argc, char **argv) {
 #else
 			if (io->verbose) DBG_LOG("CurTime: %.1f, CurPort: %d\n", (float)i / REOPEN_FREQ, curPort);
 			if (curPort) {
-				if (!call_ConnectChannel(io->handle, curPort)) ERR_EXIT("Connection failed\n");
+				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
 				break;
+			}
+			if (!(i % 4)) {
+				if ((ports = FindPort("SPRD U2S Diag"))) {
+					for (DWORD *port = ports; *port != 0; port++) {
+						if (call_ConnectChannel(io->handle, *port, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) {
+							curPort = *port;
+							break;
+						}
+					}
+					free(ports);
+					ports = NULL;
+					if (m_bOpened) break;
+				}
 			}
 			if (i >= wait)
 				ERR_EXIT("find port failed\n");
@@ -604,7 +568,7 @@ int main(int argc, char **argv) {
 						for (i = 0; i < gapsize; i += n) {
 							n = gapsize - i;
 							if (n > 528) n = 528;
-							encode_msg(io, BSL_CMD_MIDST_DATA, buf + i, n);
+							encode_msg(io, BSL_CMD_MIDST_DATA, buf, n);
 							if (send_and_check(io)) exit(1);
 						}
 						free(buf);
@@ -962,9 +926,9 @@ int main(int argc, char **argv) {
 				dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				for (i = 0; i < io->part_count; i++) {
 					char dfile[40];
-					if (!memcmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
-					else if (!memcmp((*(io->ptable + i)).name, "cache", 5)) continue;
-					else if (!memcmp((*(io->ptable + i)).name, "userdata", 8)) continue;
+					if (!strncmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
+					else if (!strncmp((*(io->ptable + i)).name, "cache", 5)) continue;
+					else if (!strncmp((*(io->ptable + i)).name, "userdata", 8)) continue;
 					snprintf(dfile, sizeof(dfile), "%s.bin", (*(io->ptable + i)).name);
 					dump_partition(io, (*(io->ptable + i)).name, 0, (*(io->ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				}
@@ -978,9 +942,9 @@ int main(int argc, char **argv) {
 				for (i = 0; i < io->part_count; i++) {
 					char dfile[40];
 					size_t namelen = strlen((*(io->ptable + i)).name);
-					if (!memcmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
-					else if (!memcmp((*(io->ptable + i)).name, "cache", 5)) continue;
-					else if (!memcmp((*(io->ptable + i)).name, "userdata", 8)) continue;
+					if (!strncmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
+					else if (!strncmp((*(io->ptable + i)).name, "cache", 5)) continue;
+					else if (!strncmp((*(io->ptable + i)).name, "userdata", 8)) continue;
 					if (selected_ab == 1 && namelen > 2 && 0 == strcmp((*(io->ptable + i)).name + namelen - 2, "_b")) continue;
 					else if (selected_ab == 2 && namelen > 2 && 0 == strcmp((*(io->ptable + i)).name + namelen - 2, "_a")) continue;
 					snprintf(dfile, sizeof(dfile), "%s.bin", (*(io->ptable + i)).name);
@@ -1107,7 +1071,7 @@ rloop:
 			argc -= 3; argv += 3;
 
 		}
-		else if (!memcmp(str2[1], "write_parts", 11)) {
+		else if (!strncmp(str2[1], "write_parts", 11)) {
 			if (argcount <= 2) { DBG_LOG("write_parts|write_parts_a|write_parts_b save_location\n"); argc = 1; continue; }
 			int force_ab = 0;
 			if (!strcmp(str2[1], "write_parts_a")) force_ab = 1;
@@ -1129,7 +1093,7 @@ rloop:
 			get_partition_info(io, name, 0);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
 
-			if (!memcmp(gPartInfo.name, "splloader", 9)) { DBG_LOG("blacklist!\n"); argc -= 3; argv += 3; continue; }
+			if (!strncmp(gPartInfo.name, "splloader", 9)) { DBG_LOG("blacklist!\n"); argc -= 3; argv += 3; continue; }
 			else if (isdigit(str2[2][0])) load_partition_force(io, atoi(str2[2]) - 1, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			else {
 				for (i = 0; i < io->part_count; i++)
