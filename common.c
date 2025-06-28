@@ -792,12 +792,10 @@ unsigned long long GetTickCount64() {
 
 #define PROGRESS_BAR_WIDTH 40
 
-void print_progress_bar(uint64_t done, uint64_t total) {
+void print_progress_bar(uint64_t done, uint64_t total, unsigned long long time0) {
 	static int completed0 = 0;
 	static uint64_t done0 = 0;
-	static unsigned long long time0 = 0;
 	unsigned long long time = GetTickCount64();
-	if (!time0) time0 = time;
 	if (completed0 == PROGRESS_BAR_WIDTH) { completed0 = 0; done0 = 0; }
 	int completed = (int)(PROGRESS_BAR_WIDTH * done / (double)total);
 	if (completed != completed0) {
@@ -809,10 +807,9 @@ void print_progress_bar(uint64_t done, uint64_t total) {
 		for (int i = 0; i < remaining; i++) {
 			DBG_LOG(" ");
 		}
-		DBG_LOG("]%6.1f%% Speed:%6.2fMb/s\r", 100 * done / (double)total, (double)1000 * (done - done0) / (time - time0) / 1024 / 1024);
+		DBG_LOG("]%6.1f%% Speed:%6.2fMb/s\r", 100 * done / (double)total, (double)1000 * done / (time - time0) / 1024 / 1024);
 		completed0 = completed;
 		done0 = done;
-		time0 = time;
 	}
 }
 
@@ -825,7 +822,7 @@ uint64_t dump_partition(spdio_t *io,
 	char name_tmp[36];
 
 	if (!strcmp(name, "super")) dump_partition(io, "metadata", 0, check_partition(io, "metadata", 1), "metadata.bin", step);
-	else if (!memcmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
+	else if (!strncmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
 	else if (strstr(name, "nv1")) {
 		strcpy(name_tmp, name);
 		char *dot = strrchr(name_tmp, '1');
@@ -846,6 +843,7 @@ uint64_t dump_partition(spdio_t *io,
 	FILE *fo = my_fopen(fn, "wb");
 	if (!fo) ERR_EXIT("fopen(dump) failed\n");
 
+	unsigned long long time_start = GetTickCount64();
 	for (offset = start; (n64 = start + len - offset); ) {
 		uint32_t data[3];
 		n = (uint32_t)(n64 > step ? step : n64);
@@ -868,7 +866,7 @@ uint64_t dump_partition(spdio_t *io,
 			ERR_EXIT("unexpected length\n");
 		if (fwrite(io->raw_buf + 4, 1, nread, fo) != nread)
 			ERR_EXIT("fwrite(dump) failed\n");
-		print_progress_bar(offset + nread - start, len);
+		print_progress_bar(offset + nread - start, len, time_start);
 		offset += nread;
 		if (n != nread) break;
 
@@ -1233,6 +1231,7 @@ void load_partition(spdio_t *io, const char *name,
 	select_partition(io, name, len, mode64, BSL_CMD_START_DATA);
 	if (send_and_check(io)) { fclose(fi); return; }
 
+	unsigned long long time_start = GetTickCount64();
 #if !USE_LIBUSB
 	if (Da_Info.bSupportRawData) {
 		if (Da_Info.bSupportRawData > 1) {
@@ -1282,7 +1281,7 @@ void load_partition(spdio_t *io, const char *name,
 				DBG_LOG("unexpected response (0x%04x)\n", ret);
 				break;
 			}
-			print_progress_bar(offset + n, len);
+			print_progress_bar(offset + n, len, time_start);
 		}
 		free(rawbuf);
 	}
@@ -1305,7 +1304,7 @@ fallback_load:
 				DBG_LOG("unexpected response (0x%04x)\n", ret);
 				break;
 			}
-			print_progress_bar(offset + n, len);
+			print_progress_bar(offset + n, len, time_start);
 		}
 #if !USE_LIBUSB
 	}
@@ -1630,7 +1629,7 @@ void get_partition_info(spdio_t *io, const char *name, int need_size) {
 		return;
 	}
 
-	if (!memcmp(name, "splloader", 9)) {
+	if (!strncmp(name, "splloader", 9)) {
 		strcpy(gPartInfo.name, name);
 		gPartInfo.size = 256 * 1024;
 		io->verbose = verbose;
@@ -1769,11 +1768,11 @@ void dump_partitions(spdio_t *io, const char *fn, int *nand_info, unsigned step)
 
 	for (int i = 0; i < found; i++) {
 		DBG_LOG("Partition %d: name=%s, size=%llim\n", i + 1, partitions[i].name, partitions[i].size);
-		if (!memcmp(partitions[i].name, "userdata", 8)) continue;
+		if (!strncmp(partitions[i].name, "userdata", 8)) continue;
 
 		get_partition_info(io, partitions[i].name, 0);
 		if (!gPartInfo.size) continue;
-		if (!memcmp(partitions[i].name, "splloader", 9)) gPartInfo.size = 256 * 1024;
+		if (!strncmp(partitions[i].name, "splloader", 9)) gPartInfo.size = 256 * 1024;
 		else if (0xffffffff == partitions[i].size) gPartInfo.size = check_partition(io, gPartInfo.name, 1);
 		else if (ubi) {
 			int block = (int)(partitions[i].size * (1024 / nand_info[2]) + partitions[i].size * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1);
@@ -1830,12 +1829,12 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 				!strcmp(fn + namelen - 4, ".exe") ||
 				!strcmp(fn + namelen - 4, ".txt")) continue;
 		}
-		if (!memcmp(fn, "pgpt", 4) ||
-			!memcmp(fn, "sprdpart", 8) ||
-			!memcmp(fn, "fdl", 3) ||
-			!memcmp(fn, "lk", 2) ||
-			!memcmp(fn, "0x", 2) ||
-			!memcmp(fn, "custom_exec", 11)) continue;
+		if (!strncmp(fn, "pgpt", 4) ||
+			!strncmp(fn, "sprdpart", 8) ||
+			!strncmp(fn, "fdl", 3) ||
+			!strncmp(fn, "lk", 2) ||
+			!strncmp(fn, "0x", 2) ||
+			!strncmp(fn, "custom_exec", 11)) continue;
 
 		snprintf(partitions[partition_count].file_path, sizeof(partitions[partition_count].file_path), "%s/%s", path, fn);
 		char *dot = strrchr(fn, '.');
@@ -1869,12 +1868,12 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 				!strcmp(fn + namelen - 4, ".exe") ||
 				!strcmp(fn + namelen - 4, ".txt")) continue;
 		}
-		if (!memcmp(fn, "pgpt", 4) ||
-			!memcmp(fn, "sprdpart", 8) ||
-			!memcmp(fn, "fdl", 3) ||
-			!memcmp(fn, "lk", 2) ||
-			!memcmp(fn, "0x", 2) ||
-			!memcmp(fn, "custom_exec", 11)) continue;
+		if (!strncmp(fn, "pgpt", 4) ||
+			!strncmp(fn, "sprdpart", 8) ||
+			!strncmp(fn, "fdl", 3) ||
+			!strncmp(fn, "lk", 2) ||
+			!strncmp(fn, "0x", 2) ||
+			!strncmp(fn, "custom_exec", 11)) continue;
 
 		snprintf(partitions[partition_count].file_path, sizeof(partitions[partition_count].file_path), "%s/%s", path, fn);
 		char *dot = strrchr(fn, '.');
@@ -2125,7 +2124,7 @@ int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned
 	else if (selected_ab > 0 ||
 		Da_Info.dwStorageType == 0x101 ||
 		io->part_count == 0 ||
-		memcmp(name, "splloader", 9) == 0) {
+		strncmp(name, "splloader", 9) == 0) {
 		load_partition(io, name, fn, step);
 		return 1;
 	}

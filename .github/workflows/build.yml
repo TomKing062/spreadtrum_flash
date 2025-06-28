@@ -70,10 +70,13 @@ jobs:
       - name: Misc
         run: |
           cp stable/*.md output/
-          cp stable/Lib/*.bin output/
           cd output
+          mv spd_dump_x86_Release spd_dump_SPRD_Release
+          mv spd_dump_x64_Release spd_dump_LibUSB_Release
           zip -r -v ../spd_dump_${{ env.RELEASE_TAG }}.zip .
           cd ../outputD
+          mv spd_dump_x86_CustDebug spd_dump_SPRD_CustDebug
+          mv spd_dump_x64_CustDebug spd_dump_LibUSB_CustDebug
           zip -r -v ../spd_dump_${{ env.RELEASE_TAG }}_Debug.zip .
 
       - name: Create GitHub Release

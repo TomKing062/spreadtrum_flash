@@ -926,9 +926,9 @@ int main(int argc, char **argv) {
 				dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				for (i = 0; i < io->part_count; i++) {
 					char dfile[40];
-					if (!memcmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
-					else if (!memcmp((*(io->ptable + i)).name, "cache", 5)) continue;
-					else if (!memcmp((*(io->ptable + i)).name, "userdata", 8)) continue;
+					if (!strncmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
+					else if (!strncmp((*(io->ptable + i)).name, "cache", 5)) continue;
+					else if (!strncmp((*(io->ptable + i)).name, "userdata", 8)) continue;
 					snprintf(dfile, sizeof(dfile), "%s.bin", (*(io->ptable + i)).name);
 					dump_partition(io, (*(io->ptable + i)).name, 0, (*(io->ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				}
@@ -942,9 +942,9 @@ int main(int argc, char **argv) {
 				for (i = 0; i < io->part_count; i++) {
 					char dfile[40];
 					size_t namelen = strlen((*(io->ptable + i)).name);
-					if (!memcmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
-					else if (!memcmp((*(io->ptable + i)).name, "cache", 5)) continue;
-					else if (!memcmp((*(io->ptable + i)).name, "userdata", 8)) continue;
+					if (!strncmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
+					else if (!strncmp((*(io->ptable + i)).name, "cache", 5)) continue;
+					else if (!strncmp((*(io->ptable + i)).name, "userdata", 8)) continue;
 					if (selected_ab == 1 && namelen > 2 && 0 == strcmp((*(io->ptable + i)).name + namelen - 2, "_b")) continue;
 					else if (selected_ab == 2 && namelen > 2 && 0 == strcmp((*(io->ptable + i)).name + namelen - 2, "_a")) continue;
 					snprintf(dfile, sizeof(dfile), "%s.bin", (*(io->ptable + i)).name);
@@ -1093,7 +1093,7 @@ rloop:
 			get_partition_info(io, name, 0);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
 
-			if (!memcmp(gPartInfo.name, "splloader", 9)) { DBG_LOG("blacklist!\n"); argc -= 3; argv += 3; continue; }
+			if (!strncmp(gPartInfo.name, "splloader", 9)) { DBG_LOG("blacklist!\n"); argc -= 3; argv += 3; continue; }
 			else if (isdigit(str2[2][0])) load_partition_force(io, atoi(str2[2]) - 1, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			else {
 				for (i = 0; i < io->part_count; i++)
