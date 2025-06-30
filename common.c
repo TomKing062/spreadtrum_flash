@@ -215,7 +215,7 @@ partition_t gPartInfo;
 spdio_t *spdio_init(int flags) {
 	uint8_t *p; spdio_t *io;
 
-	p = (uint8_t *)malloc(sizeof(spdio_t) + RECV_BUF_LEN + (4 + 0x10000 + 2) * 3 + 2);
+	p = (uint8_t *)malloc(sizeof(spdio_t) + RECV_BUF_LEN + (4 + 0x10000 + 2) * 4 + 4);
 	io = (spdio_t *)p;
 	if (!p) ERR_EXIT("malloc failed\n");
 	memset(io, 0, sizeof(spdio_t));
@@ -224,6 +224,7 @@ spdio_t *spdio_init(int flags) {
 	io->recv_buf = p; p += RECV_BUF_LEN;
 	io->temp_buf = p + 4;
 	io->raw_buf = p; p += 4 + 0x10000 + 2;
+	io->untranscode_buf = p; p += 4 + 0x10000 + 4;
 	io->enc_buf = p;
 	io->timeout = 1000;
 	memset(io->recv_buf, 0, 8);
@@ -317,14 +318,15 @@ void encode_msg(spdio_t *io, int type, const void *data, size_t len) {
 	if (len > 0xffff)
 		ERR_EXIT("message too long\n");
 
+	io->send_buf = io->enc_buf;
 	if (type == BSL_CMD_CHECK_BAUD) {
 		memset(io->enc_buf, HDLC_HEADER, len);
 		io->enc_len = len;
-		*(uint8_t *)(io->raw_buf) = HDLC_HEADER;
+		*(io->untranscode_buf + 1) = HDLC_HEADER;
 		return;
 	}
 
-	p = p0 = io->raw_buf;
+	p = p0 = io->untranscode_buf + 1;
 	WRITE16_BE(p, type); p += 2;
 	WRITE16_BE(p, len); p += 2;
 	memcpy(p, data, len); p += len;
@@ -340,11 +342,16 @@ void encode_msg(spdio_t *io, int type, const void *data, size_t len) {
 
 	io->raw_len = len = p - p0;
 
-	p = io->enc_buf;
-	*p++ = HDLC_HEADER;
-	if (io->flags & FLAGS_TRANSCODE)
+	if (io->flags & FLAGS_TRANSCODE) {
+		p = io->enc_buf;
+		*p++ = HDLC_HEADER;
 		len = spd_transcode(p, p0, len);
-	else memcpy(p, p0, len);
+	}
+	else {
+		p = io->untranscode_buf;
+		*p++ = HDLC_HEADER;
+		io->send_buf = io->untranscode_buf;
+	}
 	p[len] = HDLC_HEADER;
 	io->enc_len = len + 2;
 }
@@ -360,24 +367,24 @@ int send_msg(spdio_t *io) {
 	}
 	if (io->verbose >= 2) {
 		DBG_LOG("send (%d):\n", io->enc_len);
-		print_mem(stderr, io->enc_buf, io->enc_len);
+		print_mem(stderr, io->send_buf, io->enc_len);
 	}
 	else if (io->verbose >= 1) {
-		if (io->raw_buf[0] == HDLC_HEADER)
+		if (*(io->untranscode_buf + 1) == HDLC_HEADER)
 			DBG_LOG("send: check baud\n");
 		else if (io->raw_len >= 4) {
 			DBG_LOG("send: type = 0x%02x, size = %d\n",
-				READ16_BE(io->raw_buf), READ16_BE(io->raw_buf + 2));
+				READ16_BE(io->untranscode_buf + 1), READ16_BE(io->untranscode_buf + 3));
 		}
 		else DBG_LOG("send: unknown message\n");
 	}
 
 #if USE_LIBUSB
-	int err = libusb_bulk_transfer(io->dev_handle, io->endp_out, io->enc_buf, io->enc_len, &ret, io->timeout);
+	int err = libusb_bulk_transfer(io->dev_handle, io->endp_out, io->send_buf, io->enc_len, &ret, io->timeout);
 	if (err < 0)
 		ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
 #else
-	ret = call_Write(io->handle, io->enc_buf, io->enc_len);
+	ret = call_Write(io->handle, io->send_buf, io->enc_len);
 #endif
 	if (ret != io->enc_len)
 		ERR_EXIT("usb_send failed (%d / %d)\n", ret, io->enc_len);
@@ -1209,7 +1216,7 @@ void erase_partition(spdio_t *io, const char *name) {
 void load_partition(spdio_t *io, const char *name,
 	const char *fn, unsigned step) {
 	uint64_t offset, len, n64;
-	unsigned mode64, n; int ret;
+	unsigned mode64, n, step0 = step; int ret;
 	FILE *fi;
 
 	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
@@ -1257,7 +1264,7 @@ void load_partition(spdio_t *io, const char *name,
 				encode_msg(io, BSL_CMD_MIDST_RAW_START, data, 12);
 				if (send_and_check(io)) {
 					if (offset) break;
-					else { free(rawbuf); step = 0xff00; Da_Info.bSupportRawData = 0; goto fallback_load; }
+					else { free(rawbuf); step = step0; Da_Info.bSupportRawData = 0; goto fallback_load; }
 				}
 			}
 			if (fread(rawbuf, 1, n, fi) != n)
@@ -1686,7 +1693,7 @@ uint64_t str_to_size(const char *str) {
 }
 
 uint64_t str_to_size_ubi(const char *str, int *nand_info) {
-	if (memcmp(str, "ubi", 3)) return str_to_size(str);
+	if (strncmp(str, "ubi", 3)) return str_to_size(str);
 	else {
 		char *end;
 		uint64_t n;
@@ -1714,7 +1721,7 @@ void dump_partitions(spdio_t *io, const char *fn, int *nand_info, unsigned step)
 	partition_t *partitions = malloc(128 * sizeof(partition_t));
 	if (partitions == NULL) return;
 
-	if (!memcmp(fn, "ubi", 3)) ubi = 1;
+	if (!strncmp(fn, "ubi", 3)) ubi = 1;
 	src = (char *)loadfile(fn, &size, 1);
 	if (!src) ERR_EXIT("loadfile failed\n");
 	src[size] = 0;

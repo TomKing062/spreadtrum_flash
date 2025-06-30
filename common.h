@@ -116,7 +116,7 @@ typedef struct {
 } partition_t;
 
 typedef struct {
-	uint8_t *raw_buf, *enc_buf, *recv_buf, *temp_buf;
+	uint8_t *raw_buf, *enc_buf, *recv_buf, *temp_buf, *untranscode_buf, *send_buf;
 #if USE_LIBUSB
 	libusb_device_handle *dev_handle;
 	int endp_in, endp_out;
