@@ -1714,7 +1714,7 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 			else if (selected_ab_bak > 0) selected_ab = selected_ab_bak;
 		}
 	}
-
+	if (selected_ab) DBG_LOG("Flashing to slot %c.\n", 96 + selected_ab);
 	for (int i = 0; i < partition_count; i++) {
 		fn = partitions[i].name;
 		namelen = strlen(fn);
@@ -1927,7 +1927,7 @@ int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned
 	}
 
 	strcpy(name0, name);
-	if (strlen(name0) >= sizeof(name1) - 4) { load_partition(io, name0, fn, step); return 1; }
+	if (strlen(name0) >= sizeof(name0) - 4) { load_partition(io, name0, fn, step); return 1; }
 	snprintf(name1, sizeof(name1), "%s_bak", name0);
 	get_partition_info(io, name1, 1);
 	if (!gPartInfo.size) { load_partition(io, name0, fn, step); return 1; }
