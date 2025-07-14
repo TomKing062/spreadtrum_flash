@@ -122,7 +122,6 @@ extern char fn_partlist[40];
 extern char savepath[ARGV_LEN];
 extern DA_INFO_T Da_Info;
 extern partition_t gPartInfo;
-int bListenLibusb = -1;
 int gpt_failed = 1;
 int m_bOpened = 0;
 int fdl1_loaded = 0;
@@ -140,33 +139,25 @@ int main(int argc, char **argv) {
 	char str1[(ARGC_MAX - 1) * ARGV_LEN];
 	char **str2;
 	char *execfile;
-	int bootmode = -1, at = 0, async = 1;
-#if !USE_LIBUSB
+	int bootmode = -1, at = 0;
 	extern DWORD curPort;
 	DWORD *ports;
-#else
-	extern libusb_device *curPort;
-	libusb_device **ports;
-#endif
 	execfile = malloc(ARGV_LEN);
 	if (!execfile) ERR_EXIT("malloc failed\n");
 
 	io = spdio_init(0);
-#if USE_LIBUSB
-#ifdef __ANDROID__
-	int xfd = -1; // This store termux gived fd
-	//libusb_device_handle *handle; // Use spdio_t.dev_handle
-	//libusb_device* device; //use curPort
-	struct libusb_device_descriptor desc;
-	libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
-#endif
-	ret = libusb_init(NULL);
-	if (ret < 0)
-		ERR_EXIT("libusb_init failed: %s\n", libusb_error_name(ret));
-#else
 	io->handle = createClass();
 	call_Initialize(io->handle);
-#endif
+	QueueInit(&io->raw);
+	QueueInit(&io->encoded);
+	QueueInit(&io->decoded);
+	io->m_hEncodeThread = CreateThread(NULL, 0, EncodeThread, io, 0, NULL);
+	if (io->m_hEncodeThread == NULL) return -1;
+	io->m_hSendRecvThread = CreateThread(NULL, 0, SendRecvThread, io, 0, NULL);
+	if (io->m_hSendRecvThread == NULL) return -1;
+	if (FALSE == CreateRecvThread(io)) {
+		ERR_EXIT("Create Receive Thread Fail.\n");
+	}
 	DBG_LOG("branch:%s, sha1:%s\n", GIT_VER, GIT_SHA1);
 	sprintf(fn_partlist, "partition_%lld.xml", (long long)time(NULL));
 	while (argc > 1) {
@@ -192,13 +183,6 @@ int main(int argc, char **argv) {
 		else if (strstr(argv[1], "help") || strstr(argv[1], "-h") || strstr(argv[1], "-?")) {
 			print_help();
 			return 0;
-#ifdef __ANDROID__
-		}
-		else if (!strcmp(argv[1], "--usb-fd")) { // Termux spec
-			if (argc <= 2) ERR_EXIT("bad option\n");
-			xfd = atoi(argv[argc - 1]);
-			argc -= 2; argv += 1;
-#endif
 		}
 		else if (!strcmp(argv[1], "--kick")) {
 			at = 1;
@@ -209,39 +193,9 @@ int main(int argc, char **argv) {
 			bootmode = strtol(argv[2], NULL, 0); at = 0;
 			argc -= 2; argv += 2;
 		}
-		else if (!strcmp(argv[1], "--sync")) {
-			async = 0;
-			argc -= 1; argv += 1;
-		}
 		else break;
 	}
-#if defined(_MYDEBUG) && defined(USE_LIBUSB)
-	io->verbose = 2;
-#endif
 	if (stage == 99) { bootmode = -1; at = 0; }
-#ifdef __ANDROID__
-	bListenLibusb = 0;
-	DBG_LOG("Try to convert termux transfered usb port fd.\n");
-	// handle
-	if (xfd < 0)
-		ERR_EXIT("Example: termux-usb -e \"./spd_dump --usb-fd\" /dev/bus/usb/xxx/xxx\n"
-			"run on android need provide --usb-fd\n");
-
-	if (libusb_wrap_sys_device(NULL, (intptr_t)xfd, &io->dev_handle))
-		ERR_EXIT("libusb_wrap_sys_device exit unconditionally!\n");
-
-	curPort = libusb_get_device(io->dev_handle);
-	if (libusb_get_device_descriptor(curPort, &desc))
-		ERR_EXIT("libusb_get_device exit unconditionally!");
-
-	DBG_LOG("Vendor ID: %04x\nProduct ID: %04x\n", desc.idVendor, desc.idProduct);
-	if (desc.idVendor != 0x1782 || desc.idProduct != 0x4d00) {
-		ERR_EXIT("It seems spec device not a spd device!\n");
-	}
-	call_Initialize_libusb(io);
-#else
-#if !USE_LIBUSB
-	bListenLibusb = 0;
 	if (at || bootmode >= 0) {
 		io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
 		if (io->hThread == NULL) return -1;
@@ -249,58 +203,11 @@ int main(int argc, char **argv) {
 		wait = 30 * REOPEN_FREQ;
 		stage = -1;
 	}
-#else
-	if (!libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) { DBG_LOG("hotplug unsupported on this platform\n"); bListenLibusb = 0; bootmode = -1; at = 0; }
-	if (at || bootmode >= 0) {
-		startUsbEventHandle();
-		ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode, at);
-		wait = 30 * REOPEN_FREQ;
-		stage = -1;
-	}
-	if (bListenLibusb < 0) startUsbEventHandle();
-#endif
-#if _WIN32
-	if (!bListenLibusb) {
-		if (io->hThread == NULL) io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
-		if (io->hThread == NULL) return -1;
-	}
-#if !USE_LIBUSB
-	if (!m_bOpened && async) {
-		if (FALSE == CreateRecvThread(io)) {
-			io->m_dwRecvThreadID = 0;
-			DBG_LOG("Create Receive Thread Fail.\n");
-		}
-	}
-#endif
-#endif
+	if (io->hThread == NULL) io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
+	if (io->hThread == NULL) return -1;
 	if (!m_bOpened) {
 		DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
 		for (i = 0; ; i++) {
-#if USE_LIBUSB
-			if (bListenLibusb) {
-				if (curPort) {
-					if (libusb_open(curPort, &io->dev_handle) >= 0) call_Initialize_libusb(io);
-					else ERR_EXIT("Connection failed\n");
-					break;
-				}
-			}
-			if (!(i % 4)) {
-				if ((ports = FindPort(0x4d00))) {
-					for (libusb_device **port = ports; *port != NULL; port++) {
-						if (libusb_open(*port, &io->dev_handle) >= 0) {
-							call_Initialize_libusb(io);
-							curPort = *port;
-							break;
-						}
-					}
-					libusb_free_device_list(ports, 1);
-					ports = NULL;
-					if (m_bOpened) break;
-				}
-			}
-			if (i >= wait)
-				ERR_EXIT("libusb_open_device failed\n");
-#else
 			if (io->verbose) DBG_LOG("CurTime: %.1f, CurPort: %d\n", (float)i / REOPEN_FREQ, curPort);
 			if (curPort) {
 				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
@@ -321,35 +228,23 @@ int main(int argc, char **argv) {
 			}
 			if (i >= wait)
 				ERR_EXIT("find port failed\n");
-#endif
 			usleep(1000000 / REOPEN_FREQ);
 		}
 	}
-#endif
 	io->flags |= FLAGS_TRANSCODE;
-	if (stage != -1) {
-		io->flags &= ~FLAGS_CRC16;
-		encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
-	}
-	else encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
 	for (i = 0; ; i++) {
-		if (io->recv_buf[2] == BSL_REP_VER) {
-			ret = BSL_REP_VER;
-			memcpy(io->raw_buf + 4, io->recv_buf + 5, 5);
-			io->raw_buf[2] = 0;
-			io->raw_buf[3] = 5;
-			io->recv_buf[2] = 0;
-		}
-		else if (io->recv_buf[2] == BSL_REP_VERIFY_ERROR ||
-			io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
-			if (!fdl1_loaded) {
-				ret = io->recv_buf[2];
-				io->recv_buf[2] = 0;
-			}
-			else ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
+		ret = recv_type(io);
+		if (ret == BSL_REP_VER) {}
+		else if (ret == BSL_REP_VERIFY_ERROR||
+			ret == BSL_REP_UNSUPPORTED_COMMAND) {
+			if (fdl1_loaded) ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n"); // when fdl1/fdl2 recv kick_msg, device won't reply next packet.
 		}
 		else {
-			send_msg(io);
+			if (stage != -1) {
+				io->flags &= ~FLAGS_CRC16;
+				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
+			}
+			else encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
 			recv_msg(io);
 			ret = recv_type(io);
 		}
@@ -603,9 +498,8 @@ int main(int argc, char **argv) {
 				/* FDL1 (chk = sum) */
 				io->flags &= ~FLAGS_CRC16;
 
-				encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
 				for (i = 0; ; i++) {
-					send_msg(io);
+					encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
 					recv_msg(io);
 					if (recv_type(io) == BSL_REP_VER) break;
 					DBG_LOG("CHECK_BAUD FAIL\n");
@@ -618,38 +512,9 @@ int main(int argc, char **argv) {
 				print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
 				if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) fdl2_executed = -1;
 
-#if FDL1_DUMP_MEM
-				//read dump mem
-				int pagecount = 0;
-				char *pdump;
-				char chdump;
-				FILE *fdump;
-				fdump = my_fopen("memdump.bin", "wb");
-				encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
-				while (1) {
-					send_msg(io);
-					ret = recv_msg(io);
-					if (!ret) ERR_EXIT("timeout reached\n");
-					if (recv_type(io) == BSL_CMD_READ_END) break;
-					pdump = (char *)(io->raw_buf + 4);
-					for (i = 0; i < 512; i++) {
-						chdump = *(pdump++);
-						if (chdump == 0x7d) {
-							if (*pdump == 0x5d || *pdump == 0x5e) chdump = *(pdump++) + 0x20;
-						}
-						fputc(chdump, fdump);
-					}
-					DBG_LOG("dump page count %d\n", ++pagecount);
-				}
-				fclose(fdump);
-				DBG_LOG("dump mem end\n");
-				//end
-#endif
-
 				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
 				if (send_and_check(io)) exit(1);
 				DBG_LOG("CMD_CONNECT FDL1\n");
-#if !USE_LIBUSB
 				if (baudrate) {
 					uint8_t data[4];
 					WRITE32_BE(data, baudrate);
@@ -659,7 +524,6 @@ int main(int argc, char **argv) {
 						call_SetProperty(io->handle, 0, 100, (LPCVOID)&baudrate);
 					}
 				}
-#endif
 				if (keep_charge) {
 					encode_msg(io, BSL_CMD_KEEP_CHARGE, NULL, 0);
 					if (!send_and_check(io)) DBG_LOG("KEEP_CHARGE FDL1\n");
@@ -677,12 +541,11 @@ int main(int argc, char **argv) {
 			}
 			else if (fdl1_loaded > 0) {
 				memset(&Da_Info, 0, sizeof(Da_Info));
+				io->pack_timeout = 15000;
 				encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
-				send_msg(io);
 				// Feature phones respond immediately,
 				// but it may take a second for a smartphone to respond.
-				ret = recv_msg_timeout(io, 15000);
-				if (!ret) ERR_EXIT("timeout reached\n");
+				recv_msg(io);
 				ret = recv_type(io);
 				// Is it always bullshit?
 				if (ret == BSL_REP_INCOMPATIBLE_PARTITION)
@@ -691,7 +554,6 @@ int main(int argc, char **argv) {
 					ERR_EXIT("unexpected response (0x%04x)\n", ret);
 				DBG_LOG("EXEC FDL2\n");
 				encode_msg(io, BSL_CMD_READ_FLASH_INFO, NULL, 0);
-				send_msg(io);
 				ret = recv_msg(io);
 				if (ret) {
 					ret = recv_type(io);
@@ -746,7 +608,6 @@ int main(int argc, char **argv) {
 				fdl2_executed = 1;
 			}
 			argc -= 1; argv += 1;
-#if !USE_LIBUSB
 		}
 		else if (!strcmp(str2[1], "baudrate")) {
 			if (argcount > 2) {
@@ -755,7 +616,6 @@ int main(int argc, char **argv) {
 			}
 			DBG_LOG("baudrate is %u\n", baudrate);
 			argc -= 2; argv += 2;
-#endif
 		}
 		else if (!strcmp(str2[1], "path")) {
 			if (argcount > 2) strcpy(savepath, str2[2]);
@@ -1146,7 +1006,8 @@ rloop:
 			blk_size = blk_size < 0 ? 0 :
 				blk_size > 0xf800 ? 0xf800 : ((blk_size + 0x7FF) & ~0x7FF);
 #else
-			blk_size = blk_size < 0 ? 0 : blk_size;
+			blk_size = blk_size < 0 ? 0 :
+				blk_size > 0xffff ? 0xffff : blk_size; // bigger than 0xffff is blocked since we only malloc oxffff for packet->data, for testing overflow CVE, use other branch.
 #endif
 			argc -= 2; argv += 2;
 
@@ -1211,9 +1072,7 @@ rloop:
 		}
 		else if (!strcmp(str2[1], "chip_uid")) {
 			encode_msg(io, BSL_CMD_READ_CHIP_UID, NULL, 0);
-			send_msg(io);
-			ret = recv_msg(io);
-			if (!ret) ERR_EXIT("timeout reached\n");
+			recv_msg(io);
 			if ((ret = recv_type(io)) != BSL_REP_READ_CHIP_UID) {
 				DBG_LOG("unexpected response (0x%04x)\n", ret); argc -= 1; argv += 1; continue;
 			}

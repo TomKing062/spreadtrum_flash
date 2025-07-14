@@ -1,8 +1,4 @@
 #pragma once
-#ifndef _MSC_VER
-#define _GNU_SOURCE 1
-#define _FILE_OFFSET_BITS 64
-#endif
 #define ARGC_MAX 8
 #define ARGV_LEN 384
 
@@ -14,58 +10,27 @@
 #include <math.h>
 #include <time.h>
 
-#ifndef LIBUSB_DETACH
-/* detach the device from crappy kernel drivers */
-#define LIBUSB_DETACH 1
-#endif
-
-#if _WIN32
 #include <Windows.h>
 #include <Dbt.h>
 #include <tchar.h>
-#define WM_RCV_CHANNEL_DATA WM_USER + 1
-
-DWORD WINAPI ThrdFunc(LPVOID lpParam);
-#if UNICODE
-#define my_strstr wcsstr
-#define my_strtoul wcstoul
-#else
-#define my_strstr strstr
-#define my_strtoul strtoul
-#endif
-#else
-#include <dirent.h>
-#endif
-
-#if USE_LIBUSB
-#include <libusb-1.0/libusb.h>
-#ifndef _MSC_VER
-#include <pthread.h>
-#include <unistd.h>
-#endif
-#else
 #include <setupapi.h>
 #include "Wrapper.h"
-#endif
+#define WM_RCV_CHANNEL_DATA WM_USER + 1
 
-#ifdef _MSC_VER
+
 void usleep(unsigned int us);
 #define fseeko _fseeki64
 #define ftello _ftelli64
-#endif
+#define my_strstr wcsstr
+#define my_strtoul wcstoul
 
 #include "spd_cmd.h"
 
 #define FLAGS_CRC16 1
 #define FLAGS_TRANSCODE 2
 
-#if _WIN32
 #define ERR_EXIT(...) \
 	do { fprintf(stderr, __VA_ARGS__); if (m_bOpened == 1) system("pause"); exit(1); } while (0)
-#else
-#define ERR_EXIT(...) \
-	do { fprintf(stderr, __VA_ARGS__); exit(1); } while (0)
-#endif
 
 #define DBG_LOG(...) fprintf(stderr, __VA_ARGS__)
 
@@ -115,27 +80,45 @@ typedef struct {
 	long long size;
 } partition_t;
 
+typedef struct Packet {
+	int msg_type;
+	int length;
+	uint8_t *data;
+	int is_decoded; // for kick
+	int allow_empty_reply; // always set when manually packing !
+	int timeout; // always set when manually packing !
+	struct Packet *next;
+} Packet;
+
 typedef struct {
-	uint8_t *raw_buf, *enc_buf, *recv_buf, *temp_buf;
-#if USE_LIBUSB
-	libusb_device_handle *dev_handle;
-	int endp_in, endp_out;
-	int m_dwRecvThreadID;
-#else
+	Packet *phead;
+	Packet *ptail;
+	int closed;
+	CRITICAL_SECTION lock;
+	CONDITION_VARIABLE not_empty;
+} Queue;
+
+typedef struct {
 	ClassHandle *handle;
 	HANDLE m_hOprEvent;
 	DWORD m_dwRecvThreadID;
 	HANDLE m_hRecvThreadState;
 	HANDLE m_hRecvThread;
-#endif
-#if _WIN32
 	DWORD iThread;
 	HANDLE hThread;
-#endif
-	int flags, recv_len, recv_pos;
-	int raw_len, enc_len, verbose, timeout;
+	HANDLE m_hEncodeThread;
+	HANDLE m_hSendRecvThread;
+	int flags;
+	int verbose, timeout, pack_timeout;
 	partition_t *ptable;
 	int part_count;
+	Queue raw, encoded, decoded;
+	Packet *cur_encoded_packet;
+	Packet *last_encoded_packet;
+	Packet *cur_decoded_packet;
+	Packet *last_decoded_packet;
+	int not_exit_w;
+	uint8_t *raw_buf,*temp_buf;
 } spdio_t;
 
 #pragma pack(1)
@@ -198,18 +181,9 @@ typedef struct {
 } bootloader_control;
 #pragma pack()
 
-#if USE_LIBUSB
-libusb_device **FindPort(int pid);
-void startUsbEventHandle(void);
-void stopUsbEventHandle(void);
-void find_endpoints(libusb_device_handle *dev_handle, int result[2]);
-void call_Initialize_libusb(spdio_t *io);
-#else
 DWORD *FindPort(const char *USB_DL);
 BOOL CreateRecvThread(spdio_t *io);
 void DestroyRecvThread(spdio_t *io);
-#endif
-
 void print_string(FILE *f, const void *src, size_t n);
 void ChangeMode(spdio_t *io, int ms, int bootmode, int at);
 
@@ -217,9 +191,7 @@ spdio_t *spdio_init(int flags);
 void spdio_free(spdio_t *io);
 
 void encode_msg(spdio_t *io, int type, const void *data, size_t len);
-int send_msg(spdio_t *io);
 int recv_msg(spdio_t *io);
-int recv_msg_timeout(spdio_t *io, int timeout);
 unsigned recv_type(spdio_t *io);
 int send_and_check(spdio_t *io);
 int check_confirm(const char *name);
@@ -250,3 +222,13 @@ void dm_disable(spdio_t *io, unsigned step);
 void dm_enable(spdio_t *io, unsigned step);
 void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t *mem, size_t length, unsigned step);
 void set_active(spdio_t *io, char *arg);
+
+DWORD WINAPI ThrdFunc(LPVOID lpParam);
+DWORD WINAPI EncodeThread(LPVOID lpParam);
+DWORD WINAPI SendRecvThread(LPVOID lpParam);
+
+void QueueInit(Queue *pq);
+void QueueDestroy(Queue *pq);
+void QueuePush(Queue *pq, Packet *in);
+Packet *QueuePop(Queue *pq);
+void QueueClose(Queue *pq);

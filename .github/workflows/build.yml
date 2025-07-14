@@ -3,9 +3,6 @@ name: Build SPD Dump
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - stable
   pull_request:
     branches:
       - main
@@ -15,7 +12,7 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        arch: [x64, x86]
+        arch: [x86]
         config: [Release, CustDebug]
     steps:
       - name: Checkout Repository
@@ -41,57 +38,3 @@ jobs:
         with:
           name: spd_dump_${{ matrix.arch }}_${{ matrix.config }}
           path: ./build/${{ matrix.arch }}/${{ matrix.config }}/
-
-  release:
-    if: github.ref == 'refs/heads/stable'
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Set Release Timestamp
-        run: echo "RELEASE_TAG=stable_$(TZ='Asia/Shanghai' date +'%Y%m%d_%H%M')" >> $GITHUB_ENV
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          path: stable
-
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: output
-          pattern: spd_dump_*_Release
-
-      - name: Download Debug Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: outputD
-          pattern: spd_dump_*_CustDebug
-
-      - name: Misc
-        run: |
-          cp stable/*.md output/
-          cd output
-          mv spd_dump_x86_Release spd_dump_SPRD_Release
-          mv spd_dump_x64_Release spd_dump_LibUSB_Release
-          zip -r -v ../spd_dump_${{ env.RELEASE_TAG }}.zip .
-          cd ../outputD
-          mv spd_dump_x86_CustDebug spd_dump_SPRD_CustDebug
-          mv spd_dump_x64_CustDebug spd_dump_LibUSB_CustDebug
-          zip -r -v ../spd_dump_${{ env.RELEASE_TAG }}_Debug.zip .
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          target_commitish: ${{ github.sha }}
-          name: ${{ env.RELEASE_TAG }}
-          draft: false
-          prerelease: false
-          body: |
-            x86 ver work with SPRD driver, x64 ver work with libusb driver
-            if you need dev version: https://nightly.link/TomKing062/spreadtrum_flash/workflows/build/main
-          files: |
-            spd_dump_${{ env.RELEASE_TAG }}.zip
-            spd_dump_${{ env.RELEASE_TAG }}_Debug.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

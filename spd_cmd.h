@@ -1,7 +1,6 @@
 
 #define HDLC_HEADER 0x7e
 #define HDLC_ESCAPE 0x7d
-#define FDL1_DUMP_MEM 0
 #define DEFAULT_NAND_ID 0x15
 #define DEFAULT_BLK_SIZE 0x1000
 
