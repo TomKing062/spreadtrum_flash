@@ -87,6 +87,7 @@ typedef struct Packet {
 	int is_decoded; // for kick
 	int allow_empty_reply; // always set when manually packing !
 	int timeout; // always set when manually packing !
+	unsigned rw_pack_len; //for dump_part/load_part
 	struct Packet *next;
 } Packet;
 
@@ -119,6 +120,14 @@ typedef struct {
 	Packet *last_decoded_packet;
 	int not_exit_w;
 	uint8_t *raw_buf,*temp_buf;
+	//below for dump_part/load_part
+	HANDLE rw_hCountEvent;
+	int rw_stop, rw_error, rw_count;
+	uint64_t rw_start;
+	uint64_t rw_len;
+	uint64_t rw_done;
+	FILE *rw_fptr;
+	unsigned rw_step;
 } spdio_t;
 
 #pragma pack(1)

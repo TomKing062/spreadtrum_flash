@@ -220,6 +220,7 @@ void encode_msg(spdio_t *io, int type, const void *data, size_t len) {
 	else {
 		uint8_t *p = malloc(len + 8);
 		if (!p) ERR_EXIT("malloc pack->data in encode_msg failed\n");
+		in->rw_pack_len = len;
 		in->data = p + 1;
 		WRITE16_BE(p + 1, type);
 		WRITE16_BE(p + 3, len);
@@ -253,11 +254,12 @@ void encode_msg_bg(spdio_t *io, Packet *in) {
 		io->cur_encoded_packet->data = malloc(in->length * 2 + 2);
 		if (!io->cur_encoded_packet->data) ERR_EXIT("malloc cur_encoded_packet->data failed\n");
 		io->cur_encoded_packet->msg_type = in->msg_type;
-		io->cur_encoded_packet->allow_empty_reply = in->allow_empty_reply;
 		io->cur_encoded_packet->length = spd_transcode(io->cur_encoded_packet->data + 1, in->data, in->length);
 		*io->cur_encoded_packet->data = HDLC_HEADER;
 		io->cur_encoded_packet->data[io->cur_encoded_packet->length + 1] = HDLC_HEADER;
 		io->cur_encoded_packet->length += 2;
+		io->cur_encoded_packet->allow_empty_reply = in->allow_empty_reply;
+		io->cur_encoded_packet->rw_pack_len = in->rw_pack_len;
 		free(in->data - 1);
 		free(in);
 	}
@@ -359,7 +361,6 @@ int recv_transcode(spdio_t *io, const uint8_t *buf, int buf_len) {
 					break;
 				}
 				head_found = 1;
-				io->cur_decoded_packet->is_decoded = 0;
 				continue;
 			}
 			if (nread == plen) {
@@ -696,7 +697,130 @@ void print_progress_bar(uint64_t done, uint64_t total, unsigned long long time0)
 }
 
 extern uint64_t fblk_size;
+#define MAX_ENCODED_COUNT 10
+DWORD WINAPI dump_part_send(LPVOID lpParam) {
+	spdio_t *io = (spdio_t *)lpParam;
+	uint64_t offset, saved_size = 0;
+	uint32_t n, t32;
+	uint32_t data[3];
+
+	for (offset = io->rw_start; offset < io->rw_start + io->rw_len && !io->rw_stop; offset += n) {
+		uint64_t n64 = io->rw_start + io->rw_len - offset;
+		n = (uint32_t)(n64 > io->rw_step ? io->rw_step : n64);
+		if (io->rw_count == MAX_ENCODED_COUNT) WaitForSingleObject(io->rw_hCountEvent, INFINITE);
+		if (io->rw_stop) break;
+		if (fblk_size) {
+			saved_size += n;
+			if (saved_size >= fblk_size) { usleep(1000000); saved_size = 0; }
+		}
+
+		WRITE32_LE(data, n);
+		WRITE32_LE(data + 1, offset);
+		t32 = offset >> 32;
+		WRITE32_LE(data + 2, t32);
+
+		encode_msg(io, BSL_CMD_READ_MIDST, data, ((io->rw_start + io->rw_len) >> 32) ? 12 : 8);
+		io->rw_count++;
+	}
+	return 0;
+}
+
+DWORD WINAPI dump_part_recv(LPVOID lpParam) {
+	spdio_t *io = (spdio_t *)lpParam;
+	FILE *fo = io->rw_fptr;
+	uint16_t ret, nread;
+
+	while (!io->rw_stop) {
+		if (io->rw_stop) break;
+
+		recv_msg(io);
+		if ((ret = recv_type(io)) != BSL_REP_READ_FLASH) {
+			DBG_LOG("unexpected response (0x%04x)\n", ret);
+			io->rw_error = 1;
+			break;
+		}
+
+		nread = READ16_BE(io->raw_buf + 2);
+		if (fwrite(io->raw_buf + 4, 1, nread, fo) != nread)
+			ERR_EXIT("fwrite(dump) failed\n");
+		io->rw_done += nread;
+		if (io->rw_done == io->rw_len) break;
+		io->rw_count--;
+		if (io->rw_count == MAX_ENCODED_COUNT - 1) SetEvent(io->rw_hCountEvent);
+
+	}
+	return 0;
+}
+
 uint64_t dump_partition(spdio_t *io,
+	const char *name, uint64_t start, uint64_t len,
+	const char *fn, unsigned step) {
+	int mode64 = (start + len) >> 32;
+	char name_tmp[36];
+
+	if (!strcmp(name, "super")) dump_partition(io, "metadata", 0, check_partition(io, "metadata", 1), "metadata.bin", step);
+	else if (!strncmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
+	else if (strstr(name, "nv1")) {
+		strcpy(name_tmp, name);
+		char *dot = strrchr(name_tmp, '1');
+		if (dot != NULL) *dot = '2';
+		name = name_tmp;
+		start = 512;
+		if (len > 512)
+			len -= 512;
+	}
+
+	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
+	if (send_and_check(io)) {
+		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		send_and_check(io);
+		return 0;
+	}
+
+	FILE *fo = my_fopen(fn, "wb");
+	if (!fo) ERR_EXIT("fopen(dump) failed\n");
+
+	io->rw_hCountEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+	if (!io->rw_hCountEvent) ERR_EXIT("CreateEvent failed\n");
+	io->rw_stop = 0;
+	io->rw_error = 0;
+	io->rw_count = 0;
+	io->rw_start = start;
+	io->rw_len = len;
+	io->rw_done = 0;
+	io->rw_fptr = fo;
+	io->rw_step = step;
+
+	unsigned long long time_start = GetTickCount64();
+	HANDLE hSend = (HANDLE)CreateThread(NULL, 0, dump_part_send, io, 0, NULL);
+	HANDLE hRecv = (HANDLE)CreateThread(NULL, 0, dump_part_recv, io, 0, NULL);
+	if (!hSend || !hRecv) {
+		CloseHandle(io->rw_hCountEvent);
+		ERR_EXIT("CreateThread failed\n");
+	}
+	while (1) {
+		print_progress_bar(io->rw_done, len, time_start);
+		if (io->rw_done == len || io->rw_error) break;
+		Sleep(100);
+	}
+	io->rw_stop = 1;
+	SetEvent(io->rw_hCountEvent);
+	WaitForSingleObject(hSend, INFINITE);
+	WaitForSingleObject(hRecv, INFINITE);
+	CloseHandle(hSend);
+	CloseHandle(hRecv);
+	CloseHandle(io->rw_hCountEvent);
+	DBG_LOG("\nRead Part Done: %s+0x%llx, target: 0x%llx, read: 0x%llx\n",
+		name, (long long)start, (long long)len,
+		(long long)io->rw_done);
+	fclose(fo);
+
+	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	send_and_check(io);
+	return io->rw_done;
+}
+
+uint64_t dump_partition_orig(spdio_t *io,
 	const char *name, uint64_t start, uint64_t len,
 	const char *fn, unsigned step) {
 	uint32_t n, nread, t32; uint64_t offset, n64, saved_size = 0;
@@ -762,7 +886,7 @@ uint64_t dump_partition(spdio_t *io,
 
 	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
 	send_and_check(io);
-	return offset;
+	return offset - start;
 }
 
 uint64_t read_pactime(spdio_t *io) {
@@ -1082,7 +1206,154 @@ void erase_partition(spdio_t *io, const char *name) {
 	io->timeout = timeout0;
 }
 
+DWORD WINAPI load_part_send(LPVOID lpParam) {
+	spdio_t *io = (spdio_t *)lpParam;
+	FILE *fi = io->rw_fptr;
+	uint64_t offset;
+	unsigned n, step = io->rw_step;
+
+	uint8_t header[4], is_simg = 0;
+	fseek(fi, 0, SEEK_SET);
+	if (fread(header, 1, 4, fi) != 4)
+		ERR_EXIT("fread(load) failed\n");
+	if (0xED26FF3A == *(uint32_t *)header) is_simg = 1;
+	fseek(fi, 0, SEEK_SET);
+	
+	if (Da_Info.bSupportRawData) {
+		if (Da_Info.bSupportRawData > 1) {
+			encode_msg(io, BSL_CMD_MIDST_RAW_START2, NULL, 0);
+			if (send_and_check(io)) { Da_Info.bSupportRawData = 0; goto fallback_load; }
+		}
+		step = Da_Info.dwFlushSize << 10;
+
+		for (offset = 0; offset < io->rw_len && !io->rw_stop; offset += n) {
+			uint64_t n64 = io->rw_len - offset;
+			if (io->rw_count == MAX_ENCODED_COUNT) WaitForSingleObject(io->rw_hCountEvent, INFINITE);
+			if (io->rw_stop) break;
+			Packet *rawdatapack = (Packet *)malloc(sizeof(Packet));
+			if (!rawdatapack) ERR_EXIT("malloc pack in encode_msg failed\n");
+			n = (unsigned)(n64 > step ? step : n64);
+			uint8_t *rawbuf = (uint8_t *)malloc(n + 1);
+			if (!rawbuf) ERR_EXIT("malloc failed\n");
+			if (Da_Info.bSupportRawData == 1) {
+				uint32_t data[3];
+				uint32_t t32 = offset >> 32;
+				WRITE32_LE(data, offset);
+				WRITE32_LE(data + 1, t32);
+				WRITE32_LE(data + 2, n);
+				encode_msg(io, BSL_CMD_MIDST_RAW_START, data, 12);
+				if (send_and_check(io)) {
+					if (offset) break;
+					else { free(rawbuf); free(rawdatapack); step = io->rw_step; Da_Info.bSupportRawData = 0; goto fallback_load; }
+				}
+			}
+			if (fread(rawbuf, 1, n, fi) != n)
+				ERR_EXIT("fread(load) failed\n");
+			rawdatapack->msg_type = 0;
+			rawdatapack->length = n;
+			rawdatapack->data = rawbuf;
+			rawdatapack->allow_empty_reply = 0;
+			if (is_simg) rawdatapack->timeout = 100000;
+			else rawdatapack->timeout = 15000;
+			rawdatapack->rw_pack_len = n;
+			QueuePush(&io->encoded, rawdatapack);
+			io->rw_count++;
+		}
+	}
+	else {
+fallback_load:
+		for (offset = 0; offset < io->rw_len && !io->rw_stop; offset += n) {
+			uint64_t n64 = io->rw_len - offset;
+			if (io->rw_count == MAX_ENCODED_COUNT) WaitForSingleObject(io->rw_hCountEvent, INFINITE);
+			if (io->rw_stop) break;
+			n = (unsigned)(n64 > step ? step : n64);
+			if (fread(io->temp_buf, 1, n, fi) != n)
+				ERR_EXIT("fread(load) failed\n");
+			if (is_simg) io->pack_timeout = 100000;
+			else io->pack_timeout = 15000;
+			encode_msg(io, BSL_CMD_MIDST_DATA, io->temp_buf, n);
+			io->rw_count++;
+		}
+	}
+	return 0;
+}
+
+DWORD WINAPI load_part_recv(LPVOID lpParam) {
+	spdio_t *io = (spdio_t *)lpParam;
+
+	while (!io->rw_stop) {
+		if (io->rw_stop) break;
+
+		if (send_and_check(io)) {
+			DBG_LOG("unexpected response (0x%04x)\n", recv_type(io));
+			io->rw_error = 1;
+			break;
+		}
+		io->rw_done += io->last_decoded_packet->rw_pack_len;
+		if (io->rw_done == io->rw_len) break;
+		io->rw_count--;
+		if (io->rw_count == MAX_ENCODED_COUNT - 1) SetEvent(io->rw_hCountEvent);
+	}
+	return 0;
+}
+
 void load_partition(spdio_t *io, const char *name,
+	const char *fn, unsigned step) {
+	uint64_t len;
+	unsigned mode64, step0 = step;
+	FILE *fi;
+
+	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
+	if (!strcmp(name, "calinv")) { return; } //skip calinv
+
+	fi = fopen(fn, "rb");
+	if (!fi) ERR_EXIT("fopen(load) failed\n");
+
+	fseeko(fi, 0, SEEK_END);
+	len = ftello(fi);
+	DBG_LOG("file size : 0x%llx\n", (long long)len);
+
+	mode64 = len >> 32;
+	select_partition(io, name, len, mode64, BSL_CMD_START_DATA);
+	if (send_and_check(io)) { fclose(fi); return; }
+
+	io->rw_hCountEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+	if (!io->rw_hCountEvent) ERR_EXIT("CreateEvent failed\n");
+	io->rw_stop = 0;
+	io->rw_error = 0;
+	io->rw_count = 0;
+	io->rw_len = len;
+	io->rw_done = 0;
+	io->rw_fptr = fi;
+	io->rw_step = step;
+
+	unsigned long long time_start = GetTickCount64();
+	HANDLE hSend = (HANDLE)CreateThread(NULL, 0, load_part_send, io, 0, NULL);
+	HANDLE hRecv = (HANDLE)CreateThread(NULL, 0, load_part_recv, io, 0, NULL);
+	if (!hSend || !hRecv) {
+		CloseHandle(io->rw_hCountEvent);
+		ERR_EXIT("CreateThread failed\n");
+	}
+	while(1) {
+		print_progress_bar(io->rw_done, len, time_start);
+		if (io->rw_done == len || io->rw_error) break;
+		Sleep(100);
+	}
+	io->rw_stop = 1;
+	SetEvent(io->rw_hCountEvent);
+	WaitForSingleObject(hSend, INFINITE);
+	WaitForSingleObject(hRecv, INFINITE);
+	CloseHandle(hSend);
+	CloseHandle(hRecv);
+	CloseHandle(io->rw_hCountEvent);
+
+	fclose(fi);
+	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
+	if (!send_and_check(io)) DBG_LOG("\nWrite Part Done: %s, target: 0x%llx, written: 0x%llx\n",
+		name, (long long)len, (long long)io->rw_done);
+}
+
+void load_partition_orig(spdio_t *io, const char *name,
 	const char *fn, unsigned step) {
 	uint64_t offset, len, n64;
 	unsigned mode64, n, step0 = step;
@@ -1119,10 +1390,6 @@ void load_partition(spdio_t *io, const char *name,
 			Packet *rawdatapack = (Packet *)malloc(sizeof(Packet));
 			if (!rawdatapack) ERR_EXIT("malloc pack in encode_msg failed\n");
 			n = (unsigned)(n64 > step ? step : n64);
-			if (m_bOpened == -1) {
-				spdio_free(io);
-				ERR_EXIT("device removed, exiting...\n");
-			}
 			uint8_t *rawbuf = (uint8_t *)malloc(n + 1);
 			if (!rawbuf) ERR_EXIT("malloc failed\n");
 			if (Da_Info.bSupportRawData == 1) {
@@ -1436,7 +1703,7 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 			}
 		}
 	}
-	if (end == 10) Da_Info.dwStorageType = 101;
+	if (end == 10) Da_Info.dwStorageType = 0x101;
 	DBG_LOG("partition_size_pc: %s, 0x%llx\n", name, offset);
 	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
 	send_and_check(io);
@@ -2236,7 +2503,9 @@ DWORD WINAPI SendRecvThread(LPVOID lpParam) {
 			if (io->cur_decoded_packet->data) {
 				io->cur_decoded_packet->msg_type = 0;
 				io->cur_decoded_packet->length = 0;
+				io->cur_decoded_packet->is_decoded = 0;
 				io->cur_decoded_packet->allow_empty_reply = io->last_encoded_packet->allow_empty_reply;
+				io->cur_decoded_packet->rw_pack_len = io->last_encoded_packet->rw_pack_len;
 			}
 		}
 		send_msg_bg(io);
