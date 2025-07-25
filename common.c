@@ -932,7 +932,7 @@ uint64_t dump_partition(spdio_t *io,
 
 	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
-	return offset;
+	return offset - start;
 }
 
 uint64_t read_pactime(spdio_t *io) {
@@ -1294,10 +1294,6 @@ void load_partition(spdio_t *io, const char *name,
 
 		for (offset = 0; (n64 = len - offset); offset += n) {
 			n = (unsigned)(n64 > step ? step : n64);
-			if (m_bOpened == -1) {
-				spdio_free(io);
-				ERR_EXIT("device removed, exiting...\n");
-			}
 			if (Da_Info.bSupportRawData == 1) {
 				uint32_t *data = (uint32_t *)io->temp_buf;
 				uint32_t t32 = offset >> 32;
@@ -1653,7 +1649,7 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 			}
 		}
 	}
-	if (end == 10) Da_Info.dwStorageType = 101;
+	if (end == 10) Da_Info.dwStorageType = 0x101;
 	DBG_LOG("partition_size_pc: %s, 0x%llx\n", name, offset);
 	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
@@ -1702,8 +1698,11 @@ void get_partition_info(spdio_t *io, const char *name, int need_size) {
 				break;
 			}
 		}
-		strcpy(gPartInfo.name, name);
-		gPartInfo.size = (*(io->ptable + i)).size;
+		if (i < io->part_count) {
+			strcpy(gPartInfo.name, name);
+			gPartInfo.size = (*(io->ptable + i)).size;
+		}
+		else gPartInfo.size = 0;
 		io->verbose = verbose;
 		return;
 	}
@@ -2179,10 +2178,8 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned step) {
 	char name0[36], name1[40];
 	unsigned size0, size1;
-	int isVBMETA = 0;
 	if (strstr(name, "fixnv1")) { load_nv_partition(io, name, fn, 4096); return 1; }
-	if (!strcmp(name, "vbmeta")) isVBMETA = 1;
-	else if (selected_ab > 0 ||
+	if (selected_ab > 0 ||
 		Da_Info.dwStorageType == 0x101 ||
 		io->part_count == 0 ||
 		strncmp(name, "splloader", 9) == 0) {
@@ -2204,7 +2201,7 @@ int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned
 			break;
 		}
 	if (size0 == size1) {
-		if (isVBMETA) {
+		if (!strcmp(name0, "vbmeta")) {
 			char ch = '\0';
 			FILE *fi = fopen(fn, "rb+");
 			if (!fi) { DBG_LOG("fopen %s failed\n", fn); return 1; }
