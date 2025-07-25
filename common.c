@@ -215,15 +215,16 @@ partition_t gPartInfo;
 spdio_t *spdio_init(int flags) {
 	uint8_t *p; spdio_t *io;
 
-	p = (uint8_t *)malloc(sizeof(spdio_t) + RECV_BUF_LEN + (4 + 0x10000 + 2) * 3 + 2);
+	p = (uint8_t *)malloc(sizeof(spdio_t) + RECV_BUF_LEN + (4 + 0x10000 + 2) * 4 + 4);
 	io = (spdio_t *)p;
 	if (!p) ERR_EXIT("malloc failed\n");
 	memset(io, 0, sizeof(spdio_t));
 	p += sizeof(spdio_t);
 	io->flags = flags;
 	io->recv_buf = p; p += RECV_BUF_LEN;
-	io->temp_buf = p + 4;
 	io->raw_buf = p; p += 4 + 0x10000 + 2;
+	io->temp_buf = p + 5;
+	io->untranscode_buf = p; p += 4 + 0x10000 + 4;
 	io->enc_buf = p;
 	io->timeout = 1000;
 	memset(io->recv_buf, 0, 8);
@@ -317,14 +318,15 @@ void encode_msg(spdio_t *io, int type, const void *data, size_t len) {
 	if (len > 0xffff)
 		ERR_EXIT("message too long\n");
 
+	io->send_buf = io->enc_buf;
 	if (type == BSL_CMD_CHECK_BAUD) {
 		memset(io->enc_buf, HDLC_HEADER, len);
 		io->enc_len = len;
-		*(uint8_t *)(io->raw_buf) = HDLC_HEADER;
+		*(io->untranscode_buf + 1) = HDLC_HEADER;
 		return;
 	}
 
-	p = p0 = io->raw_buf;
+	p = p0 = io->untranscode_buf + 1;
 	WRITE16_BE(p, type); p += 2;
 	WRITE16_BE(p, len); p += 2;
 	memcpy(p, data, len); p += len;
@@ -340,11 +342,60 @@ void encode_msg(spdio_t *io, int type, const void *data, size_t len) {
 
 	io->raw_len = len = p - p0;
 
-	p = io->enc_buf;
-	*p++ = HDLC_HEADER;
-	if (io->flags & FLAGS_TRANSCODE)
+	if (io->flags & FLAGS_TRANSCODE) {
+		p = io->enc_buf;
+		*p++ = HDLC_HEADER;
 		len = spd_transcode(p, p0, len);
-	else memcpy(p, p0, len);
+	}
+	else {
+		p = io->untranscode_buf;
+		*p++ = HDLC_HEADER;
+		io->send_buf = io->untranscode_buf;
+	}
+	p[len] = HDLC_HEADER;
+	io->enc_len = len + 2;
+}
+
+void encode_msg_nocpy(spdio_t *io, int type, size_t len) {
+	uint8_t *p, *p0; unsigned chk;
+
+	if (len > 0xffff)
+		ERR_EXIT("message too long\n");
+
+	io->send_buf = io->enc_buf;
+	if (type == BSL_CMD_CHECK_BAUD) {
+		memset(io->enc_buf, HDLC_HEADER, len);
+		io->enc_len = len;
+		*(io->untranscode_buf + 1) = HDLC_HEADER;
+		return;
+	}
+
+	p = p0 = io->untranscode_buf + 1;
+	WRITE16_BE(p, type); p += 2;
+	WRITE16_BE(p, len); p += 2;
+	p += len;
+
+	len = p - p0;
+	if (io->flags & FLAGS_CRC16)
+		chk = spd_crc16(0, p0, len);
+	else {
+		// if (len & 1) *p++ = 0;
+		chk = spd_checksum(0, p0, len, CHK_FIXZERO);
+	}
+	WRITE16_BE(p, chk); p += 2;
+
+	io->raw_len = len = p - p0;
+
+	if (io->flags & FLAGS_TRANSCODE) {
+		p = io->enc_buf;
+		*p++ = HDLC_HEADER;
+		len = spd_transcode(p, p0, len);
+	}
+	else {
+		p = io->untranscode_buf;
+		*p++ = HDLC_HEADER;
+		io->send_buf = io->untranscode_buf;
+	}
 	p[len] = HDLC_HEADER;
 	io->enc_len = len + 2;
 }
@@ -360,24 +411,24 @@ int send_msg(spdio_t *io) {
 	}
 	if (io->verbose >= 2) {
 		DBG_LOG("send (%d):\n", io->enc_len);
-		print_mem(stderr, io->enc_buf, io->enc_len);
+		print_mem(stderr, io->send_buf, io->enc_len);
 	}
 	else if (io->verbose >= 1) {
-		if (io->raw_buf[0] == HDLC_HEADER)
+		if (*(io->untranscode_buf + 1) == HDLC_HEADER)
 			DBG_LOG("send: check baud\n");
 		else if (io->raw_len >= 4) {
 			DBG_LOG("send: type = 0x%02x, size = %d\n",
-				READ16_BE(io->raw_buf), READ16_BE(io->raw_buf + 2));
+				READ16_BE(io->untranscode_buf + 1), READ16_BE(io->untranscode_buf + 3));
 		}
 		else DBG_LOG("send: unknown message\n");
 	}
 
 #if USE_LIBUSB
-	int err = libusb_bulk_transfer(io->dev_handle, io->endp_out, io->enc_buf, io->enc_len, &ret, io->timeout);
+	int err = libusb_bulk_transfer(io->dev_handle, io->endp_out, io->send_buf, io->enc_len, &ret, io->timeout);
 	if (err < 0)
 		ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
 #else
-	ret = call_Write(io->handle, io->enc_buf, io->enc_len);
+	ret = call_Write(io->handle, io->send_buf, io->enc_len);
 #endif
 	if (ret != io->enc_len)
 		ERR_EXIT("usb_send failed (%d / %d)\n", ret, io->enc_len);
@@ -622,12 +673,12 @@ uint8_t *loadfile(const char *fn, size_t *num, size_t extra) {
 void send_buf(spdio_t *io,
 	uint32_t start_addr, int end_data,
 	unsigned step, uint8_t *mem, unsigned size) {
-	uint32_t data[2], i, n;
-
+	uint32_t i, n;
+	uint32_t *data = (uint32_t *)io->temp_buf;
 	WRITE32_BE(data, start_addr);
 	WRITE32_BE(data + 1, size);
 
-	encode_msg(io, BSL_CMD_START_DATA, data, 4 * 2);
+	encode_msg_nocpy(io, BSL_CMD_START_DATA, 4 * 2);
 	if (send_and_check(io)) return;
 	for (i = 0; i < size; i += n) {
 		n = size - i;
@@ -637,7 +688,7 @@ void send_buf(spdio_t *io,
 		if (send_and_check(io)) return;
 	}
 	if (end_data) {
-		encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_END_DATA, 0);
 		send_and_check(io);
 	}
 }
@@ -682,7 +733,7 @@ unsigned dump_flash(spdio_t *io,
 	if (!fo) ERR_EXIT("fopen(dump) failed\n");
 
 	for (offset = start; offset < start + len; ) {
-		uint32_t data[3];
+		uint32_t *data = (uint32_t *)io->temp_buf;
 		n = start + len - offset;
 		if (n > step) n = step;
 
@@ -690,7 +741,7 @@ unsigned dump_flash(spdio_t *io,
 		WRITE32_BE(data + 1, n);
 		WRITE32_BE(data + 2, offset);
 
-		encode_msg(io, BSL_CMD_READ_FLASH, data, 4 * 3);
+		encode_msg_nocpy(io, BSL_CMD_READ_FLASH, 4 * 3);
 		send_msg(io);
 		ret = recv_msg(io);
 		if (!ret) ERR_EXIT("timeout reached\n");
@@ -719,7 +770,7 @@ unsigned dump_mem(spdio_t *io,
 	if (!fo) ERR_EXIT("fopen(dump) failed\n");
 
 	for (offset = start; offset < start + len; ) {
-		uint32_t data[3];
+		uint32_t *data = (uint32_t *)io->temp_buf;
 		n = start + len - offset;
 		if (n > step) n = step;
 
@@ -727,7 +778,7 @@ unsigned dump_mem(spdio_t *io,
 		WRITE32_BE(data + 1, n);
 		WRITE32_BE(data + 2, 0); // unused
 
-		encode_msg(io, BSL_CMD_READ_FLASH, data, sizeof(data));
+		encode_msg_nocpy(io, BSL_CMD_READ_FLASH, 12);
 		send_msg(io);
 		ret = recv_msg(io);
 		if (!ret) ERR_EXIT("timeout reached\n");
@@ -766,20 +817,19 @@ void select_partition(spdio_t *io, const char *name,
 	struct {
 		uint16_t name[36];
 		uint32_t size, size_hi; uint64_t dummy;
-	} pkt = { 0 };
+	} *pkt_ptr;
 	int ret;
-
-	ret = copy_to_wstr(pkt.name, sizeof(pkt.name) / 2, name);
+	pkt_ptr = io->temp_buf;
+	ret = copy_to_wstr(pkt_ptr->name, 36, name);
 	if (ret) ERR_EXIT("name too long\n");
 	n64 = size;
-	WRITE32_LE(&pkt.size, n64);
+	WRITE32_LE(&pkt_ptr->size, n64);
 	if (mode64) {
 		t32 = n64 >> 32;
-		WRITE32_LE(&pkt.size_hi, t32);
+		WRITE32_LE(&pkt_ptr->size_hi, t32);
 	}
 
-	encode_msg(io, cmd, &pkt,
-		sizeof(pkt.name) + (mode64 ? 16 : 4));
+	encode_msg_nocpy(io, cmd, 72 + (mode64 ? 16 : 4));
 }
 
 #if !_WIN32
@@ -835,7 +885,7 @@ uint64_t dump_partition(spdio_t *io,
 
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
 	if (send_and_check(io)) {
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		return 0;
 	}
@@ -845,7 +895,7 @@ uint64_t dump_partition(spdio_t *io,
 
 	unsigned long long time_start = GetTickCount64();
 	for (offset = start; (n64 = start + len - offset); ) {
-		uint32_t data[3];
+		uint32_t *data = (uint32_t *)io->temp_buf;
 		n = (uint32_t)(n64 > step ? step : n64);
 
 		WRITE32_LE(data, n);
@@ -853,7 +903,7 @@ uint64_t dump_partition(spdio_t *io,
 		t32 = offset >> 32;
 		WRITE32_LE(data + 2, t32);
 
-		encode_msg(io, BSL_CMD_READ_MIDST, data, mode64 ? 12 : 8);
+		encode_msg_nocpy(io, BSL_CMD_READ_MIDST, mode64 ? 12 : 8);
 		send_msg(io);
 		ret = recv_msg(io);
 		if (!ret) ERR_EXIT("timeout reached\n");
@@ -880,32 +930,32 @@ uint64_t dump_partition(spdio_t *io,
 		(long long)(offset - start));
 	fclose(fo);
 
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
-	return offset;
+	return offset - start;
 }
 
 uint64_t read_pactime(spdio_t *io) {
 	uint32_t n, offset = 0x81400, len = 8;
-	int ret; uint32_t data[2];
+	int ret; uint32_t *data = (uint32_t *)io->temp_buf;
 	unsigned long long time, unix;
 
 	select_partition(io, "miscdata", offset + len, 0, BSL_CMD_READ_START);
 	if (send_and_check(io)) {
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		return 0;
 	}
 
 	WRITE32_LE(data, len);
 	WRITE32_LE(data + 1, offset);
-	encode_msg(io, BSL_CMD_READ_MIDST, data, sizeof(data));
+	encode_msg_nocpy(io, BSL_CMD_READ_MIDST, 8);
 	send_msg(io);
 	ret = recv_msg(io);
 	if (!ret) ERR_EXIT("timeout reached\n");
 	if ((ret = recv_type(io)) != BSL_REP_READ_FLASH) {
 		DBG_LOG("unexpected response (0x%04x)\n", ret);
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		return 0;
 	}
@@ -919,7 +969,7 @@ uint64_t read_pactime(spdio_t *io) {
 	// $ date -d @unixtime
 	DBG_LOG("pactime = 0x%llx (unix = %llu)\n", time, unix);
 
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 	return time;
 }
@@ -1093,7 +1143,7 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 		gpt_failed = gpt_info(ptable, fn, part_count_ptr);
 	if (gpt_failed) {
 		remove("pgpt.bin");
-		encode_msg(io, BSL_CMD_READ_PARTITION, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_PARTITION, 0);
 		send_msg(io);
 		ret = recv_msg(io);
 		if (!ret) ERR_EXIT("timeout reached\n");
@@ -1175,7 +1225,7 @@ void repartition(spdio_t *io, const char *fn) {
 	uint8_t *buf = io->temp_buf;
 	int n = scan_xml_partitions(io, fn, buf, 0xffff);
 	// print_mem(stderr, io->temp_buf, n * 0x4c);
-	encode_msg(io, BSL_CMD_REPARTITION, buf, n * 0x4c);
+	encode_msg_nocpy(io, BSL_CMD_REPARTITION, n * 0x4c);
 	if (!send_and_check(io)) gpt_failed = 0;
 }
 
@@ -1209,7 +1259,7 @@ void erase_partition(spdio_t *io, const char *name) {
 void load_partition(spdio_t *io, const char *name,
 	const char *fn, unsigned step) {
 	uint64_t offset, len, n64;
-	unsigned mode64, n; int ret;
+	unsigned mode64, n, step0 = step; int ret;
 	FILE *fi;
 
 	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
@@ -1235,7 +1285,7 @@ void load_partition(spdio_t *io, const char *name,
 #if !USE_LIBUSB
 	if (Da_Info.bSupportRawData) {
 		if (Da_Info.bSupportRawData > 1) {
-			encode_msg(io, BSL_CMD_MIDST_RAW_START2, NULL, 0);
+			encode_msg_nocpy(io, BSL_CMD_MIDST_RAW_START2, 0);
 			if (send_and_check(io)) { Da_Info.bSupportRawData = 0; goto fallback_load; }
 		}
 		step = Da_Info.dwFlushSize << 10;
@@ -1244,20 +1294,16 @@ void load_partition(spdio_t *io, const char *name,
 
 		for (offset = 0; (n64 = len - offset); offset += n) {
 			n = (unsigned)(n64 > step ? step : n64);
-			if (m_bOpened == -1) {
-				spdio_free(io);
-				ERR_EXIT("device removed, exiting...\n");
-			}
 			if (Da_Info.bSupportRawData == 1) {
-				uint32_t data[3];
+				uint32_t *data = (uint32_t *)io->temp_buf;
 				uint32_t t32 = offset >> 32;
 				WRITE32_LE(data, offset);
 				WRITE32_LE(data + 1, t32);
 				WRITE32_LE(data + 2, n);
-				encode_msg(io, BSL_CMD_MIDST_RAW_START, data, 12);
+				encode_msg_nocpy(io, BSL_CMD_MIDST_RAW_START, 12);
 				if (send_and_check(io)) {
 					if (offset) break;
-					else { free(rawbuf); step = 0xff00; Da_Info.bSupportRawData = 0; goto fallback_load; }
+					else { free(rawbuf); step = step0; Da_Info.bSupportRawData = 0; goto fallback_load; }
 				}
 			}
 			if (fread(rawbuf, 1, n, fi) != n)
@@ -1292,7 +1338,7 @@ fallback_load:
 			n = (unsigned)(n64 > step ? step : n64);
 			if (fread(io->temp_buf, 1, n, fi) != n)
 				ERR_EXIT("fread(load) failed\n");
-			encode_msg(io, BSL_CMD_MIDST_DATA, io->temp_buf, n);
+			encode_msg_nocpy(io, BSL_CMD_MIDST_DATA, n);
 			send_msg(io);
 			if (is_simg) ret = recv_msg_timeout(io, 100000);
 			else ret = recv_msg_timeout(io, 15000);
@@ -1310,7 +1356,7 @@ fallback_load:
 	}
 #endif
 	fclose(fi);
-	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_END_DATA, 0);
 	if (!send_and_check(io)) DBG_LOG("\nWrite Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
 }
@@ -1332,7 +1378,7 @@ void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned st
 		else WRITE32_LE(buf + 0x48, (*(io->ptable + i)).size >> 20);
 		buf += 0x4c;
 	}
-	encode_msg(io, BSL_CMD_REPARTITION, io->temp_buf, io->part_count * 0x4c);
+	encode_msg_nocpy(io, BSL_CMD_REPARTITION, io->part_count * 0x4c);
 	if (send_and_check(io)) return; //repart failed
 	load_partition(io, name, fn, step);
 	buf = io->temp_buf;
@@ -1345,7 +1391,7 @@ void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned st
 		else WRITE32_LE(buf + 0x48, (*(io->ptable + i)).size >> 20);
 		buf += 0x4c;
 	}
-	encode_msg(io, BSL_CMD_REPARTITION, io->temp_buf, io->part_count * 0x4c);
+	encode_msg_nocpy(io, BSL_CMD_REPARTITION, io->part_count * 0x4c);
 	if (!send_and_check(io)) DBG_LOG("Force Write %s Done\n", (*(io->ptable + id)).name);
 }
 
@@ -1428,21 +1474,22 @@ void load_nv_partition(spdio_t *io, const char *name,
 	for (offset = 0; offset < len; offset++) cs += mem[offset];
 	DBG_LOG("file size : 0x%zx\n", len);
 
-	struct {
+	struct pkt {
 		uint16_t name[36];
 		uint32_t size, cs;
-	} pkt = { 0 };
-	ret = copy_to_wstr(pkt.name, sizeof(pkt.name) / 2, name);
+	} *pkt_ptr;
+	pkt_ptr = io->temp_buf;
+	ret = copy_to_wstr(pkt_ptr->name, 36, name);
 	if (ret) ERR_EXIT("name too long\n");
-	WRITE32_LE(&pkt.size, len);
-	WRITE32_LE(&pkt.cs, cs);
-	encode_msg(io, BSL_CMD_START_DATA, &pkt, sizeof(pkt));
+	WRITE32_LE(&pkt_ptr->size, len);
+	WRITE32_LE(&pkt_ptr->cs, cs);
+	encode_msg_nocpy(io, BSL_CMD_START_DATA, sizeof(struct pkt));
 	if (send_and_check(io)) { free(mem0); return; }
 
 	for (offset = 0; (rsz = len - offset); offset += n) {
 		n = rsz > step ? step : rsz;
 		memcpy(io->temp_buf, &mem[offset], n);
-		encode_msg(io, BSL_CMD_MIDST_DATA, io->temp_buf, n);
+		encode_msg_nocpy(io, BSL_CMD_MIDST_DATA, n);
 		send_msg(io);
 		ret = recv_msg_timeout(io, 15000);
 		if (!ret) ERR_EXIT("timeout reached\n");
@@ -1452,7 +1499,7 @@ void load_nv_partition(spdio_t *io, const char *name,
 		}
 	}
 	free(mem0);
-	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_END_DATA, 0);
 	if (!send_and_check(io)) DBG_LOG("Write NV_Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
 }
@@ -1465,13 +1512,16 @@ void find_partition_size_new(spdio_t *io, const char *name, unsigned long long *
 	select_partition(io, name_tmp, 0x80, 0, BSL_CMD_READ_START);
 	free(name_tmp);
 	if (send_and_check(io)) {
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		return;
 	}
 
-	uint32_t data[2] = { 0x80,0 };
-	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
+	//uint32_t data[2] = { 0x80,0 };
+	uint32_t *data = (uint32_t *)io->temp_buf;
+	WRITE32_LE(data, 0x80);
+	WRITE32_LE(data + 1, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_MIDST, 8);
 	send_msg(io);
 	ret = recv_msg(io);
 	if (!ret) ERR_EXIT("timeout reached\n");
@@ -1480,7 +1530,7 @@ void find_partition_size_new(spdio_t *io, const char *name, unsigned long long *
 		if (ret != 1) ret = sscanf((char *)(io->raw_buf + 4), "partition %*s total size: 0x%llx", offset_ptr); // new lk
 		DBG_LOG("partition_size_device: %s, 0x%llx\n", name, *offset_ptr);
 	}
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 }
 
@@ -1520,19 +1570,23 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 
 	select_partition(io, name, 0x8, 0, BSL_CMD_READ_START);
 	if (send_and_check(io)) {
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		return 0;
 	}
 
-	uint32_t data[2] = { 0x8, 0 };
-	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
+	//uint32_t data[2] = { 0x8, 0 };
+	uint32_t *data = (uint32_t *)io->temp_buf;
+	WRITE32_LE(data, 8);
+	WRITE32_LE(data + 1, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_MIDST, 8);
+
 	send_msg(io);
 	ret = recv_msg(io);
 	if (!ret) ERR_EXIT("timeout reached\n");
 	if (recv_type(io) == BSL_REP_READ_FLASH) ret = 1;
 	else ret = 0;
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 	if (0 == ret || 0 == need_size) return ret;
 
@@ -1541,7 +1595,7 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 	if (send_and_check(io)) {
 		//NAND flash !!!
 		end = 10;
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		for (i = 21; i >= end;) {
 			n64 = offset + (1ll << i) - (1ll << end);
@@ -1562,21 +1616,21 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 				if (ret == BSL_REP_ACK) offset += (1ll << i);
 				i--;
 			}
-			encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+			encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 			send_and_check(io);
 		}
 		offset -= (1ll << end);
 	}
 	else {
 		for (i = 21; i >= end;) {
-			uint32_t data[3];
+			uint32_t *data = (uint32_t *)io->temp_buf;
 			n64 = offset + (1ll << i) - (1ll << end);
 			WRITE32_LE(data, 4);
 			WRITE32_LE(data + 1, n64);
 			t32 = n64 >> 32;
 			WRITE32_LE(data + 2, t32);
 
-			encode_msg(io, BSL_CMD_READ_MIDST, data, sizeof(data));
+			encode_msg_nocpy(io, BSL_CMD_READ_MIDST, 12);
 			send_msg(io);
 			ret = recv_msg(io);
 			if (!ret) ERR_EXIT("timeout reached\n");
@@ -1595,9 +1649,9 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 			}
 		}
 	}
-	if (end == 10) Da_Info.dwStorageType = 101;
+	if (end == 10) Da_Info.dwStorageType = 0x101;
 	DBG_LOG("partition_size_pc: %s, 0x%llx\n", name, offset);
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 	return offset;
 }
@@ -1644,8 +1698,11 @@ void get_partition_info(spdio_t *io, const char *name, int need_size) {
 				break;
 			}
 		}
-		strcpy(gPartInfo.name, name);
-		gPartInfo.size = (*(io->ptable + i)).size;
+		if (i < io->part_count) {
+			strcpy(gPartInfo.name, name);
+			gPartInfo.size = (*(io->ptable + i)).size;
+		}
+		else gPartInfo.size = 0;
 		io->verbose = verbose;
 		return;
 	}
@@ -1686,7 +1743,7 @@ uint64_t str_to_size(const char *str) {
 }
 
 uint64_t str_to_size_ubi(const char *str, int *nand_info) {
-	if (memcmp(str, "ubi", 3)) return str_to_size(str);
+	if (strncmp(str, "ubi", 3)) return str_to_size(str);
 	else {
 		char *end;
 		uint64_t n;
@@ -1714,7 +1771,7 @@ void dump_partitions(spdio_t *io, const char *fn, int *nand_info, unsigned step)
 	partition_t *partitions = malloc(128 * sizeof(partition_t));
 	if (partitions == NULL) return;
 
-	if (!memcmp(fn, "ubi", 3)) ubi = 1;
+	if (!strncmp(fn, "ubi", 3)) ubi = 1;
 	src = (char *)loadfile(fn, &size, 1);
 	if (!src) ERR_EXIT("loadfile failed\n");
 	src[size] = 0;
@@ -1914,7 +1971,7 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 			else if (selected_ab_bak > 0) selected_ab = selected_ab_bak;
 		}
 	}
-
+	if (selected_ab) DBG_LOG("Flashing to slot %c.\n", 96 + selected_ab);
 	for (int i = 0; i < partition_count; i++) {
 		fn = partitions[i].name;
 		namelen = strlen(fn);
@@ -2007,19 +2064,22 @@ void select_ab(spdio_t *io) {
 
 	select_partition(io, "misc", 0x820, 0, BSL_CMD_READ_START);
 	if (send_and_check(io)) {
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		selected_ab = 0;
 		return;
 	}
 
-	uint32_t data[2] = { 0x20,0x800 };
-	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
+	//uint32_t data[2] = { 0x20,0x800 };
+	uint32_t *data = (uint32_t *)io->temp_buf;
+	WRITE32_LE(data, 0x20);
+	WRITE32_LE(data + 1, 0x800);
+	encode_msg_nocpy(io, BSL_CMD_READ_MIDST, 8);
 	send_msg(io);
 	ret = recv_msg(io);
 	if (!ret) ERR_EXIT("timeout reached\n");
 	if (recv_type(io) == BSL_REP_READ_FLASH) abc = (bootloader_control *)(io->raw_buf + 4);
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 
 	if (abc == NULL) { selected_ab = 0; return; }
@@ -2118,10 +2178,8 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned step) {
 	char name0[36], name1[40];
 	unsigned size0, size1;
-	int isVBMETA = 0;
 	if (strstr(name, "fixnv1")) { load_nv_partition(io, name, fn, 4096); return 1; }
-	if (!strcmp(name, "vbmeta")) isVBMETA = 1;
-	else if (selected_ab > 0 ||
+	if (selected_ab > 0 ||
 		Da_Info.dwStorageType == 0x101 ||
 		io->part_count == 0 ||
 		strncmp(name, "splloader", 9) == 0) {
@@ -2130,7 +2188,7 @@ int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned
 	}
 
 	strcpy(name0, name);
-	if (strlen(name0) >= sizeof(name1) - 4) { load_partition(io, name0, fn, step); return 1; }
+	if (strlen(name0) >= sizeof(name0) - 4) { load_partition(io, name0, fn, step); return 1; }
 	snprintf(name1, sizeof(name1), "%s_bak", name0);
 	get_partition_info(io, name1, 1);
 	if (!gPartInfo.size) { load_partition(io, name0, fn, step); return 1; }
@@ -2143,7 +2201,7 @@ int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned
 			break;
 		}
 	if (size0 == size1) {
-		if (isVBMETA) {
+		if (!strcmp(name0, "vbmeta")) {
 			char ch = '\0';
 			FILE *fi = fopen(fn, "rb+");
 			if (!fi) { DBG_LOG("fopen %s failed\n", fn); return 1; }
@@ -2414,6 +2472,10 @@ DWORD WINAPI RcvDataThreadProc(LPVOID lpParam) {
 	while (GetMessage(&msg, NULL, 0, 0)) {
 		switch (msg.message) {
 		case WM_RCV_CHANNEL_DATA:
+			if (io->verbose >= 2) {
+				DBG_LOG("recv (%d):\n", (int)msg.lParam);
+				print_mem(stderr, (const uint8_t *)msg.wParam, (int)msg.lParam);
+			}
 			if (recv_transcode(io, (const uint8_t *)msg.wParam, (int)msg.lParam, &plen)) {
 				if (plen == io->raw_len) {
 					if (recv_check_crc(io)) {

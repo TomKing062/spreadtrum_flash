@@ -116,7 +116,7 @@ typedef struct {
 } partition_t;
 
 typedef struct {
-	uint8_t *raw_buf, *enc_buf, *recv_buf, *temp_buf;
+	uint8_t *raw_buf, *enc_buf, *recv_buf, *temp_buf, *untranscode_buf, *send_buf;
 #if USE_LIBUSB
 	libusb_device_handle *dev_handle;
 	int endp_in, endp_out;
@@ -217,6 +217,7 @@ spdio_t *spdio_init(int flags);
 void spdio_free(spdio_t *io);
 
 void encode_msg(spdio_t *io, int type, const void *data, size_t len);
+void encode_msg_nocpy(spdio_t *io, int type, size_t len);
 int send_msg(spdio_t *io);
 int recv_msg(spdio_t *io);
 int recv_msg_timeout(spdio_t *io, int timeout);
