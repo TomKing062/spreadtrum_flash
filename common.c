@@ -227,7 +227,10 @@ void encode_msg(spdio_t *io, int type, const void *data, size_t len) {
 		memcpy(p + 5, data, len);
 		in->length += 4; //type and len
 		in->allow_empty_reply = 0; // judge in encode_msg_bg
+		if (io->pack_timeout) in->timeout = io->pack_timeout;
+		else in->timeout = io->timeout;
 		QueuePush(&io->raw, in);
+		io->pack_timeout = 0;
 	}
 }
 
@@ -259,6 +262,7 @@ void encode_msg_bg(spdio_t *io, Packet *in) {
 		io->cur_encoded_packet->data[io->cur_encoded_packet->length + 1] = HDLC_HEADER;
 		io->cur_encoded_packet->length += 2;
 		io->cur_encoded_packet->allow_empty_reply = in->allow_empty_reply;
+		io->cur_encoded_packet->timeout = in->timeout;
 		io->cur_encoded_packet->rw_pack_len = in->rw_pack_len;
 		free(in->data - 1);
 		free(in);
@@ -270,11 +274,7 @@ void encode_msg_bg(spdio_t *io, Packet *in) {
 		io->cur_encoded_packet->length += 2;
 		io->cur_encoded_packet->data -= 1;
 	}
-
-	if (io->pack_timeout) io->cur_encoded_packet->timeout = io->pack_timeout;
-	else io->cur_encoded_packet->timeout = io->timeout;
 	QueuePush(&io->encoded, io->cur_encoded_packet);
-	io->pack_timeout = 0;
 }
 
 void send_msg_bg(spdio_t *io) {
@@ -1731,8 +1731,11 @@ void get_partition_info(spdio_t *io, const char *name, int need_size) {
 			io->verbose = verbose;
 			return;
 		}
-		strcpy(gPartInfo.name, (*(io->ptable + i - 1)).name);
-		gPartInfo.size = (*(io->ptable + i - 1)).size;
+		if (i < io->part_count) {
+			strcpy(gPartInfo.name, name);
+			gPartInfo.size = (*(io->ptable + i)).size;
+		}
+		else gPartInfo.size = 0;
 		io->verbose = verbose;
 		return;
 	}
@@ -2182,10 +2185,8 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned step) {
 	char name0[36], name1[40];
 	unsigned size0, size1;
-	int isVBMETA = 0;
 	if (strstr(name, "fixnv1")) { load_nv_partition(io, name, fn, 4096); return 1; }
-	if (!strcmp(name, "vbmeta")) isVBMETA = 1;
-	else if (selected_ab > 0 ||
+	if (selected_ab > 0 ||
 		Da_Info.dwStorageType == 0x101 ||
 		io->part_count == 0 ||
 		strncmp(name, "splloader", 9) == 0) {
@@ -2207,7 +2208,7 @@ int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned
 			break;
 		}
 	if (size0 == size1) {
-		if (isVBMETA) {
+		if (!strcmp(name0, "vbmeta")) {
 			char ch = '\0';
 			FILE *fi = fopen(fn, "rb+");
 			if (!fi) { DBG_LOG("fopen %s failed\n", fn); return 1; }
