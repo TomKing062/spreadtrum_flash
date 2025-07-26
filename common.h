@@ -118,7 +118,7 @@ typedef struct {
 	Packet *last_encoded_packet;
 	Packet *cur_decoded_packet;
 	Packet *last_decoded_packet;
-	int not_exit_w;
+	int send_failed;
 	uint8_t *raw_buf, *temp_buf, *pack_buf;
 	//below for dump_part/load_part
 	HANDLE rw_hCountEvent;
@@ -240,5 +240,5 @@ DWORD WINAPI SendRecvThread(LPVOID lpParam);
 void QueueInit(Queue *pq);
 void QueueDestroy(Queue *pq);
 void QueuePush(Queue *pq, Packet *in);
-Packet *QueuePop(Queue *pq);
+Packet *QueuePop(Queue *pq, int timeout_ms);
 void QueueClose(Queue *pq);

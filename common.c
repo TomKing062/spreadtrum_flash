@@ -295,20 +295,17 @@ void encode_msg_bg(spdio_t *io, Packet *in) {
 	QueuePush(&io->encoded, io->cur_encoded_packet);
 }
 
-void send_msg_bg(spdio_t *io) {
+int send_msg_bg(spdio_t *io) {
 	if (!io->last_encoded_packet->length)
 		ERR_EXIT("empty message\n");
 
 	if (m_bOpened == -1) {
-		if (io->not_exit_w == 0) {
+		if (io->last_encoded_packet->allow_empty_reply == 0) {
 			spdio_free(io);
 			ERR_EXIT("device removed, exiting...\n");
 		}
 		else {
-			io->not_exit_w = 0;
-			free(io->last_encoded_packet->data);
-			free(io->last_encoded_packet);
-			return;
+			return 0;
 		}
 	}
 	if (io->verbose >= 2) {
@@ -324,16 +321,14 @@ void send_msg_bg(spdio_t *io) {
 
 	int ret = call_Write(io->handle, io->last_encoded_packet->data, io->last_encoded_packet->length);
 	if (ret != io->last_encoded_packet->length) {
-		if (io->not_exit_w == 0) {
+		if (io->last_encoded_packet->allow_empty_reply == 0) {
 			ERR_EXIT("usb_send failed (%d / %d)\n", ret, io->last_encoded_packet->length);
 		}
 		else {
-			io->not_exit_w = 0;
-			free(io->last_encoded_packet->data);
-			free(io->last_encoded_packet);
-			return;
+			return 0;
 		}
 	}
+	return ret;
 }
 
 int recv_transcode(spdio_t *io, const uint8_t *buf, int buf_len) {
@@ -442,7 +437,6 @@ int recv_check_crc(spdio_t *io) {
 		DBG_LOG("recv: type = 0x%02x, size = %d\n",
 			READ16_BE(io->cur_decoded_packet->data), READ16_BE(io->cur_decoded_packet->data + 2));
 
-	//io->cur_decoded_packet->msg_type = READ16_BE(io->cur_decoded_packet->data);
 	return nread;
 }
 
@@ -467,7 +461,11 @@ int recv_msg(spdio_t *io) {
 			free(io->last_decoded_packet);
 			io->last_decoded_packet = NULL;
 		}
-		if ((io->last_decoded_packet = QueuePop(&io->decoded))) {
+		if (io->send_failed) {
+			io->send_failed = 0; //workaround for kick
+			break;
+		}
+		if ((io->last_decoded_packet = QueuePop(&io->decoded, 0))) {
 			ret = io->last_decoded_packet->length;
 			io->raw_buf = io->last_decoded_packet->data;
 			io->last_decoded_packet->msg_type = READ16_BE(io->last_decoded_packet->data);
@@ -831,7 +829,7 @@ uint64_t dump_partition(spdio_t *io,
 	while (1) {
 		print_progress_bar(io->rw_done, len, time_start);
 		if (io->rw_done == len || io->rw_error) break;
-		Sleep(100);
+		usleep(100000);
 	}
 	io->rw_stop = 1;
 	SetEvent(io->rw_hCountEvent);
@@ -1310,7 +1308,7 @@ void load_partition(spdio_t *io, const char *name,
 	while (1) {
 		print_progress_bar(io->rw_done, len, time_start);
 		if (io->rw_done == len || io->rw_error) break;
-		Sleep(100);
+		usleep(100000);
 	}
 	io->rw_stop = 1;
 	SetEvent(io->rw_hCountEvent);
@@ -2311,7 +2309,6 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 			else if (ret != 0x7e7e) {
 				uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
 				usleep(500000);
-				io->not_exit_w = 1;
 				send_encoded_data(io, autod, sizeof(autod), 1);
 				if (recv_msg(io)) done = -1;
 			}
@@ -2412,7 +2409,7 @@ void DestroyRecvThread(spdio_t *io) {
 DWORD WINAPI EncodeThread(LPVOID lpParam) {
 	spdio_t *io = (spdio_t *)lpParam;
 	Packet *p = NULL;
-	while ((p = QueuePop(&io->raw))) {
+	while ((p = QueuePop(&io->raw, -1))) {
 		encode_msg_bg(io, p);
 	}
 	QueueClose(&io->encoded);
@@ -2421,7 +2418,7 @@ DWORD WINAPI EncodeThread(LPVOID lpParam) {
 
 DWORD WINAPI SendRecvThread(LPVOID lpParam) {
 	spdio_t *io = (spdio_t *)lpParam;
-	while ((io->last_encoded_packet = QueuePop(&io->encoded))) {
+	while ((io->last_encoded_packet = QueuePop(&io->encoded, -1))) {
 		io->cur_decoded_packet = malloc(sizeof(Packet));
 		if (io->cur_decoded_packet) {
 			io->cur_decoded_packet->data = malloc(0xffff);
@@ -2431,11 +2428,21 @@ DWORD WINAPI SendRecvThread(LPVOID lpParam) {
 				io->cur_decoded_packet->is_decoded = 0;
 				io->cur_decoded_packet->allow_empty_reply = io->last_encoded_packet->allow_empty_reply;
 				io->cur_decoded_packet->rw_pack_len = io->last_encoded_packet->rw_pack_len;
+
+				if (send_msg_bg(io)) {
+					recv_msg_async(io);
+					QueuePush(&io->decoded, io->cur_decoded_packet);
+				}
+				else {
+					io->send_failed = 1;
+					free(io->cur_decoded_packet->data);
+					free(io->cur_decoded_packet);
+				}
 			}
+			else ERR_EXIT("malloc cur_decoded_packet->data in SendRecvThread failed\n");
 		}
-		send_msg_bg(io);
-		recv_msg_async(io);
-		QueuePush(&io->decoded, io->cur_decoded_packet);
+		else ERR_EXIT("malloc cur_decoded_packet in SendRecvThread failed\n");
+		
 		free(io->last_encoded_packet->data);
 		free(io->last_encoded_packet);
 	}
@@ -2487,12 +2494,23 @@ void QueuePush(Queue *pq, Packet *in) {
 	LeaveCriticalSection(&pq->lock);
 }
 
-Packet *QueuePop(Queue *pq) {
+Packet *QueuePop(Queue *pq, int timeout_ms) {
 	if (!pq) ERR_EXIT("NULL");
 	EnterCriticalSection(&pq->lock);
 	Packet *out = NULL;
 	while (pq->phead == NULL && !pq->closed) {
-		SleepConditionVariableCS(&pq->not_empty, &pq->lock, INFINITE);
+		if (timeout_ms == 0) {
+			LeaveCriticalSection(&pq->lock);
+			return NULL;
+		}
+		else if (timeout_ms < 0) {
+			SleepConditionVariableCS(&pq->not_empty, &pq->lock, INFINITE);
+		}
+		else {
+			if (SleepConditionVariableCS(&pq->not_empty, &pq->lock, timeout_ms) == WAIT_TIMEOUT) {
+				break;
+			}
+		}
 	}
 
 	if (pq->phead == NULL || pq->closed) {
