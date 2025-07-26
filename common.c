@@ -99,16 +99,10 @@ char savepath[ARGV_LEN] = { 0 };
 DA_INFO_T Da_Info;
 partition_t gPartInfo;
 
-#define TEMPBUF_LENGTH 0xffff
 spdio_t *spdio_init(int flags) {
-	uint8_t *p; spdio_t *io;
-
-	p = (uint8_t *)malloc(sizeof(spdio_t) + TEMPBUF_LENGTH);
-	io = (spdio_t *)p;
-	if (!p) ERR_EXIT("malloc failed\n");
+	spdio_t *io = (spdio_t *)malloc(sizeof(spdio_t));
+	if (!io) ERR_EXIT("malloc failed\n");
 	memset(io, 0, sizeof(spdio_t));
-	p += sizeof(spdio_t);
-	io->temp_buf = p;
 	io->flags = flags;
 	io->timeout = 1000;
 	return io;
@@ -204,7 +198,6 @@ void encode_msg(spdio_t *io, int type, const void *data, size_t len) {
 		ERR_EXIT("message too long\n");
 
 	Packet *in = malloc(sizeof(Packet));
-
 	if (!in) ERR_EXIT("malloc pack in encode_msg failed\n");
 	in->msg_type = type;
 	in->length = len;
@@ -232,6 +225,31 @@ void encode_msg(spdio_t *io, int type, const void *data, size_t len) {
 		QueuePush(&io->raw, in);
 		io->pack_timeout = 0;
 	}
+}
+
+void encode_msg_nocpy(spdio_t *io, int type, size_t len) {
+	if (len > 0xffff)
+		ERR_EXIT("message too long\n");
+
+	Packet *in = malloc(sizeof(Packet));
+	if (!in) ERR_EXIT("malloc pack in encode_msg_nocpy failed\n");
+	in->msg_type = type;
+	in->length = len;
+	in->rw_pack_len = len;
+	if (!len) {
+		io->pack_buf = malloc(8);
+		if (!io->pack_buf) ERR_EXIT("malloc pack->data in encode_msg_nocpy failed\n");
+	}
+	in->data = io->pack_buf + 1;
+	WRITE16_BE(io->pack_buf + 1, type);
+	WRITE16_BE(io->pack_buf + 3, len);
+	in->length += 4; //type and len
+	in->allow_empty_reply = 0; // judge in encode_msg_bg
+	if (io->pack_timeout) in->timeout = io->pack_timeout;
+	else in->timeout = io->timeout;
+	QueuePush(&io->raw, in);
+	io->pack_timeout = 0;
+	io->pack_buf = NULL;
 }
 
 void encode_msg_bg(spdio_t *io, Packet *in) {
@@ -303,7 +321,7 @@ void send_msg_bg(spdio_t *io) {
 		else
 			DBG_LOG("send: type = 0x%02x, size = %d\n", io->last_encoded_packet->msg_type, io->last_encoded_packet->length);
 	}
-	
+
 	int ret = call_Write(io->handle, io->last_encoded_packet->data, io->last_encoded_packet->length);
 	if (ret != io->last_encoded_packet->length) {
 		if (io->not_exit_w == 0) {
@@ -468,7 +486,6 @@ int recv_msg(spdio_t *io) {
 unsigned recv_type(spdio_t *io) {
 	if (io->last_decoded_packet)
 		return io->last_decoded_packet->msg_type;
-		//return READ16_BE(io->last_decoded_packet->data);
 	else {
 		DBG_LOG("last_packet is NULL\n");
 		return 0;
@@ -517,12 +534,15 @@ uint8_t *loadfile(const char *fn, size_t *num, size_t extra) {
 void send_buf(spdio_t *io,
 	uint32_t start_addr, int end_data,
 	unsigned step, uint8_t *mem, unsigned size) {
-	uint32_t data[2], i, n;
-
+	uint32_t i, n;
+	io->pack_buf = malloc(16);
+	if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+	io->temp_buf = io->pack_buf + 5;
+	uint32_t *data = (uint32_t *)io->temp_buf;
 	WRITE32_BE(data, start_addr);
 	WRITE32_BE(data + 1, size);
 
-	encode_msg(io, BSL_CMD_START_DATA, data, 4 * 2);
+	encode_msg_nocpy(io, BSL_CMD_START_DATA, 4 * 2);
 	if (send_and_check(io)) return;
 	for (i = 0; i < size; i += n) {
 		n = size - i;
@@ -532,7 +552,7 @@ void send_buf(spdio_t *io,
 		if (send_and_check(io)) return;
 	}
 	if (end_data) {
-		encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_END_DATA, 0);
 		send_and_check(io);
 	}
 }
@@ -577,7 +597,10 @@ unsigned dump_flash(spdio_t *io,
 	if (!fo) ERR_EXIT("fopen(dump) failed\n");
 
 	for (offset = start; offset < start + len; ) {
-		uint32_t data[3];
+		io->pack_buf = malloc(20);
+		if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+		io->temp_buf = io->pack_buf + 5;
+		uint32_t *data = (uint32_t *)io->temp_buf;
 		n = start + len - offset;
 		if (n > step) n = step;
 
@@ -585,7 +608,7 @@ unsigned dump_flash(spdio_t *io,
 		WRITE32_BE(data + 1, n);
 		WRITE32_BE(data + 2, offset);
 
-		encode_msg(io, BSL_CMD_READ_FLASH, data, 4 * 3);
+		encode_msg_nocpy(io, BSL_CMD_READ_FLASH, 4 * 3);
 		recv_msg(io);
 		if ((ret = recv_type(io)) != BSL_REP_READ_FLASH) {
 			DBG_LOG("unexpected response (0x%04x)\n", ret);
@@ -612,7 +635,10 @@ unsigned dump_mem(spdio_t *io,
 	if (!fo) ERR_EXIT("fopen(dump) failed\n");
 
 	for (offset = start; offset < start + len; ) {
-		uint32_t data[3];
+		io->pack_buf = malloc(20);
+		if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+		io->temp_buf = io->pack_buf + 5;
+		uint32_t *data = (uint32_t *)io->temp_buf;
 		n = start + len - offset;
 		if (n > step) n = step;
 
@@ -620,7 +646,7 @@ unsigned dump_mem(spdio_t *io,
 		WRITE32_BE(data + 1, n);
 		WRITE32_BE(data + 2, 0); // unused
 
-		encode_msg(io, BSL_CMD_READ_FLASH, data, sizeof(data));
+		encode_msg_nocpy(io, BSL_CMD_READ_FLASH, 12);
 		recv_msg(io);
 		if ((ret = recv_type(io)) != BSL_REP_READ_FLASH) {
 			DBG_LOG("unexpected response (0x%04x)\n", ret);
@@ -657,20 +683,22 @@ void select_partition(spdio_t *io, const char *name,
 	struct {
 		uint16_t name[36];
 		uint32_t size, size_hi; uint64_t dummy;
-	} pkt = { 0 };
+	} *pkt_ptr;
 	int ret;
-
-	ret = copy_to_wstr(pkt.name, sizeof(pkt.name) / 2, name);
+	io->pack_buf = malloc(96);
+	if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+	io->temp_buf = io->pack_buf + 5;
+	pkt_ptr = io->temp_buf;
+	ret = copy_to_wstr(pkt_ptr->name, 36, name);
 	if (ret) ERR_EXIT("name too long\n");
 	n64 = size;
-	WRITE32_LE(&pkt.size, n64);
+	WRITE32_LE(&pkt_ptr->size, n64);
 	if (mode64) {
 		t32 = n64 >> 32;
-		WRITE32_LE(&pkt.size_hi, t32);
+		WRITE32_LE(&pkt_ptr->size_hi, t32);
 	}
 
-	encode_msg(io, cmd, &pkt,
-		sizeof(pkt.name) + (mode64 ? 16 : 4));
+	encode_msg_nocpy(io, cmd, 72 + (mode64 ? 16 : 4));
 }
 
 #define PROGRESS_BAR_WIDTH 40
@@ -702,7 +730,6 @@ DWORD WINAPI dump_part_send(LPVOID lpParam) {
 	spdio_t *io = (spdio_t *)lpParam;
 	uint64_t offset, saved_size = 0;
 	uint32_t n, t32;
-	uint32_t data[3];
 
 	for (offset = io->rw_start; offset < io->rw_start + io->rw_len && !io->rw_stop; offset += n) {
 		uint64_t n64 = io->rw_start + io->rw_len - offset;
@@ -713,13 +740,16 @@ DWORD WINAPI dump_part_send(LPVOID lpParam) {
 			saved_size += n;
 			if (saved_size >= fblk_size) { usleep(1000000); saved_size = 0; }
 		}
-
+		io->pack_buf = malloc(20);
+		if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+		io->temp_buf = io->pack_buf + 5;
+		uint32_t *data = (uint32_t *)io->temp_buf;
 		WRITE32_LE(data, n);
 		WRITE32_LE(data + 1, offset);
 		t32 = offset >> 32;
 		WRITE32_LE(data + 2, t32);
 
-		encode_msg(io, BSL_CMD_READ_MIDST, data, ((io->rw_start + io->rw_len) >> 32) ? 12 : 8);
+		encode_msg_nocpy(io, BSL_CMD_READ_MIDST, ((io->rw_start + io->rw_len) >> 32) ? 12 : 8);
 		io->rw_count++;
 	}
 	return 0;
@@ -772,7 +802,7 @@ uint64_t dump_partition(spdio_t *io,
 
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
 	if (send_and_check(io)) {
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		return 0;
 	}
@@ -815,99 +845,33 @@ uint64_t dump_partition(spdio_t *io,
 		(long long)io->rw_done);
 	fclose(fo);
 
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 	return io->rw_done;
 }
 
-uint64_t dump_partition_orig(spdio_t *io,
-	const char *name, uint64_t start, uint64_t len,
-	const char *fn, unsigned step) {
-	uint32_t n, nread, t32; uint64_t offset, n64, saved_size = 0;
-	int ret, mode64 = (start + len) >> 32;
-	char name_tmp[36];
-
-	if (!strcmp(name, "super")) dump_partition(io, "metadata", 0, check_partition(io, "metadata", 1), "metadata.bin", step);
-	else if (!strncmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
-	else if (strstr(name, "nv1")) {
-		strcpy(name_tmp, name);
-		char *dot = strrchr(name_tmp, '1');
-		if (dot != NULL) *dot = '2';
-		name = name_tmp;
-		start = 512;
-		if (len > 512)
-			len -= 512;
-	}
-
-	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
-	if (send_and_check(io)) {
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
-		send_and_check(io);
-		return 0;
-	}
-
-	FILE *fo = my_fopen(fn, "wb");
-	if (!fo) ERR_EXIT("fopen(dump) failed\n");
-
-	unsigned long long time_start = GetTickCount64();
-	for (offset = start; (n64 = start + len - offset); ) {
-		uint32_t data[3];
-		n = (uint32_t)(n64 > step ? step : n64);
-
-		WRITE32_LE(data, n);
-		WRITE32_LE(data + 1, offset);
-		t32 = offset >> 32;
-		WRITE32_LE(data + 2, t32);
-
-		encode_msg(io, BSL_CMD_READ_MIDST, data, mode64 ? 12 : 8);
-		recv_msg(io);
-		if ((ret = recv_type(io)) != BSL_REP_READ_FLASH) {
-			DBG_LOG("unexpected response (0x%04x)\n", ret);
-			break;
-		}
-		nread = READ16_BE(io->raw_buf + 2);
-		if (n < nread)
-			ERR_EXIT("unexpected length\n");
-		if (fwrite(io->raw_buf + 4, 1, nread, fo) != nread)
-			ERR_EXIT("fwrite(dump) failed\n");
-		print_progress_bar(offset + nread - start, len, time_start);
-		offset += nread;
-		if (n != nread) break;
-
-		if (fblk_size) {
-			saved_size += nread;
-			if (saved_size >= fblk_size) { usleep(1000000); saved_size = 0; }
-		}
-	}
-	DBG_LOG("\nRead Part Done: %s+0x%llx, target: 0x%llx, read: 0x%llx\n",
-		name, (long long)start, (long long)len,
-		(long long)(offset - start));
-	fclose(fo);
-
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
-	send_and_check(io);
-	return offset - start;
-}
-
 uint64_t read_pactime(spdio_t *io) {
 	uint32_t n, offset = 0x81400, len = 8;
-	int ret; uint32_t data[2];
+	int ret;
 	unsigned long long time, unix;
 
 	select_partition(io, "miscdata", offset + len, 0, BSL_CMD_READ_START);
 	if (send_and_check(io)) {
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		return 0;
 	}
-
+	io->pack_buf = malloc(16);
+	if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+	io->temp_buf = io->pack_buf + 5;
+	uint32_t *data = (uint32_t *)io->temp_buf;
 	WRITE32_LE(data, len);
 	WRITE32_LE(data + 1, offset);
-	encode_msg(io, BSL_CMD_READ_MIDST, data, sizeof(data));
+	encode_msg_nocpy(io, BSL_CMD_READ_MIDST, 8);
 	recv_msg(io);
 	if ((ret = recv_type(io)) != BSL_REP_READ_FLASH) {
 		DBG_LOG("unexpected response (0x%04x)\n", ret);
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		return 0;
 	}
@@ -921,7 +885,7 @@ uint64_t read_pactime(spdio_t *io) {
 	// $ date -d @unixtime
 	DBG_LOG("pactime = 0x%llx (unix = %llu)\n", time, unix);
 
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 	return time;
 }
@@ -1095,7 +1059,7 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 		gpt_failed = gpt_info(ptable, fn, part_count_ptr);
 	if (gpt_failed) {
 		remove("pgpt.bin");
-		encode_msg(io, BSL_CMD_READ_PARTITION, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_PARTITION, 0);
 		recv_msg(io);
 		ret = recv_type(io);
 		if (ret != BSL_REP_READ_PARTITION) {
@@ -1172,10 +1136,13 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 }
 
 void repartition(spdio_t *io, const char *fn) {
+	io->pack_buf = malloc(0x10008);
+	if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+	io->temp_buf = io->pack_buf + 5;
 	uint8_t *buf = io->temp_buf;
 	int n = scan_xml_partitions(io, fn, buf, 0xffff);
 	// print_mem(stderr, io->temp_buf, n * 0x4c);
-	encode_msg(io, BSL_CMD_REPARTITION, buf, n * 0x4c);
+	encode_msg_nocpy(io, BSL_CMD_REPARTITION, n * 0x4c);
 	if (!send_and_check(io)) gpt_failed = 0;
 }
 
@@ -1218,10 +1185,10 @@ DWORD WINAPI load_part_send(LPVOID lpParam) {
 		ERR_EXIT("fread(load) failed\n");
 	if (0xED26FF3A == *(uint32_t *)header) is_simg = 1;
 	fseek(fi, 0, SEEK_SET);
-	
+
 	if (Da_Info.bSupportRawData) {
 		if (Da_Info.bSupportRawData > 1) {
-			encode_msg(io, BSL_CMD_MIDST_RAW_START2, NULL, 0);
+			encode_msg_nocpy(io, BSL_CMD_MIDST_RAW_START2, 0);
 			if (send_and_check(io)) { Da_Info.bSupportRawData = 0; goto fallback_load; }
 		}
 		step = Da_Info.dwFlushSize << 10;
@@ -1236,12 +1203,15 @@ DWORD WINAPI load_part_send(LPVOID lpParam) {
 			uint8_t *rawbuf = (uint8_t *)malloc(n + 1);
 			if (!rawbuf) ERR_EXIT("malloc failed\n");
 			if (Da_Info.bSupportRawData == 1) {
-				uint32_t data[3];
+				io->pack_buf = malloc(20);
+				if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+				io->temp_buf = io->pack_buf + 5;
+				uint32_t *data = (uint32_t *)io->temp_buf;
 				uint32_t t32 = offset >> 32;
 				WRITE32_LE(data, offset);
 				WRITE32_LE(data + 1, t32);
 				WRITE32_LE(data + 2, n);
-				encode_msg(io, BSL_CMD_MIDST_RAW_START, data, 12);
+				encode_msg_nocpy(io, BSL_CMD_MIDST_RAW_START, 12);
 				if (send_and_check(io)) {
 					if (offset) break;
 					else { free(rawbuf); free(rawdatapack); step = io->rw_step; Da_Info.bSupportRawData = 0; goto fallback_load; }
@@ -1267,11 +1237,14 @@ fallback_load:
 			if (io->rw_count == MAX_ENCODED_COUNT) WaitForSingleObject(io->rw_hCountEvent, INFINITE);
 			if (io->rw_stop) break;
 			n = (unsigned)(n64 > step ? step : n64);
+			io->pack_buf = malloc(n + 8);
+			if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+			io->temp_buf = io->pack_buf + 5;
 			if (fread(io->temp_buf, 1, n, fi) != n)
 				ERR_EXIT("fread(load) failed\n");
 			if (is_simg) io->pack_timeout = 100000;
 			else io->pack_timeout = 15000;
-			encode_msg(io, BSL_CMD_MIDST_DATA, io->temp_buf, n);
+			encode_msg_nocpy(io, BSL_CMD_MIDST_DATA, n);
 			io->rw_count++;
 		}
 	}
@@ -1334,7 +1307,7 @@ void load_partition(spdio_t *io, const char *name,
 		CloseHandle(io->rw_hCountEvent);
 		ERR_EXIT("CreateThread failed\n");
 	}
-	while(1) {
+	while (1) {
 		print_progress_bar(io->rw_done, len, time_start);
 		if (io->rw_done == len || io->rw_error) break;
 		Sleep(100);
@@ -1348,96 +1321,16 @@ void load_partition(spdio_t *io, const char *name,
 	CloseHandle(io->rw_hCountEvent);
 
 	fclose(fi);
-	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_END_DATA, 0);
 	if (!send_and_check(io)) DBG_LOG("\nWrite Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)io->rw_done);
 }
 
-void load_partition_orig(spdio_t *io, const char *name,
-	const char *fn, unsigned step) {
-	uint64_t offset, len, n64;
-	unsigned mode64, n, step0 = step;
-	FILE *fi;
-
-	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
-	if (!strcmp(name, "calinv")) { return; } //skip calinv
-
-	fi = fopen(fn, "rb");
-	if (!fi) ERR_EXIT("fopen(load) failed\n");
-
-	uint8_t header[4], is_simg = 0;
-	if (fread(header, 1, 4, fi) != 4)
-		ERR_EXIT("fread(load) failed\n");
-	if (0xED26FF3A == *(uint32_t *)header) is_simg = 1;
-	fseeko(fi, 0, SEEK_END);
-	len = ftello(fi);
-	fseek(fi, 0, SEEK_SET);
-	DBG_LOG("file size : 0x%llx\n", (long long)len);
-
-	mode64 = len >> 32;
-	select_partition(io, name, len, mode64, BSL_CMD_START_DATA);
-	if (send_and_check(io)) { fclose(fi); return; }
-
-	unsigned long long time_start = GetTickCount64();
-	if (Da_Info.bSupportRawData) {
-		if (Da_Info.bSupportRawData > 1) {
-			encode_msg(io, BSL_CMD_MIDST_RAW_START2, NULL, 0);
-			if (send_and_check(io)) { Da_Info.bSupportRawData = 0; goto fallback_load; }
-		}
-		step = Da_Info.dwFlushSize << 10;
-
-		for (offset = 0; (n64 = len - offset); offset += n) {
-			Packet *rawdatapack = (Packet *)malloc(sizeof(Packet));
-			if (!rawdatapack) ERR_EXIT("malloc pack in encode_msg failed\n");
-			n = (unsigned)(n64 > step ? step : n64);
-			uint8_t *rawbuf = (uint8_t *)malloc(n + 1);
-			if (!rawbuf) ERR_EXIT("malloc failed\n");
-			if (Da_Info.bSupportRawData == 1) {
-				uint32_t data[3];
-				uint32_t t32 = offset >> 32;
-				WRITE32_LE(data, offset);
-				WRITE32_LE(data + 1, t32);
-				WRITE32_LE(data + 2, n);
-				encode_msg(io, BSL_CMD_MIDST_RAW_START, data, 12);
-				if (send_and_check(io)) {
-					if (offset) break;
-					else { free(rawbuf); free(rawdatapack); step = step0; Da_Info.bSupportRawData = 0; goto fallback_load; }
-				}
-			}
-			if (fread(rawbuf, 1, n, fi) != n)
-				ERR_EXIT("fread(load) failed\n");
-			rawdatapack->msg_type = 0;
-			rawdatapack->length = n;
-			rawdatapack->data = rawbuf;
-			rawdatapack->allow_empty_reply = 0;
-			if (is_simg) rawdatapack->timeout = 100000;
-			else rawdatapack->timeout = 15000;
-			QueuePush(&io->encoded, rawdatapack);
-			if (send_and_check(io)) break;
-			print_progress_bar(offset + n, len, time_start);
-		}
-	}
-	else {
-fallback_load:
-		for (offset = 0; (n64 = len - offset); offset += n) {
-			n = (unsigned)(n64 > step ? step : n64);
-			if (fread(io->temp_buf, 1, n, fi) != n)
-				ERR_EXIT("fread(load) failed\n");
-			if (is_simg) io->pack_timeout = 100000;
-			else io->pack_timeout = 15000;
-			encode_msg(io, BSL_CMD_MIDST_DATA, io->temp_buf, n);
-			if (send_and_check(io)) break;
-			print_progress_bar(offset + n, len, time_start);
-		}
-	}
-	fclose(fi);
-	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
-	if (!send_and_check(io)) DBG_LOG("\nWrite Part Done: %s, target: 0x%llx, written: 0x%llx\n",
-		name, (long long)len, (long long)offset);
-}
-
 void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned step) {
 	int i, j; char a;
+	io->pack_buf = malloc(0x10008);
+	if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+	io->temp_buf = io->pack_buf + 5;
 	uint8_t *buf = io->temp_buf;
 	char name[] = "w_force";
 	for (i = 0; i < io->part_count; i++) {
@@ -1453,9 +1346,12 @@ void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned st
 		else WRITE32_LE(buf + 0x48, (*(io->ptable + i)).size >> 20);
 		buf += 0x4c;
 	}
-	encode_msg(io, BSL_CMD_REPARTITION, io->temp_buf, io->part_count * 0x4c);
+	encode_msg_nocpy(io, BSL_CMD_REPARTITION, io->part_count * 0x4c);
 	if (send_and_check(io)) return; //repart failed
 	load_partition(io, name, fn, step);
+	io->pack_buf = malloc(0x10008);
+	if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+	io->temp_buf = io->pack_buf + 5;
 	buf = io->temp_buf;
 	for (i = 0; i < io->part_count; i++) {
 		memset(buf, 0, 36 * 2);
@@ -1466,7 +1362,7 @@ void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned st
 		else WRITE32_LE(buf + 0x48, (*(io->ptable + i)).size >> 20);
 		buf += 0x4c;
 	}
-	encode_msg(io, BSL_CMD_REPARTITION, io->temp_buf, io->part_count * 0x4c);
+	encode_msg_nocpy(io, BSL_CMD_REPARTITION, io->part_count * 0x4c);
 	if (!send_and_check(io)) DBG_LOG("Force Write %s Done\n", (*(io->ptable + id)).name);
 }
 
@@ -1549,26 +1445,33 @@ void load_nv_partition(spdio_t *io, const char *name,
 	for (offset = 0; offset < len; offset++) cs += mem[offset];
 	DBG_LOG("file size : 0x%zx\n", len);
 
-	struct {
+	struct pkt {
 		uint16_t name[36];
 		uint32_t size, cs;
-	} pkt = { 0 };
-	ret = copy_to_wstr(pkt.name, sizeof(pkt.name) / 2, name);
+	} *pkt_ptr;
+	io->pack_buf = malloc(88);
+	if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+	io->temp_buf = io->pack_buf + 5;
+	pkt_ptr = io->temp_buf;
+	ret = copy_to_wstr(pkt_ptr->name, 36, name);
 	if (ret) ERR_EXIT("name too long\n");
-	WRITE32_LE(&pkt.size, len);
-	WRITE32_LE(&pkt.cs, cs);
-	encode_msg(io, BSL_CMD_START_DATA, &pkt, sizeof(pkt));
+	WRITE32_LE(&pkt_ptr->size, len);
+	WRITE32_LE(&pkt_ptr->cs, cs);
+	encode_msg_nocpy(io, BSL_CMD_START_DATA, sizeof(struct pkt));
 	if (send_and_check(io)) { free(mem0); return; }
 
 	for (offset = 0; (rsz = len - offset); offset += n) {
 		n = rsz > step ? step : rsz;
+		io->pack_buf = malloc(n + 8);
+		if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+		io->temp_buf = io->pack_buf + 5;
 		memcpy(io->temp_buf, &mem[offset], n);
 		io->pack_timeout = 15000;
-		encode_msg(io, BSL_CMD_MIDST_DATA, io->temp_buf, n);
+		encode_msg_nocpy(io, BSL_CMD_MIDST_DATA, n);
 		if (send_and_check(io)) break;
 	}
 	free(mem0);
-	encode_msg(io, BSL_CMD_END_DATA, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_END_DATA, 0);
 	if (!send_and_check(io)) DBG_LOG("Write NV_Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
 }
@@ -1581,20 +1484,26 @@ void find_partition_size_new(spdio_t *io, const char *name, unsigned long long *
 	select_partition(io, name_tmp, 0x80, 0, BSL_CMD_READ_START);
 	free(name_tmp);
 	if (send_and_check(io)) {
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		return;
 	}
 
-	uint32_t data[2] = { 0x80,0 };
-	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
+	//uint32_t data[2] = { 0x80,0 };
+	io->pack_buf = malloc(16);
+	if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+	io->temp_buf = io->pack_buf + 5;
+	uint32_t *data = (uint32_t *)io->temp_buf;
+	WRITE32_LE(data, 0x80);
+	WRITE32_LE(data + 1, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_MIDST, 8);
 	recv_msg(io);
 	if (recv_type(io) == BSL_REP_READ_FLASH) {
 		ret = sscanf((char *)(io->raw_buf + 4), "size:%*[^:]: 0x%llx", offset_ptr);
 		if (ret != 1) ret = sscanf((char *)(io->raw_buf + 4), "partition %*s total size: 0x%llx", offset_ptr); // new lk
 		DBG_LOG("partition_size_device: %s, 0x%llx\n", name, *offset_ptr);
 	}
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 }
 
@@ -1634,17 +1543,23 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 
 	select_partition(io, name, 0x8, 0, BSL_CMD_READ_START);
 	if (send_and_check(io)) {
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		return 0;
 	}
 
-	uint32_t data[2] = { 0x8, 0 };
-	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
+	//uint32_t data[2] = { 0x8, 0 };
+	io->pack_buf = malloc(16);
+	if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+	io->temp_buf = io->pack_buf + 5;
+	uint32_t *data = (uint32_t *)io->temp_buf;
+	WRITE32_LE(data, 8);
+	WRITE32_LE(data + 1, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_MIDST, 8);
 	recv_msg(io);
 	if (recv_type(io) == BSL_REP_READ_FLASH) ret = 1;
 	else ret = 0;
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 	if (0 == ret || 0 == need_size) return ret;
 
@@ -1653,7 +1568,7 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 	if (send_and_check(io)) {
 		//NAND flash !!!
 		end = 10;
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		for (i = 21; i >= end;) {
 			n64 = offset + (1ll << i) - (1ll << end);
@@ -1672,21 +1587,24 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 				if (ret == BSL_REP_ACK) offset += (1ll << i);
 				i--;
 			}
-			encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+			encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 			send_and_check(io);
 		}
 		offset -= (1ll << end);
 	}
 	else {
 		for (i = 21; i >= end;) {
-			uint32_t data[3];
+			io->pack_buf = malloc(20);
+			if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+			io->temp_buf = io->pack_buf + 5;
+			uint32_t *data = (uint32_t *)io->temp_buf;
 			n64 = offset + (1ll << i) - (1ll << end);
 			WRITE32_LE(data, 4);
 			WRITE32_LE(data + 1, n64);
 			t32 = n64 >> 32;
 			WRITE32_LE(data + 2, t32);
 
-			encode_msg(io, BSL_CMD_READ_MIDST, data, sizeof(data));
+			encode_msg_nocpy(io, BSL_CMD_READ_MIDST, 12);
 			recv_msg(io);
 			ret = recv_type(io);
 			if (incrementing) {
@@ -1705,7 +1623,7 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 	}
 	if (end == 10) Da_Info.dwStorageType = 0x101;
 	DBG_LOG("partition_size_pc: %s, 0x%llx\n", name, offset);
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 	return offset;
 }
@@ -2076,17 +1994,23 @@ void select_ab(spdio_t *io) {
 
 	select_partition(io, "misc", 0x820, 0, BSL_CMD_READ_START);
 	if (send_and_check(io)) {
-		encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+		encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 		send_and_check(io);
 		selected_ab = 0;
 		return;
 	}
 
-	uint32_t data[2] = { 0x20,0x800 };
-	encode_msg(io, BSL_CMD_READ_MIDST, data, 8);
+	//uint32_t data[2] = { 0x20,0x800 };
+	io->pack_buf = malloc(16);
+	if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+	io->temp_buf = io->pack_buf + 5;
+	uint32_t *data = (uint32_t *)io->temp_buf;
+	WRITE32_LE(data, 0x20);
+	WRITE32_LE(data + 1, 0x800);
+	encode_msg_nocpy(io, BSL_CMD_READ_MIDST, 8);
 	recv_msg(io);
 	if (recv_type(io) == BSL_REP_READ_FLASH) abc = (bootloader_control *)(io->raw_buf + 4);
-	encode_msg(io, BSL_CMD_READ_END, NULL, 0);
+	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 
 	if (abc == NULL) { selected_ab = 0; return; }
@@ -2594,4 +2518,3 @@ void QueueClose(Queue *pq) {
 	WakeAllConditionVariable(&pq->not_empty);
 	LeaveCriticalSection(&pq->lock);
 }
-

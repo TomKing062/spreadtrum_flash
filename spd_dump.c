@@ -235,14 +235,14 @@ int main(int argc, char **argv) {
 	for (i = 0; ; i++) {
 		ret = recv_type(io);
 		if (ret == BSL_REP_VER) {}
-		else if (ret == BSL_REP_VERIFY_ERROR||
+		else if (ret == BSL_REP_VERIFY_ERROR ||
 			ret == BSL_REP_UNSUPPORTED_COMMAND) {
 			if (fdl1_loaded) ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n"); // when fdl1/fdl2 recv kick_msg, device won't reply next packet.
 		}
 		else {
 			if (stage != -1) {
 				io->flags &= ~FLAGS_CRC16;
-				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
+				encode_msg_nocpy(io, BSL_CMD_CONNECT, 0);
 			}
 			else encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
 			recv_msg(io);
@@ -261,11 +261,11 @@ int main(int argc, char **argv) {
 				DBG_LOG("BSL_REP_VER: ");
 				print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
 
-				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
+				encode_msg_nocpy(io, BSL_CMD_CONNECT, 0);
 				if (send_and_check(io)) exit(1);
 			}
 			else if (ret == BSL_REP_VERIFY_ERROR) {
-				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
+				encode_msg_nocpy(io, BSL_CMD_CONNECT, 0);
 				if (fdl1_loaded != 1) {
 					if (send_and_check(io)) exit(1);
 				}
@@ -275,7 +275,7 @@ int main(int argc, char **argv) {
 			if (fdl1_loaded == 1) {
 				DBG_LOG("CMD_CONNECT FDL1\n");
 				if (keep_charge) {
-					encode_msg(io, BSL_CMD_KEEP_CHARGE, NULL, 0);
+					encode_msg_nocpy(io, BSL_CMD_KEEP_CHARGE, 0);
 					if (!send_and_check(io)) DBG_LOG("KEEP_CHARGE FDL1\n");
 				}
 			}
@@ -283,7 +283,7 @@ int main(int argc, char **argv) {
 			break;
 		}
 		else if (ret == BSL_REP_UNSUPPORTED_COMMAND) {
-			encode_msg(io, BSL_CMD_DISABLE_TRANSCODE, NULL, 0);
+			encode_msg_nocpy(io, BSL_CMD_DISABLE_TRANSCODE, 0);
 			if (!send_and_check(io)) {
 				io->flags &= ~FLAGS_TRANSCODE;
 				DBG_LOG("DISABLE_TRANSCODE\n");
@@ -293,7 +293,7 @@ int main(int argc, char **argv) {
 		}
 		else if (i == 4) {
 			if (stage != -1) ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
-			else { encode_msg(io, BSL_CMD_CONNECT, NULL, 0); stage++; i = -1; }
+			else { encode_msg_nocpy(io, BSL_CMD_CONNECT, 0); stage++; i = -1; }
 		}
 	}
 
@@ -459,19 +459,28 @@ int main(int argc, char **argv) {
 					if (exec_addr_v2) {
 						size_t execsize = send_file(io, fn, addr, 0, 528, 0, 0);
 						int n, gapsize = exec_addr - addr - execsize;
-						uint8_t *buf = malloc(528);
 						for (i = 0; i < gapsize; i += n) {
 							n = gapsize - i;
 							if (n > 528) n = 528;
-							encode_msg(io, BSL_CMD_MIDST_DATA, buf, n);
+							io->pack_buf = malloc(n + 8);
+							if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+							encode_msg_nocpy(io, BSL_CMD_MIDST_DATA, n);
 							if (send_and_check(io)) exit(1);
 						}
-						free(buf);
-						buf = loadfile(execfile, &execsize, 0);
-						encode_msg(io, BSL_CMD_MIDST_DATA, buf, execsize);
+						fi = fopen(execfile, "rb");
+						if (fi) {
+							fseek(fi, 0, SEEK_END);
+							n = ftell(fi);
+							io->pack_buf = malloc(n + 8);
+							if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+							io->temp_buf = io->pack_buf + 5;
+							fseek(fi, 0, SEEK_SET);
+							execsize = fread(io->temp_buf, 1, n, fi);
+							fclose(fi);
+						}
+						encode_msg_nocpy(io, BSL_CMD_MIDST_DATA, execsize);
 						if (send_and_check(io)) exit(1);
 						free(execfile);
-						free(buf);
 					}
 					else {
 						send_file(io, fn, addr, end_data, 528, 0, 0);
@@ -480,13 +489,13 @@ int main(int argc, char **argv) {
 							free(execfile);
 						}
 						else {
-							encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
+							encode_msg_nocpy(io, BSL_CMD_EXEC_DATA, 0);
 							if (send_and_check(io)) exit(1);
 						}
 					}
 				}
 				else {
-					encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
+					encode_msg_nocpy(io, BSL_CMD_EXEC_DATA, 0);
 					if (send_and_check(io)) exit(1);
 				}
 				DBG_LOG("EXEC FDL1\n");
@@ -512,20 +521,23 @@ int main(int argc, char **argv) {
 				print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
 				if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) fdl2_executed = -1;
 
-				encode_msg(io, BSL_CMD_CONNECT, NULL, 0);
+				encode_msg_nocpy(io, BSL_CMD_CONNECT, 0);
 				if (send_and_check(io)) exit(1);
 				DBG_LOG("CMD_CONNECT FDL1\n");
 				if (baudrate) {
-					uint8_t data[4];
+					io->pack_buf = malloc(12);
+					if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+					io->temp_buf = io->pack_buf + 5;
+					uint8_t *data = io->temp_buf;
 					WRITE32_BE(data, baudrate);
-					encode_msg(io, BSL_CMD_CHANGE_BAUD, data, 4);
+					encode_msg_nocpy(io, BSL_CMD_CHANGE_BAUD, 4);
 					if (!send_and_check(io)) {
 						DBG_LOG("CHANGE_BAUD FDL1 to %d\n", baudrate);
 						call_SetProperty(io->handle, 0, 100, (LPCVOID)&baudrate);
 					}
 				}
 				if (keep_charge) {
-					encode_msg(io, BSL_CMD_KEEP_CHARGE, NULL, 0);
+					encode_msg_nocpy(io, BSL_CMD_KEEP_CHARGE, 0);
 					if (!send_and_check(io)) DBG_LOG("KEEP_CHARGE FDL1\n");
 				}
 				fdl1_loaded = 1;
@@ -542,7 +554,7 @@ int main(int argc, char **argv) {
 			else if (fdl1_loaded > 0) {
 				memset(&Da_Info, 0, sizeof(Da_Info));
 				io->pack_timeout = 15000;
-				encode_msg(io, BSL_CMD_EXEC_DATA, NULL, 0);
+				encode_msg_nocpy(io, BSL_CMD_EXEC_DATA, 0);
 				// Feature phones respond immediately,
 				// but it may take a second for a smartphone to respond.
 				recv_msg(io);
@@ -553,7 +565,7 @@ int main(int argc, char **argv) {
 				else if (ret != BSL_REP_ACK)
 					ERR_EXIT("unexpected response (0x%04x)\n", ret);
 				DBG_LOG("EXEC FDL2\n");
-				encode_msg(io, BSL_CMD_READ_FLASH_INFO, NULL, 0);
+				encode_msg_nocpy(io, BSL_CMD_READ_FLASH_INFO, 0);
 				ret = recv_msg(io);
 				if (ret) {
 					ret = recv_type(io);
@@ -563,7 +575,7 @@ int main(int argc, char **argv) {
 					// for nand_id 0x15, packet is 00 9b 00 0c 00 00 00 00 00 02 00 00 00 00 08 00
 				}
 				if (Da_Info.bDisableHDLC) {
-					encode_msg(io, BSL_CMD_DISABLE_TRANSCODE, NULL, 0);
+					encode_msg_nocpy(io, BSL_CMD_DISABLE_TRANSCODE, 0);
 					if (!send_and_check(io)) {
 						io->flags &= ~FLAGS_TRANSCODE;
 						DBG_LOG("DISABLE_TRANSCODE\n");
@@ -577,7 +589,7 @@ int main(int argc, char **argv) {
 						DBG_LOG("DISABLE_WRITE_RAW_DATA in SPRD4\n");
 					}
 					else {
-						encode_msg(io, BSL_CMD_ENABLE_RAW_DATA, NULL, 0);
+						encode_msg_nocpy(io, BSL_CMD_ENABLE_RAW_DATA, 0);
 						if (!send_and_check(io)) DBG_LOG("ENABLE_WRITE_RAW_DATA\n");
 					}
 				}
@@ -693,10 +705,13 @@ int main(int argc, char **argv) {
 			size = str_to_size(str2[3]);
 			if ((addr | size | (addr + size)) >> 32)
 				ERR_EXIT("32-bit limit reached\n");
-			uint32_t data[2];
+			io->pack_buf = malloc(16);
+			if (!io->pack_buf) ERR_EXIT("malloc failed\n");
+			io->temp_buf = io->pack_buf + 5;
+			uint32_t *data = (uint32_t *)io->temp_buf;
 			WRITE32_BE(data, addr);
 			WRITE32_BE(data + 1, size);
-			encode_msg(io, BSL_CMD_ERASE_FLASH, data, 4 * 2);
+			encode_msg_nocpy(io, BSL_CMD_ERASE_FLASH, 4 * 2);
 			if (!send_and_check(io)) DBG_LOG("Erase Flash Done: 0x%08x\n", (int)addr);
 			argc -= 3; argv += 3;
 
@@ -1071,7 +1086,7 @@ rloop:
 
 		}
 		else if (!strcmp(str2[1], "chip_uid")) {
-			encode_msg(io, BSL_CMD_READ_CHIP_UID, NULL, 0);
+			encode_msg_nocpy(io, BSL_CMD_READ_CHIP_UID, 0);
 			recv_msg(io);
 			if ((ret = recv_type(io)) != BSL_REP_READ_CHIP_UID) {
 				DBG_LOG("unexpected response (0x%04x)\n", ret); argc -= 1; argv += 1; continue;
@@ -1083,7 +1098,7 @@ rloop:
 
 		}
 		else if (!strcmp(str2[1], "disable_transcode")) {
-			encode_msg(io, BSL_CMD_DISABLE_TRANSCODE, NULL, 0);
+			encode_msg_nocpy(io, BSL_CMD_DISABLE_TRANSCODE, 0);
 			if (!send_and_check(io)) io->flags &= ~FLAGS_TRANSCODE;
 			argc -= 1; argv += 1;
 
@@ -1122,7 +1137,7 @@ rloop:
 				argc -= 1; argv += 1;
 				continue;
 			}
-			encode_msg(io, BSL_CMD_NORMAL_RESET, NULL, 0);
+			encode_msg_nocpy(io, BSL_CMD_NORMAL_RESET, 0);
 			if (!send_and_check(io)) break;
 
 		}
@@ -1138,7 +1153,7 @@ rloop:
 			strcpy(miscbuf, "boot-recovery");
 			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
 			free(miscbuf);
-			encode_msg(io, BSL_CMD_NORMAL_RESET, NULL, 0);
+			encode_msg_nocpy(io, BSL_CMD_NORMAL_RESET, 0);
 			if (!send_and_check(io)) break;
 
 		}
@@ -1155,7 +1170,7 @@ rloop:
 			strcpy(miscbuf + 0x40, "recovery\n--fastboot\n");
 			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
 			free(miscbuf);
-			encode_msg(io, BSL_CMD_NORMAL_RESET, NULL, 0);
+			encode_msg_nocpy(io, BSL_CMD_NORMAL_RESET, 0);
 			if (!send_and_check(io)) break;
 
 		}
@@ -1165,7 +1180,7 @@ rloop:
 				argc -= 1; argv += 1;
 				continue;
 			}
-			encode_msg(io, BSL_CMD_POWER_OFF, NULL, 0);
+			encode_msg_nocpy(io, BSL_CMD_POWER_OFF, 0);
 			if (!send_and_check(io)) break;
 
 		}

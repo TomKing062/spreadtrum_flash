@@ -119,7 +119,7 @@ typedef struct {
 	Packet *cur_decoded_packet;
 	Packet *last_decoded_packet;
 	int not_exit_w;
-	uint8_t *raw_buf,*temp_buf;
+	uint8_t *raw_buf, *temp_buf, *pack_buf;
 	//below for dump_part/load_part
 	HANDLE rw_hCountEvent;
 	int rw_stop, rw_error, rw_count;
@@ -200,6 +200,7 @@ spdio_t *spdio_init(int flags);
 void spdio_free(spdio_t *io);
 
 void encode_msg(spdio_t *io, int type, const void *data, size_t len);
+void encode_msg_nocpy(spdio_t *io, int type, size_t len);
 int recv_msg(spdio_t *io);
 unsigned recv_type(spdio_t *io);
 int send_and_check(spdio_t *io);
