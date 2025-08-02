@@ -814,12 +814,12 @@ int copy_from_wstr(char *d, size_t n, const uint16_t *s) {
 void select_partition(spdio_t *io, const char *name,
 	uint64_t size, int mode64, int cmd) {
 	uint32_t t32; uint64_t n64;
-	struct {
+	struct pkt {
 		uint16_t name[36];
 		uint32_t size, size_hi; uint64_t dummy;
 	} *pkt_ptr;
 	int ret;
-	pkt_ptr = io->temp_buf;
+	pkt_ptr = (struct pkt *) io->temp_buf;
 	ret = copy_to_wstr(pkt_ptr->name, 36, name);
 	if (ret) ERR_EXIT("name too long\n");
 	n64 = size;
@@ -1478,7 +1478,7 @@ void load_nv_partition(spdio_t *io, const char *name,
 		uint16_t name[36];
 		uint32_t size, cs;
 	} *pkt_ptr;
-	pkt_ptr = io->temp_buf;
+	pkt_ptr = (struct pkt *) io->temp_buf;
 	ret = copy_to_wstr(pkt_ptr->name, 36, name);
 	if (ret) ERR_EXIT("name too long\n");
 	WRITE32_LE(&pkt_ptr->size, len);
