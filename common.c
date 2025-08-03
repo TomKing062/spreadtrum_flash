@@ -1647,11 +1647,8 @@ void get_partition_info(spdio_t *io, const char *name, int need_size) {
 			io->verbose = verbose;
 			return;
 		}
-		if (i < io->part_count) {
-			strcpy(gPartInfo.name, name);
-			gPartInfo.size = (*(io->ptable + i)).size;
-		}
-		else gPartInfo.size = 0;
+		strcpy(gPartInfo.name, (*(io->ptable + i - 1)).name);
+		gPartInfo.size = (*(io->ptable + i - 1)).size;
 		io->verbose = verbose;
 		return;
 	}
@@ -1671,8 +1668,11 @@ void get_partition_info(spdio_t *io, const char *name, int need_size) {
 				break;
 			}
 		}
-		strcpy(gPartInfo.name, name);
-		gPartInfo.size = (*(io->ptable + i)).size;
+		if (i < io->part_count) {
+			strcpy(gPartInfo.name, name);
+			gPartInfo.size = (*(io->ptable + i)).size;
+		}
+		else gPartInfo.size = 0;
 		io->verbose = verbose;
 		return;
 	}
