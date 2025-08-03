@@ -678,7 +678,7 @@ int copy_from_wstr(char *d, size_t n, const uint16_t *s) {
 void select_partition(spdio_t *io, const char *name,
 	uint64_t size, int mode64, int cmd) {
 	uint32_t t32; uint64_t n64;
-	struct {
+	struct pkt {
 		uint16_t name[36];
 		uint32_t size, size_hi; uint64_t dummy;
 	} *pkt_ptr;
@@ -686,7 +686,7 @@ void select_partition(spdio_t *io, const char *name,
 	io->pack_buf = malloc(96);
 	if (!io->pack_buf) ERR_EXIT("malloc failed\n");
 	io->temp_buf = io->pack_buf + 5;
-	pkt_ptr = io->temp_buf;
+	pkt_ptr = (struct pkt *) io->temp_buf;
 	ret = copy_to_wstr(pkt_ptr->name, 36, name);
 	if (ret) ERR_EXIT("name too long\n");
 	n64 = size;
@@ -1450,7 +1450,7 @@ void load_nv_partition(spdio_t *io, const char *name,
 	io->pack_buf = malloc(88);
 	if (!io->pack_buf) ERR_EXIT("malloc failed\n");
 	io->temp_buf = io->pack_buf + 5;
-	pkt_ptr = io->temp_buf;
+	pkt_ptr = (struct pkt *) io->temp_buf;
 	ret = copy_to_wstr(pkt_ptr->name, 36, name);
 	if (ret) ERR_EXIT("name too long\n");
 	WRITE32_LE(&pkt_ptr->size, len);
@@ -2281,7 +2281,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 			usleep(100000);
 		}
 
-		uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0,0x7e };
+		uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0x82,0x7e };
 		if (!bootmode) {
 			uint8_t hello[10] = { 0x7e,0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e };
 			send_encoded_data(io, hello, sizeof(hello), 0);
@@ -2292,9 +2292,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				ret == BSL_REP_UNSUPPORTED_COMMAND) {
 				return;
 			}
-			payload[8] = 0x82;
 		}
-		else if (at) payload[8] = 0x81;
 		else payload[8] = bootmode + 0x80;
 
 		send_encoded_data(io, payload, sizeof(payload), 1);
