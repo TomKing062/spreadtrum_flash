@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Setup MSVS
-        uses: TheMrMilchmann/setup-msvc-dev@v3
+        uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
           arch: ${{ matrix.arch }}
 
