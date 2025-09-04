@@ -2171,7 +2171,7 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 	if (fseek(fi, offset, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
 	if (fwrite(mem, 1, length, fi) != length) ERR_EXIT("fwrite failed\n");
 	fclose(fi);
-	DEG_LOG("w_mem_to_part_offset: wrote to %d part(s)\n", load_partition_unify(io, gPartInfo.name, fix_fn, step));
+	DBG_LOG("w_mem_to_part_offset: wrote to %d part(s)\n", load_partition_unify(io, gPartInfo.name, fix_fn, step));
 }
 
 // 1 main written and _bak not written, 2 both written or VAB
