@@ -403,8 +403,9 @@ int main(int argc, char **argv) {
 	}
 
 	char **save_argv = NULL;
-	if (fdl1_loaded == -1) argc += 2;
-	if (fdl2_executed == -1) argc += 1;
+	if (argc < 1) argc = 1;
+	if (fdl1_loaded == -1) argc += 3;
+	else if (fdl2_executed == -1) argc += 1;
 	while (1) {
 		if (argc > 1) {
 			str2 = (char **)malloc(argc * sizeof(char *));
@@ -488,6 +489,28 @@ int main(int argc, char **argv) {
 			}
 			argc -= 2; argv += 2;
 		}
+		else if (!strcmp(str2[1], "sendloopadd")) {
+			uint32_t addr = 0;
+			if (argcount <= 2) { DBG_LOG("sendloopadd addr\n"); argc = 1; continue; }
+
+			addr = strtoul(str2[2], NULL, 0);
+			uint32_t *data = (uint32_t *)io->temp_buf;
+
+			WRITE32_BE(data, addr);
+			WRITE32_BE(data + 1, 4);
+			encode_msg_nocpy(io, BSL_CMD_START_DATA, 8);
+			if (send_and_check(io)) return;
+
+			WRITE32_BE(data, 0);
+			WRITE32_BE(data + 1, 0);
+			while (1) {
+				encode_msg_nocpy(io, BSL_CMD_MIDST_DATA, 8);
+				if (send_and_check(io)) return;
+				DBG_LOG("SEND 8 bytes to 0x%x\n", addr);
+				addr += 8;
+			}
+			argc -= 2; argv += 2;
+		}
 		else if (!strcmp(str2[1], "write_word")) {
 			uint32_t addr, data;
 			if (argc <= 3) { DBG_LOG("write_word addr VALUE(max is 0xFFFFFFFF)\n"); argc = 1; continue; }
@@ -496,7 +519,6 @@ int main(int argc, char **argv) {
 			data = strtoul(str2[3], NULL, 0);
 			send_buf(io, addr, end_data, 528, (uint8_t *)&data, 4);
 			argc -= 3; argv += 3;
-
 		}
 		else if (!strcmp(str2[1], "send") || !strcmp(str2[1], "write_flash")) {
 			const char *fn; uint32_t addr = 0; FILE *fi;
@@ -557,7 +579,7 @@ int main(int argc, char **argv) {
 				}
 			}
 			else {
-				if (fdl1_loaded != -1) {
+				if (!addr && fdl1_loaded != -1) {
 					fi = fopen(fn, "r");
 					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= argchange; argv += argchange; continue; }
 					else fclose(fi);
@@ -620,7 +642,11 @@ int main(int argc, char **argv) {
 
 				DBG_LOG("BSL_REP_VER: ");
 				print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
-				if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) fdl2_executed = -1;
+				if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) {
+					fdl2_executed = -1;
+					if (argc < 1) argc = 1;
+					argc += 1;
+				}
 
 #if FDL1_DUMP_MEM
 				//read dump mem
@@ -694,6 +720,7 @@ int main(int argc, char **argv) {
 				else if (ret != BSL_REP_ACK)
 					ERR_EXIT("unexpected response (0x%04x)\n", ret);
 				DBG_LOG("EXEC FDL2\n");
+				/*
 				encode_msg_nocpy(io, BSL_CMD_READ_FLASH_INFO, 0);
 				send_msg(io);
 				ret = recv_msg(io);
@@ -704,6 +731,7 @@ int main(int argc, char **argv) {
 					// need more samples to cover BSL_REP_READ_MCP_TYPE packet to nand_id/nand_info
 					// for nand_id 0x15, packet is 00 9b 00 0c 00 00 00 00 00 02 00 00 00 00 08 00
 				}
+				*/
 				if (Da_Info.bDisableHDLC) {
 					encode_msg_nocpy(io, BSL_CMD_DISABLE_TRANSCODE, 0);
 					if (!send_and_check(io)) {
@@ -747,6 +775,7 @@ int main(int argc, char **argv) {
 					nand_info[1] = 32 / (uint8_t)pow(2, (nand_id >> 2) & 3); //spare area size
 					nand_info[2] = 64 * (uint8_t)pow(2, (nand_id >> 4) & 3); //block size
 				}
+				io->timeout = 3000;
 				fdl2_executed = 1;
 			}
 			argc -= 1; argv += 1;

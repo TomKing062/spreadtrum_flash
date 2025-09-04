@@ -819,7 +819,7 @@ void select_partition(spdio_t *io, const char *name,
 		uint32_t size, size_hi; uint64_t dummy;
 	} *pkt_ptr;
 	int ret;
-	pkt_ptr = (struct pkt *) io->temp_buf;
+	pkt_ptr = (struct pkt *)io->temp_buf;
 	ret = copy_to_wstr(pkt_ptr->name, 36, name);
 	if (ret) ERR_EXIT("name too long\n");
 	n64 = size;
@@ -1478,7 +1478,7 @@ void load_nv_partition(spdio_t *io, const char *name,
 		uint16_t name[36];
 		uint32_t size, cs;
 	} *pkt_ptr;
-	pkt_ptr = (struct pkt *) io->temp_buf;
+	pkt_ptr = (struct pkt *)io->temp_buf;
 	ret = copy_to_wstr(pkt_ptr->name, 36, name);
 	if (ret) ERR_EXIT("name too long\n");
 	WRITE32_LE(&pkt_ptr->size, len);
@@ -2171,16 +2171,19 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 	if (fseek(fi, offset, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
 	if (fwrite(mem, 1, length, fi) != length) ERR_EXIT("fwrite failed\n");
 	fclose(fi);
-	load_partition_unify(io, gPartInfo.name, fix_fn, step);
+	DEG_LOG("w_mem_to_part_offset: wrote to %d part(s)\n", load_partition_unify(io, gPartInfo.name, fix_fn, step));
 }
 
-// 1 main written and _bak not written, 2 both written
+// 1 main written and _bak not written, 2 both written or VAB
 int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned step) {
 	char name0[36], name1[40];
 	unsigned size0, size1;
 	if (strstr(name, "fixnv1")) { load_nv_partition(io, name, fn, 4096); return 1; }
-	if (selected_ab > 0 ||
-		Da_Info.dwStorageType == 0x101 ||
+	if (selected_ab > 0) {
+		load_partition(io, name, fn, step);
+		return 2;
+	}
+	if (Da_Info.dwStorageType == 0x101 ||
 		io->part_count == 0 ||
 		strncmp(name, "splloader", 9) == 0) {
 		load_partition(io, name, fn, step);
