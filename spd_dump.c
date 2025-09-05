@@ -579,7 +579,7 @@ int main(int argc, char **argv) {
 				}
 			}
 			else {
-				if (!addr && fdl1_loaded != -1) {
+				if (addr && fdl1_loaded != -1) {
 					fi = fopen(fn, "r");
 					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= argchange; argv += argchange; continue; }
 					else fclose(fi);
