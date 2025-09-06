@@ -465,7 +465,7 @@ int recv_read_data(spdio_t *io) {
 	return len;
 }
 
-int recv_transcode(spdio_t *io, const uint8_t *buf, int buf_len, int *plen) {
+int recv_transcode(spdio_t *io, const uint8_t *buf, int buf_len, int *plen, int *is_decoded) {
 	int a, pos = 0, nread = io->raw_len, head_found = 0;
 	static int esc = 0;
 	if (*plen == 6) nread = 0;
@@ -500,6 +500,12 @@ int recv_transcode(spdio_t *io, const uint8_t *buf, int buf_len, int *plen) {
 		}
 		else {
 			if (!head_found && a == HDLC_HEADER) {
+				if (buf[pos] == buf[pos + 1]) {
+					memcpy(io->raw_buf, buf + 1, buf_len - 2);
+					*is_decoded = 1;
+					nread = buf_len - 2;
+					break;
+				}
 				head_found = 1;
 				continue;
 			}
@@ -568,10 +574,10 @@ int recv_msg_orig(spdio_t *io) {
 	memset(io->recv_buf, 0, 8);
 	while (1) {
 		if (!recv_read_data(io)) return 0;
-		if (!recv_transcode(io, io->recv_buf, io->recv_len, &plen)) return 0;
-		if (plen == io->raw_len) break;
+		int is_decoded = 0;
+		if (!recv_transcode(io, io->recv_buf, io->recv_len, &plen, &is_decoded)) return 0;
+		if (is_decoded || (plen == io->raw_len && recv_check_crc(io))) return io->raw_len;
 	}
-	return recv_check_crc(io);
 }
 
 #if !USE_LIBUSB
@@ -2356,8 +2362,8 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam) {
 #if !USE_LIBUSB
 void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
-	DWORD bytes_written, bytes_read;
-	int done = 0;
+	DWORD bytes_written;
+	int ret = 0, done = 0;
 
 	while (done != 1) {
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
@@ -2370,7 +2376,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 			usleep(100000);
 		}
 
-		uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0,0x7e };
+		uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0x82,0x7e };
 		if (!bootmode) {
 			uint8_t hello[10] = { 0x7e,0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e };
 
@@ -2379,27 +2385,14 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				DBG_LOG("send (%d):\n", (int)sizeof(hello));
 				print_mem(stderr, hello, sizeof(hello));
 			}
-			if (!(bytes_read = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout))) ERR_EXIT("read response from boot mode failed\n");
-			if (io->verbose >= 2) {
-				DBG_LOG("read (%d):\n", bytes_read);
-				print_mem(stderr, io->recv_buf, bytes_read);
-			}
-			if (io->recv_buf[2] == BSL_REP_VER ||
-				io->recv_buf[2] == BSL_REP_VERIFY_ERROR ||
-				io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
-				int chk1, chk2, a = READ16_BE(io->recv_buf + bytes_read - 3);
-				chk1 = spd_crc16(0, io->recv_buf + 1, bytes_read - 4);
-				if (a == chk1) io->flags |= FLAGS_CRC16;
-				else {
-					chk2 = spd_checksum(0, io->recv_buf + 1, bytes_read - 4, CHK_ORIG);
-					if (a == chk2) fdl1_loaded = 1;
-					else ERR_EXIT("bad checksum (0x%04x, expected 0x%04x or 0x%04x)\n", a, chk1, chk2);
-				}
+			if (!recv_msg(io)) ERR_EXIT("read response from boot mode failed\n");
+			ret = recv_type(io);
+			if (ret == BSL_REP_VER ||
+				ret == BSL_REP_VERIFY_ERROR ||
+				ret == BSL_REP_UNSUPPORTED_COMMAND) {
 				return;
 			}
-			payload[8] = 0x82;
 		}
-		else if (at) payload[8] = 0x81;
 		else payload[8] = bootmode + 0x80;
 
 		if (!(bytes_written = call_Write(io->handle, payload, sizeof(payload)))) ERR_EXIT("Error writing to serial port\n");
@@ -2407,26 +2400,15 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 			DBG_LOG("send (%d):\n", (int)sizeof(payload));
 			print_mem(stderr, payload, sizeof(payload));
 		}
-		if ((bytes_read = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout))) {
-			if (io->verbose >= 2) {
-				DBG_LOG("read (%d):\n", bytes_read);
-				print_mem(stderr, io->recv_buf, bytes_read);
-			}
-			if (io->recv_buf[2] == BSL_REP_VER ||
-				io->recv_buf[2] == BSL_REP_VERIFY_ERROR ||
-				io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
-				int chk1, chk2, a = READ16_BE(io->recv_buf + bytes_read - 3);
-				chk1 = spd_crc16(0, io->recv_buf + 1, bytes_read - 4);
-				if (a == chk1) io->flags |= FLAGS_CRC16;
-				else {
-					chk2 = spd_checksum(0, io->recv_buf + 1, bytes_read - 4, CHK_ORIG);
-					if (a == chk2) fdl1_loaded = 1;
-					else ERR_EXIT("bad checksum (0x%04x, expected 0x%04x or 0x%04x)\n", a, chk1, chk2);
-				}
-				if (io->recv_buf[2] == BSL_REP_VER) { if (io->recv_buf[9] < '4') return; }
+		if (recv_msg(io)) {
+			ret = recv_type(io);
+			if (ret == BSL_REP_VER ||
+				ret == BSL_REP_VERIFY_ERROR ||
+				ret == BSL_REP_UNSUPPORTED_COMMAND) {
+				if (ret == BSL_REP_VER) { if (io->raw_buf[8] < '4') return; }
 				else return;
 			}
-			else if (io->recv_buf[2] != 0x7e) {
+			else if (ret != 0x7e7e) {
 				uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
 				usleep(500000);
 				if ((bytes_written = call_Write(io->handle, autod, sizeof(autod)))) {
@@ -2434,27 +2416,21 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 						DBG_LOG("send (%d):\n", (int)sizeof(autod));
 						print_mem(stderr, autod, sizeof(autod));
 					}
-					if ((bytes_read = call_Read(io->handle, io->recv_buf, RECV_BUF_LEN, io->timeout))) {
-						if (io->verbose >= 2) {
-							DBG_LOG("read (%d):\n", bytes_read);
-							print_mem(stderr, io->recv_buf, bytes_read);
-						}
-						done = -1;
-					}
+					if (recv_msg(io)) done = -1;
 				}
 			}
 		}
 		for (int i = 0; ; i++) {
 			if (m_bOpened == -1) {
 				call_DisconnectChannel(io->handle);
-				io->recv_buf[2] = 0;
+				ret = 0;
 				curPort = 0;
 				m_bOpened = 0;
 				if (done == -1) done = 1;
 				break;
 			}
 			if (i >= 100) {
-				if (io->recv_buf[2] == BSL_REP_VER) return;
+				if (ret == BSL_REP_VER) return;
 				else ERR_EXIT("kick reboot timeout, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
 			}
 			usleep(100000);
@@ -2477,14 +2453,13 @@ DWORD WINAPI RcvDataThreadProc(LPVOID lpParam) {
 		case WM_RCV_CHANNEL_DATA:
 			if (io->verbose >= 2) {
 				DBG_LOG("recv (%d):\n", (int)msg.lParam);
-				print_mem(stderr, (const uint8_t *)msg.wParam, (int)msg.lParam);
+				print_mem(stderr, (uint8_t *)msg.wParam, (int)msg.lParam);
 			}
-			if (recv_transcode(io, (const uint8_t *)msg.wParam, (int)msg.lParam, &plen)) {
-				if (plen == io->raw_len) {
-					if (recv_check_crc(io)) {
-						plen = 6;
-						SetEvent(io->m_hOprEvent);
-					}
+			int is_decoded = 0;
+			if (recv_transcode(io, (const uint8_t *)msg.wParam, (int)msg.lParam, &plen, &is_decoded)) {
+				if (is_decoded || (plen == io->raw_len && recv_check_crc(io))) {
+					plen = 6;
+					SetEvent(io->m_hOprEvent);
 				}
 			}
 			call_FreeMem(io->handle, (LPVOID)msg.wParam);
@@ -2607,9 +2582,9 @@ void stopUsbEventHandle(void) {
 }
 #endif
 void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
-	int err, bytes_written, bytes_read;
+	int err, bytes_written;
 	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
-	int done = 0;
+	int ret = 0, done = 0;
 
 	while (done != 1) {
 		DBG_LOG("Waiting for boot_diag/cali_diag/dl_diag connection (%ds)\n", ms / 1000);
@@ -2623,7 +2598,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 			usleep(100000);
 		}
 
-		uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0,0x7e };
+		uint8_t payload[10] = { 0x7e,0,0,0,0,8,0,0xfe,0x82,0x7e };
 		if (!bootmode) {
 			uint8_t hello[10] = { 0x7e,0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e };
 
@@ -2634,32 +2609,14 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				DBG_LOG("send (%d):\n", (int)sizeof(hello));
 				print_mem(stderr, hello, sizeof(hello));
 			}
-			err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &bytes_read, io->timeout);
-			if (err == LIBUSB_ERROR_NO_DEVICE)
-				ERR_EXIT("connection closed\n");
-			else if (err < 0)
-				ERR_EXIT("usb_recv failed : %s\n", libusb_error_name(err));
-			if (!bytes_read) ERR_EXIT("read response from boot mode failed\n");
-			if (io->verbose >= 2) {
-				DBG_LOG("read (%d):\n", bytes_read);
-				print_mem(stderr, io->recv_buf, bytes_read);
-			}
-			if (io->recv_buf[2] == BSL_REP_VER ||
-				io->recv_buf[2] == BSL_REP_VERIFY_ERROR ||
-				io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
-				int chk1, chk2, a = READ16_BE(io->recv_buf + bytes_read - 3);
-				chk1 = spd_crc16(0, io->recv_buf + 1, bytes_read - 4);
-				if (a == chk1) io->flags |= FLAGS_CRC16;
-				else {
-					chk2 = spd_checksum(0, io->recv_buf + 1, bytes_read - 4, CHK_ORIG);
-					if (a == chk2) fdl1_loaded = 1;
-					else ERR_EXIT("bad checksum (0x%04x, expected 0x%04x or 0x%04x)\n", a, chk1, chk2);
-				}
+			if (!recv_msg(io)) ERR_EXIT("read response from boot mode failed\n");
+			ret = recv_type(io);
+			if (ret == BSL_REP_VER ||
+				ret == BSL_REP_VERIFY_ERROR ||
+				ret == BSL_REP_UNSUPPORTED_COMMAND) {
 				return;
 			}
-			payload[8] = 0x82;
 		}
-		else if (at) payload[8] = 0x81;
 		else payload[8] = bootmode + 0x80;
 
 		err = libusb_bulk_transfer(io->dev_handle, io->endp_out, payload, sizeof(payload), &bytes_written, io->timeout);
@@ -2669,31 +2626,15 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 			DBG_LOG("send (%d):\n", (int)sizeof(payload));
 			print_mem(stderr, payload, sizeof(payload));
 		}
-		err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &bytes_read, io->timeout);
-		if (err == LIBUSB_ERROR_NO_DEVICE)
-			DBG_LOG("connection closed\n");
-		else if (err < 0)
-			ERR_EXIT("usb_recv failed : %s\n", libusb_error_name(err));
-		else if (bytes_read) {
-			if (io->verbose >= 2) {
-				DBG_LOG("read (%d):\n", bytes_read);
-				print_mem(stderr, io->recv_buf, bytes_read);
-			}
-			if (io->recv_buf[2] == BSL_REP_VER ||
-				io->recv_buf[2] == BSL_REP_VERIFY_ERROR ||
-				io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
-				int chk1, chk2, a = READ16_BE(io->recv_buf + bytes_read - 3);
-				chk1 = spd_crc16(0, io->recv_buf + 1, bytes_read - 4);
-				if (a == chk1) io->flags |= FLAGS_CRC16;
-				else {
-					chk2 = spd_checksum(0, io->recv_buf + 1, bytes_read - 4, CHK_ORIG);
-					if (a == chk2) fdl1_loaded = 1;
-					else ERR_EXIT("bad checksum (0x%04x, expected 0x%04x or 0x%04x)\n", a, chk1, chk2);
-				}
-				if (io->recv_buf[2] == BSL_REP_VER) { if (io->recv_buf[9] < '4') return; }
+		if (recv_msg(io)) {
+			ret = recv_type(io);
+			if (ret == BSL_REP_VER ||
+				ret == BSL_REP_VERIFY_ERROR ||
+				ret == BSL_REP_UNSUPPORTED_COMMAND) {
+				if (ret == BSL_REP_VER) { if (io->raw_buf[8] < '4') return; }
 				else return;
 			}
-			else if (io->recv_buf[2] != 0x7e) {
+			else if (ret != 0x7e7e) {
 				uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
 				usleep(500000);
 				err = libusb_bulk_transfer(io->dev_handle, io->endp_out, autod, sizeof(autod), &bytes_written, io->timeout);
@@ -2702,32 +2643,21 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 						DBG_LOG("send (%d):\n", (int)sizeof(autod));
 						print_mem(stderr, autod, sizeof(autod));
 					}
-					err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &bytes_read, io->timeout);
-					if (err == LIBUSB_ERROR_NO_DEVICE)
-						DBG_LOG("connection closed\n");
-					else if (err < 0)
-						ERR_EXIT("usb_recv failed : %s\n", libusb_error_name(err));
-					else if (bytes_read) {
-						if (io->verbose >= 2) {
-							DBG_LOG("read (%d):\n", bytes_read);
-							print_mem(stderr, io->recv_buf, bytes_read);
-						}
-						done = -1;
-					}
+					if (recv_msg(io)) done = -1;
 				}
 			}
 		}
 		for (int i = 0; ; i++) {
 			if (m_bOpened == -1) {
 				libusb_close(io->dev_handle);
-				io->recv_buf[2] = 0;
+				ret = 0;
 				curPort = 0;
 				m_bOpened = 0;
 				if (done == -1) done = 1;
 				break;
 			}
 			if (i >= 100) {
-				if (io->recv_buf[2] == BSL_REP_VER) return;
+				if (ret == BSL_REP_VER) return;
 				else ERR_EXIT("kick reboot timeout, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
 			}
 			usleep(100000);

@@ -333,20 +333,11 @@ int main(int argc, char **argv) {
 	}
 	else encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
 	for (i = 0; ; i++) {
-		if (io->recv_buf[2] == BSL_REP_VER) {
-			ret = BSL_REP_VER;
-			memcpy(io->raw_buf + 4, io->recv_buf + 5, 5);
-			io->raw_buf[2] = 0;
-			io->raw_buf[3] = 5;
-			io->recv_buf[2] = 0;
-		}
-		else if (io->recv_buf[2] == BSL_REP_VERIFY_ERROR ||
-			io->recv_buf[2] == BSL_REP_UNSUPPORTED_COMMAND) {
-			if (!fdl1_loaded) {
-				ret = io->recv_buf[2];
-				io->recv_buf[2] = 0;
-			}
-			else ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
+		ret = recv_type(io);
+		if (ret == BSL_REP_VER) {}
+		else if (ret == BSL_REP_VERIFY_ERROR ||
+			ret == BSL_REP_UNSUPPORTED_COMMAND) {
+			if (fdl1_loaded) ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n"); // when fdl1/fdl2 recv kick_msg, device won't reply next packet.
 		}
 		else {
 			send_msg(io);
@@ -361,7 +352,7 @@ int main(int argc, char **argv) {
 				}
 				else {
 					DBG_LOG("CHECK_BAUD bootrom\n");
-					if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) { fdl1_loaded = -1; fdl2_executed = -1; }
+					if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) fdl1_loaded = -1;
 				}
 				DBG_LOG("BSL_REP_VER: ");
 				print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
@@ -404,7 +395,7 @@ int main(int argc, char **argv) {
 
 	char **save_argv = NULL;
 	if (argc < 1) argc = 1;
-	if (fdl1_loaded == -1) argc += 3;
+	if (fdl1_loaded == -1) argc += 2;
 	else if (fdl2_executed == -1) argc += 1;
 	while (1) {
 		if (argc > 1) {
@@ -499,17 +490,36 @@ int main(int argc, char **argv) {
 			WRITE32_BE(data, addr);
 			WRITE32_BE(data + 1, 4);
 			encode_msg_nocpy(io, BSL_CMD_START_DATA, 8);
-			if (send_and_check(io)) return;
+			if (send_and_check(io)) exit(1);
 
 			WRITE32_BE(data, 0);
 			WRITE32_BE(data + 1, 0);
 			while (1) {
 				encode_msg_nocpy(io, BSL_CMD_MIDST_DATA, 8);
-				if (send_and_check(io)) return;
+				if (send_and_check(io)) exit(1);
 				DBG_LOG("SEND 8 bytes to 0x%x\n", addr);
 				addr += 8;
 			}
 			argc -= 2; argv += 2;
+		}
+		else if (!strcmp(str2[1], "rawpack")) {
+			if (argcount <= 3) { DBG_LOG("rawpack type file\n"); argc = 1; continue; }
+			size_t length = 0;
+			FILE *fi = fopen(str2[3], "rb");
+			if (fi) {
+				fseek(fi, 0, SEEK_END);
+				length = ftell(fi);
+				if (length) {
+					fseek(fi, 0, SEEK_SET);
+					fread(io->temp_buf, 1, length, fi);
+				}
+				fclose(fi);
+			}
+
+			encode_msg_nocpy(io, strtoul(str2[2], NULL, 0), length);
+			if (send_and_check(io)) exit(1);
+
+			argc -= 3; argv += 3;
 		}
 		else if (!strcmp(str2[1], "write_word")) {
 			uint32_t addr, data;
