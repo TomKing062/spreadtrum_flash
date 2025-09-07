@@ -242,6 +242,12 @@ int main(int argc, char **argv) {
 #else
 #if !USE_LIBUSB
 	bListenLibusb = 0;
+	if (async) {
+		if (FALSE == CreateRecvThread(io)) {
+			io->m_dwRecvThreadID = 0;
+			DBG_LOG("Create Receive Thread Fail.\n");
+		}
+	}
 	if (at || bootmode >= 0) {
 		io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
 		if (io->hThread == NULL) return -1;
@@ -264,14 +270,6 @@ int main(int argc, char **argv) {
 		if (io->hThread == NULL) io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
 		if (io->hThread == NULL) return -1;
 	}
-#if !USE_LIBUSB
-	if (!m_bOpened && async) {
-		if (FALSE == CreateRecvThread(io)) {
-			io->m_dwRecvThreadID = 0;
-			DBG_LOG("Create Receive Thread Fail.\n");
-		}
-	}
-#endif
 #endif
 	if (!m_bOpened) {
 		DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
