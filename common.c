@@ -400,6 +400,42 @@ void encode_msg_nocpy(spdio_t *io, int type, size_t len) {
 	io->enc_len = len + 2;
 }
 
+void encode_rawpack_nocpy(spdio_t *io) {
+	uint8_t *p, *p0; unsigned chk;
+
+	size_t len = READ16_BE(io->untranscode_buf + 3);
+
+	io->send_buf = io->enc_buf;
+
+	p = p0 = io->untranscode_buf + 1;
+	p += 4;
+	p += len;
+
+	len = p - p0;
+	if (io->flags & FLAGS_CRC16)
+		chk = spd_crc16(0, p0, len);
+	else {
+		// if (len & 1) *p++ = 0;
+		chk = spd_checksum(0, p0, len, CHK_FIXZERO);
+	}
+	WRITE16_BE(p, chk); p += 2;
+
+	io->raw_len = len = p - p0;
+
+	if (io->flags & FLAGS_TRANSCODE) {
+		p = io->enc_buf;
+		*p++ = HDLC_HEADER;
+		len = spd_transcode(p, p0, len);
+	}
+	else {
+		p = io->untranscode_buf;
+		*p++ = HDLC_HEADER;
+		io->send_buf = io->untranscode_buf;
+	}
+	p[len] = HDLC_HEADER;
+	io->enc_len = len + 2;
+}
+
 int send_msg(spdio_t *io) {
 	int ret;
 	if (!io->enc_len)
@@ -2177,7 +2213,9 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 	if (fseek(fi, offset, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
 	if (fwrite(mem, 1, length, fi) != length) ERR_EXIT("fwrite failed\n");
 	fclose(fi);
-	DBG_LOG("w_mem_to_part_offset: wrote to %d part(s)\n", load_partition_unify(io, gPartInfo.name, fix_fn, step));
+	DBG_LOG("w_mem_to_part_offset: wrote to %d part(s) ", load_partition_unify(io, gPartInfo.name, fix_fn, step));
+	if (selected_ab > 0) DBG_LOG("for VAB device\n");
+	else DBG_LOG("for Non-VAB device\n");
 }
 
 // 1 main written and _bak not written, 2 both written or VAB
@@ -2185,11 +2223,8 @@ int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned
 	char name0[36], name1[40];
 	unsigned size0, size1;
 	if (strstr(name, "fixnv1")) { load_nv_partition(io, name, fn, 4096); return 1; }
-	if (selected_ab > 0) {
-		load_partition(io, name, fn, step);
-		return 2;
-	}
-	if (Da_Info.dwStorageType == 0x101 ||
+	if (selected_ab > 0 ||
+		Da_Info.dwStorageType == 0x101 ||
 		io->part_count == 0 ||
 		strncmp(name, "splloader", 9) == 0) {
 		load_partition(io, name, fn, step);

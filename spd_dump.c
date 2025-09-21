@@ -500,8 +500,8 @@ int main(int argc, char **argv) {
 			}
 			argc -= 2; argv += 2;
 		}
-		else if (!strcmp(str2[1], "rawpack")) {
-			if (argcount <= 3) { DBG_LOG("rawpack type file\n"); argc = 1; continue; }
+		else if (!strcmp(str2[1], "sendcmd")) {
+			if (argcount <= 3) { DBG_LOG("sendcmd type file\n"); argc = 1; continue; }
 			size_t length = 0;
 			FILE *fi = fopen(str2[3], "rb");
 			if (fi) {
@@ -513,11 +513,40 @@ int main(int argc, char **argv) {
 				}
 				fclose(fi);
 			}
-
 			encode_msg_nocpy(io, strtoul(str2[2], NULL, 0), length);
 			if (send_and_check(io)) exit(1);
-
 			argc -= 3; argv += 3;
+		}
+		else if (!strcmp(str2[1], "sendpack")) { //this is pack (7e type length data crc 7e)
+			if (argcount <= 2) { DBG_LOG("sendpack file\n"); argc = 1; continue; }
+			size_t length = 0;
+			FILE *fi = fopen(str2[2], "rb");
+			if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 2; argv += 2; continue; }
+			fseek(fi, 0, SEEK_END);
+			length = ftell(fi);
+			if (!length) { DBG_LOG("File is empty.\n"); argc -= 2; argv += 2; continue; }
+			fseek(fi, 0, SEEK_SET);
+			fread(io->untranscode_buf, 1, length, fi);
+			fclose(fi);
+			io->send_buf = io->untranscode_buf;
+			io->enc_len = length;
+			if (send_and_check(io)) exit(1);
+			argc -= 2; argv += 2;
+		}
+		else if (!strcmp(str2[1], "rawpack")) { //this is pack (type length data [ignored-crc]), crc and transcode will be performed
+			if (argcount <= 2) { DBG_LOG("rawpack file\n"); argc = 1; continue; }
+			size_t length = 0, len = 0;
+			FILE *fi = fopen(str2[2], "rb");
+			if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= 2; argv += 2; continue; }
+			fseek(fi, 0, SEEK_END);
+			length = ftell(fi);
+			if (!length) { DBG_LOG("File is empty.\n"); argc -= 2; argv += 2; continue; }
+			fseek(fi, 0, SEEK_SET);
+			fread(io->untranscode_buf + 1, 1, length, fi);
+			fclose(fi);
+			encode_rawpack_nocpy(io);
+			if (send_and_check(io)) exit(1);
+			argc -= 2; argv += 2;
 		}
 		else if (!strcmp(str2[1], "write_word")) {
 			uint32_t addr, data;
