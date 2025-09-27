@@ -2428,7 +2428,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				return;
 			}
 		}
-		else payload[8] = bootmode + 0x80;
+		else if (!at) payload[8] = bootmode + 0x80;
 
 		if (!(bytes_written = call_Write(io->handle, payload, sizeof(payload)))) ERR_EXIT("Error writing to serial port\n");
 		if (io->verbose >= 2) {
@@ -2652,7 +2652,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				return;
 			}
 		}
-		else payload[8] = bootmode + 0x80;
+		else if (!at) payload[8] = bootmode + 0x80;
 
 		err = libusb_bulk_transfer(io->dev_handle, io->endp_out, payload, sizeof(payload), &bytes_written, io->timeout);
 		if (err < 0)

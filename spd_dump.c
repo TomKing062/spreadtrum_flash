@@ -509,7 +509,7 @@ int main(int argc, char **argv) {
 				length = ftell(fi);
 				if (length) {
 					fseek(fi, 0, SEEK_SET);
-					fread(io->temp_buf, 1, length, fi);
+					ret = fread(io->temp_buf, 1, length, fi);
 				}
 				fclose(fi);
 			}
@@ -526,7 +526,7 @@ int main(int argc, char **argv) {
 			length = ftell(fi);
 			if (!length) { DBG_LOG("File is empty.\n"); argc -= 2; argv += 2; continue; }
 			fseek(fi, 0, SEEK_SET);
-			fread(io->untranscode_buf, 1, length, fi);
+			ret = fread(io->untranscode_buf, 1, length, fi);
 			fclose(fi);
 			io->send_buf = io->untranscode_buf;
 			io->enc_len = length;
@@ -542,7 +542,7 @@ int main(int argc, char **argv) {
 			length = ftell(fi);
 			if (!length) { DBG_LOG("File is empty.\n"); argc -= 2; argv += 2; continue; }
 			fseek(fi, 0, SEEK_SET);
-			fread(io->untranscode_buf + 1, 1, length, fi);
+			ret = fread(io->untranscode_buf + 1, 1, length, fi);
 			fclose(fi);
 			encode_rawpack_nocpy(io);
 			if (send_and_check(io)) exit(1);
