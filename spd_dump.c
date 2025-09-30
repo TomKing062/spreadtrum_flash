@@ -935,7 +935,7 @@ int main(int argc, char **argv) {
 		}
 		else if (!strcmp(str2[1], "p") || !strcmp(str2[1], "print")) {
 			if (io->part_count) {
-				DBG_LOG("  0 %36s     256KB\n", "splloader");
+				DBG_LOG("  0 %36s     4MB\n", "splloader");
 				for (i = 0; i < io->part_count; i++) {
 					DBG_LOG("%3d %36s %7lldMB\n", i + 1, (*(io->ptable + i)).name, ((*(io->ptable + i)).size >> 20));
 				}
@@ -993,7 +993,7 @@ int main(int argc, char **argv) {
 			else if (!strcmp(name, "all")) {
 				if (gpt_failed == 1) io->ptable = partition_list(io, fn_partlist, &io->part_count);
 				if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
-				dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				dump_partition(io, "splloader", 0, 4 * 1024 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				for (i = 0; i < io->part_count; i++) {
 					char dfile[40];
 					if (!strncmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
@@ -1008,7 +1008,7 @@ int main(int argc, char **argv) {
 			else if (!strcmp(name, "all_lite")) {
 				if (gpt_failed == 1) io->ptable = partition_list(io, fn_partlist, &io->part_count);
 				if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
-				dump_partition(io, "splloader", 0, 256 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				dump_partition(io, "splloader", 0, 4 * 1024 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				for (i = 0; i < io->part_count; i++) {
 					char dfile[40];
 					size_t namelen = strlen((*(io->ptable + i)).name);
@@ -1061,7 +1061,7 @@ rloop:
 			if (gpt_failed == 1) io->ptable = partition_list(io, str2[2], &io->part_count);
 			if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
 			else {
-				DBG_LOG("  0 %36s     256KB\n", "splloader");
+				DBG_LOG("  0 %36s     4MB\n", "splloader");
 				FILE *fo = my_fopen(str2[2], "wb");
 				if (!fo) ERR_EXIT("fopen failed\n");
 				fprintf(fo, "<Partitions>\n");

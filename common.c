@@ -1138,7 +1138,7 @@ int gpt_info(partition_t *ptable, const char *fn_xml, int *part_count_ptr) {
 			break;
 		}
 	}
-	DBG_LOG("  0 %36s     256KB\n", "splloader");
+	DBG_LOG("  0 %36s     4MB\n", "splloader");
 	for (int i = 0; i < n; i++) {
 		efi_entry entry = *(entries + i);
 		copy_from_wstr((*(ptable + i)).name, 36, (uint16_t *)entry.partition_name);
@@ -1223,7 +1223,7 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 		if (divisor == 10) Da_Info.dwStorageType = 0x102;
 		else Da_Info.dwStorageType = 0x103;
 		p = io->raw_buf + 4;
-		DBG_LOG("  0 %36s     256KB\n", "splloader");
+		DBG_LOG("  0 %36s     4MB\n", "splloader");
 		for (i = 0; i < n; i++, p += 0x4c) {
 			ret = copy_from_wstr((*(ptable + i)).name, 36, (uint16_t *)p);
 			if (ret) ERR_EXIT("bad partition name\n");
@@ -1708,7 +1708,7 @@ void get_partition_info(spdio_t *io, const char *name, int need_size) {
 		i = atoi(name);
 		if (i == 0) {
 			strcpy(gPartInfo.name, "splloader");
-			gPartInfo.size = 256 * 1024;
+			gPartInfo.size = 4 * 1024 * 1024;
 			io->verbose = verbose;
 			return;
 		}
@@ -1727,7 +1727,7 @@ void get_partition_info(spdio_t *io, const char *name, int need_size) {
 
 	if (!strncmp(name, "splloader", 9)) {
 		strcpy(gPartInfo.name, name);
-		gPartInfo.size = 256 * 1024;
+		gPartInfo.size = 4 * 1024 * 1024;
 		io->verbose = verbose;
 		return;
 	}
@@ -1871,7 +1871,7 @@ void dump_partitions(spdio_t *io, const char *fn, int *nand_info, unsigned step)
 
 		get_partition_info(io, partitions[i].name, 0);
 		if (!gPartInfo.size) continue;
-		if (!strncmp(partitions[i].name, "splloader", 9)) gPartInfo.size = 256 * 1024;
+		if (!strncmp(partitions[i].name, "splloader", 9)) gPartInfo.size = 4 * 1024 * 1024;
 		else if (0xffffffff == partitions[i].size) gPartInfo.size = check_partition(io, gPartInfo.name, 1);
 		else if (ubi) {
 			int block = (int)(partitions[i].size * (1024 / nand_info[2]) + partitions[i].size * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1);
