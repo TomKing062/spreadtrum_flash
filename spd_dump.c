@@ -129,6 +129,7 @@ int fdl1_loaded = 0;
 int fdl2_executed = 0;
 int selected_ab = -1;
 uint64_t fblk_size = 0;
+int g_spl_size = 0;
 int main(int argc, char **argv) {
 	spdio_t *io = NULL; int ret, i, in_quote;
 	int wait = 30 * REOPEN_FREQ;
@@ -757,18 +758,6 @@ int main(int argc, char **argv) {
 				else if (ret != BSL_REP_ACK)
 					ERR_EXIT("unexpected response (0x%04x)\n", ret);
 				DBG_LOG("EXEC FDL2\n");
-				/*
-				encode_msg_nocpy(io, BSL_CMD_READ_FLASH_INFO, 0);
-				send_msg(io);
-				ret = recv_msg(io);
-				if (ret) {
-					ret = recv_type(io);
-					if (ret != BSL_REP_READ_FLASH_INFO) DBG_LOG("unexpected response (0x%04x)\n", ret);
-					else Da_Info.dwStorageType = 0x101;
-					// need more samples to cover BSL_REP_READ_MCP_TYPE packet to nand_id/nand_info
-					// for nand_id 0x15, packet is 00 9b 00 0c 00 00 00 00 00 02 00 00 00 00 08 00
-				}
-				*/
 				if (Da_Info.bDisableHDLC) {
 					encode_msg_nocpy(io, BSL_CMD_DISABLE_TRANSCODE, 0);
 					if (!send_and_check(io)) {
@@ -776,6 +765,7 @@ int main(int argc, char **argv) {
 						DBG_LOG("DISABLE_TRANSCODE\n");
 					}
 				}
+				g_spl_size = check_partition(io, "splloader", 1);
 				if (Da_Info.bSupportRawData) {
 					blk_size = 0xf800;
 					io->ptable = partition_list(io, fn_partlist, &io->part_count);
@@ -935,7 +925,7 @@ int main(int argc, char **argv) {
 		}
 		else if (!strcmp(str2[1], "p") || !strcmp(str2[1], "print")) {
 			if (io->part_count) {
-				DBG_LOG("  0 %36s     4MB\n", "splloader");
+				DBG_LOG("  0 %36s     256KB\n", "splloader");
 				for (i = 0; i < io->part_count; i++) {
 					DBG_LOG("%3d %36s %7lldMB\n", i + 1, (*(io->ptable + i)).name, ((*(io->ptable + i)).size >> 20));
 				}
@@ -993,7 +983,7 @@ int main(int argc, char **argv) {
 			else if (!strcmp(name, "all")) {
 				if (gpt_failed == 1) io->ptable = partition_list(io, fn_partlist, &io->part_count);
 				if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
-				dump_partition(io, "splloader", 0, 4 * 1024 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				dump_partition(io, "splloader", 0, g_spl_size, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				for (i = 0; i < io->part_count; i++) {
 					char dfile[40];
 					if (!strncmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
@@ -1008,7 +998,7 @@ int main(int argc, char **argv) {
 			else if (!strcmp(name, "all_lite")) {
 				if (gpt_failed == 1) io->ptable = partition_list(io, fn_partlist, &io->part_count);
 				if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
-				dump_partition(io, "splloader", 0, 4 * 1024 * 1024, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				dump_partition(io, "splloader", 0, g_spl_size, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				for (i = 0; i < io->part_count; i++) {
 					char dfile[40];
 					size_t namelen = strlen((*(io->ptable + i)).name);
@@ -1061,7 +1051,7 @@ rloop:
 			if (gpt_failed == 1) io->ptable = partition_list(io, str2[2], &io->part_count);
 			if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
 			else {
-				DBG_LOG("  0 %36s     4MB\n", "splloader");
+				DBG_LOG("  0 %36s     256KB\n", "splloader");
 				FILE *fo = my_fopen(str2[2], "wb");
 				if (!fo) ERR_EXIT("fopen failed\n");
 				fprintf(fo, "<Partitions>\n");

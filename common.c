@@ -1,4 +1,11 @@
 #include "common.h"
+#include <signal.h>
+extern int g_spl_size;
+static int isCancel;
+void signal_handler(int sig) {
+	isCancel = 1;
+}
+
 #if !USE_LIBUSB
 DWORD curPort = 0;
 DWORD *FindPort(const char *USB_DL) {
@@ -924,6 +931,10 @@ uint64_t dump_partition(spdio_t *io,
 		if (len > 512)
 			len -= 512;
 	}
+	DBG_LOG("Start to read partition %s\n", name);
+	DBG_LOG("Type CTRL + C to cancel...\n");
+	signal(SIGINT, signal_handler);
+	isCancel = 0;
 
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
 	if (send_and_check(io)) {
@@ -939,7 +950,7 @@ uint64_t dump_partition(spdio_t *io,
 	for (offset = start; (n64 = start + len - offset); ) {
 		uint32_t *data = (uint32_t *)io->temp_buf;
 		n = (uint32_t)(n64 > step ? step : n64);
-
+		if (isCancel) break;
 		WRITE32_LE(data, n);
 		WRITE32_LE(data + 1, offset);
 		t32 = offset >> 32;
@@ -967,6 +978,7 @@ uint64_t dump_partition(spdio_t *io,
 			if (saved_size >= fblk_size) { usleep(1000000); saved_size = 0; }
 		}
 	}
+	signal(SIGINT, SIG_DFL);
 	DBG_LOG("\nRead Part Done: %s+0x%llx, target: 0x%llx, read: 0x%llx\n",
 		name, (long long)start, (long long)len,
 		(long long)(offset - start));
@@ -1138,7 +1150,7 @@ int gpt_info(partition_t *ptable, const char *fn_xml, int *part_count_ptr) {
 			break;
 		}
 	}
-	DBG_LOG("  0 %36s     4MB\n", "splloader");
+	DBG_LOG("  0 %36s     256KB\n", "splloader");
 	for (int i = 0; i < n; i++) {
 		efi_entry entry = *(entries + i);
 		copy_from_wstr((*(ptable + i)).name, 36, (uint16_t *)entry.partition_name);
@@ -1223,7 +1235,7 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 		if (divisor == 10) Da_Info.dwStorageType = 0x102;
 		else Da_Info.dwStorageType = 0x103;
 		p = io->raw_buf + 4;
-		DBG_LOG("  0 %36s     4MB\n", "splloader");
+		DBG_LOG("  0 %36s     256KB\n", "splloader");
 		for (i = 0; i < n; i++, p += 0x4c) {
 			ret = copy_from_wstr((*(ptable + i)).name, 36, (uint16_t *)p);
 			if (ret) ERR_EXIT("bad partition name\n");
@@ -1318,6 +1330,10 @@ void load_partition(spdio_t *io, const char *name,
 	len = ftello(fi);
 	fseek(fi, 0, SEEK_SET);
 	DBG_LOG("file size : 0x%llx\n", (long long)len);
+	DBG_LOG("Start to write partition %s\n", name);
+	DBG_LOG("Type CTRL + C to cancel...\n");
+	signal(SIGINT, signal_handler);
+	isCancel = 0;
 
 	mode64 = len >> 32;
 	select_partition(io, name, len, mode64, BSL_CMD_START_DATA);
@@ -1336,6 +1352,7 @@ void load_partition(spdio_t *io, const char *name,
 
 		for (offset = 0; (n64 = len - offset); offset += n) {
 			n = (unsigned)(n64 > step ? step : n64);
+			if (isCancel) break;
 			if (Da_Info.bSupportRawData == 1) {
 				uint32_t *data = (uint32_t *)io->temp_buf;
 				uint32_t t32 = offset >> 32;
@@ -1378,6 +1395,7 @@ void load_partition(spdio_t *io, const char *name,
 fallback_load:
 		for (offset = 0; (n64 = len - offset); offset += n) {
 			n = (unsigned)(n64 > step ? step : n64);
+			if (isCancel) break;
 			if (fread(io->temp_buf, 1, n, fi) != n)
 				ERR_EXIT("fread(load) failed\n");
 			encode_msg_nocpy(io, BSL_CMD_MIDST_DATA, n);
@@ -1398,6 +1416,7 @@ fallback_load:
 	}
 #endif
 	fclose(fi);
+	signal(SIGINT, SIG_DFL);
 	encode_msg_nocpy(io, BSL_CMD_END_DATA, 0);
 	if (!send_and_check(io)) DBG_LOG("\nWrite Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
@@ -1708,7 +1727,7 @@ void get_partition_info(spdio_t *io, const char *name, int need_size) {
 		i = atoi(name);
 		if (i == 0) {
 			strcpy(gPartInfo.name, "splloader");
-			gPartInfo.size = 4 * 1024 * 1024;
+			gPartInfo.size = g_spl_size;
 			io->verbose = verbose;
 			return;
 		}
@@ -1727,7 +1746,7 @@ void get_partition_info(spdio_t *io, const char *name, int need_size) {
 
 	if (!strncmp(name, "splloader", 9)) {
 		strcpy(gPartInfo.name, name);
-		gPartInfo.size = 4 * 1024 * 1024;
+		gPartInfo.size = g_spl_size;
 		io->verbose = verbose;
 		return;
 	}
@@ -1871,7 +1890,7 @@ void dump_partitions(spdio_t *io, const char *fn, int *nand_info, unsigned step)
 
 		get_partition_info(io, partitions[i].name, 0);
 		if (!gPartInfo.size) continue;
-		if (!strncmp(partitions[i].name, "splloader", 9)) gPartInfo.size = 4 * 1024 * 1024;
+		if (!strncmp(partitions[i].name, "splloader", 9)) gPartInfo.size = g_spl_size;
 		else if (0xffffffff == partitions[i].size) gPartInfo.size = check_partition(io, gPartInfo.name, 1);
 		else if (ubi) {
 			int block = (int)(partitions[i].size * (1024 / nand_info[2]) + partitions[i].size * (1024 / nand_info[2]) / (512 / nand_info[1]) + 1);
