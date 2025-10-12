@@ -912,12 +912,13 @@ void print_progress_bar(uint64_t done, uint64_t total, unsigned long long time0)
 	}
 }
 
+size_t bsp_chsize(const char *filename);
 extern uint64_t fblk_size;
 uint64_t dump_partition(spdio_t *io,
 	const char *name, uint64_t start, uint64_t len,
 	const char *fn, unsigned step) {
 	uint32_t n, nread, t32; uint64_t offset, n64, saved_size = 0;
-	int ret, mode64 = (start + len) >> 32;
+	int ret, mode64 = (start + len) >> 32, is_bsp = 0;
 	char name_tmp[36];
 
 	if (!strcmp(name, "super")) dump_partition(io, "metadata", 0, check_partition(io, "metadata", 1), "metadata.bin", step);
@@ -931,8 +932,8 @@ uint64_t dump_partition(spdio_t *io,
 		if (len > 512)
 			len -= 512;
 	}
-	DBG_LOG("Start to read partition %s\n", name);
-	DBG_LOG("Type CTRL + C to cancel...\n");
+	DBG_LOG("Start to read partition %s, ", name);
+	DBG_LOG("type CTRL + C to cancel...\n");
 	signal(SIGINT, signal_handler);
 	isCancel = 0;
 
@@ -969,6 +970,9 @@ uint64_t dump_partition(spdio_t *io,
 			ERR_EXIT("unexpected length\n");
 		if (fwrite(io->raw_buf + 4, 1, nread, fo) != nread)
 			ERR_EXIT("fwrite(dump) failed\n");
+		if (!offset) {
+			if (*(uint32_t *)(io->raw_buf + 4) == 0x42544844) is_bsp = 1;
+		}
 		print_progress_bar(offset + nread - start, len, time_start);
 		offset += nread;
 		if (n != nread) break;
@@ -986,7 +990,11 @@ uint64_t dump_partition(spdio_t *io,
 
 	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
-	return offset - start;
+	if (is_bsp && offset <= 0xffffffff) {
+		return bsp_chsize(fn);
+	}
+	else
+		return offset - start;
 }
 
 uint64_t read_pactime(spdio_t *io) {
@@ -1330,8 +1338,8 @@ void load_partition(spdio_t *io, const char *name,
 	len = ftello(fi);
 	fseek(fi, 0, SEEK_SET);
 	DBG_LOG("file size : 0x%llx\n", (long long)len);
-	DBG_LOG("Start to write partition %s\n", name);
-	DBG_LOG("Type CTRL + C to cancel...\n");
+	DBG_LOG("Start to write partition %s, ", name);
+	DBG_LOG("type CTRL + C to cancel...\n");
 	signal(SIGINT, signal_handler);
 	isCancel = 0;
 
@@ -2294,6 +2302,255 @@ void set_active(spdio_t *io, char *arg) {
 	w_mem_to_part_offset(io, "misc", 0x800, (uint8_t *)abc, sizeof(bootloader_control), 0x1000);
 }
 
+size_t bsp_chsize(const char *filename) {
+	uint8_t *mem;
+	size_t size = 0;
+	mem = loadfile(filename, &size, 0);
+	if (!mem)
+		ERR_EXIT("loadfile(\"%s\") failed\n", filename);
+	//if ((uint64_t)size >> 32)
+	//	ERR_EXIT("file too big\n");
+
+	//if (*(uint32_t *)mem != 0x42544844)
+	//	ERR_EXIT("The file is not sprd trusted firmware\n");
+	int bPostrom = 0;
+	sys_img_header *header = (sys_img_header *)mem;
+	if (header->mPostromOffset + 0x200 < size) {
+		postrom_main_header *postrom_header = (postrom_main_header *)(mem + header->mPostromOffset);
+		if (postrom_header->mImgSize && (header->mPostromOffset + 0x200 + postrom_header->mImgSize <= size)) {
+			size = header->mPostromOffset + 0x200 + postrom_header->mImgSize;
+			printf("chsize bsp image with postrom: 0x%zx\n", size);
+			bPostrom = 1;
+		}
+	}
+	if (!bPostrom) {
+		if (!header->mImgSize) {
+			DBG_LOG("broken sprd trusted firmware\n");
+			free(mem);
+			return 0;
+		}
+		sprdsignedimageheader *footer = (sprdsignedimageheader *)&mem[header->mImgSize + 0x200];
+		if (header->mImgSize + 0x200 + sizeof(sprdsignedimageheader) >= size) {
+			printf("chsize bsp image: 0x%zx\n", size);
+			free(mem);
+			return size;
+		}
+		if (footer->cert_dbg_developer_size && footer->cert_dbg_developer_offset)
+			size = footer->cert_dbg_developer_size + footer->cert_dbg_developer_offset;
+		else if (footer->priv_size && footer->priv_offset)
+			size = footer->priv_size + footer->priv_offset;
+		else if (footer->cert_size && footer->cert_offset)
+			size = footer->cert_size + footer->cert_offset;
+		else
+			size = header->mImgSize + 0x200;
+		printf("chsize bsp image: 0x%zx\n", size);
+	}
+
+
+	FILE *file = fopen("temp", "wb");
+	if (file == NULL) {
+		DBG_LOG("Failed to create the file.\n");
+		free(mem);
+		return 0;
+	}
+	size_t bytes_written = fwrite(mem, sizeof(unsigned char), size, file);
+	if (bytes_written != size) {
+		DBG_LOG("Failed to write the file.\n");
+		fclose(file);
+		free(mem);
+		return 0;
+	}
+	fclose(file);
+	free(mem);
+
+	if (remove(filename)) {
+		DBG_LOG("Failed to delete the file.\n");
+		return 0;
+	}
+	if (rename("temp", filename)) {
+		DBG_LOG("Failed to rename the file.\n");
+		return 0;
+	}
+
+	return size;
+}
+
+int dis_avb(const char *filename) {
+	uint8_t *mem;
+	size_t size = 0;
+	int mov_count = 0;
+	mem = loadfile(filename, &size, 0);
+	if (!mem)
+		ERR_EXIT("loadfile(\"%s\") failed\n", filename);
+
+	//need x32 x64 check here
+	size_t start_pos = 0, end_pos = 0, sp_pos = 0;
+
+	for (size_t i = 0; i < size - 0x200; i += 4) {
+		int count1 = 0, count2 = 0;
+		uint32_t current = *(uint32_t *)(mem + 0x200 + i);
+		current = current & 0xFF00FFFF;
+		if (current == 0xA9007BFD)
+			start_pos = i;
+		else if (current == 0x910003BF)
+			sp_pos = i;
+		else if (start_pos && current == 0xA8007BFD) {
+			end_pos = i;
+			if (sp_pos) {
+				for (size_t m = start_pos; m < end_pos; m += 4) {
+					if (*(uint32_t *)&mem[0x200 + m] >> 16 == 0x9400) {
+						count1++;
+					}
+					else if (*(uint32_t *)&mem[0x200 + m] >> 16 == 0xb400) {
+						count2++;
+					}
+				}
+				if (count1 && count2 && count1 + count2 > 2) {
+					for (size_t m = sp_pos + 4; m < end_pos; m += 4) {
+						if (*(uint16_t *)&mem[0x200 + m] == 0x3E0) {
+							*(uint32_t *)&mem[0x200 + m] = 0x52800000;
+							printf("patch mov at 0x%zx\n", 0x200 + m);
+							mov_count++;
+						}
+					}
+				}
+			}
+			start_pos = 0;
+			sp_pos = 0;
+		}
+	}
+	FILE *file = fopen("tos-noavb.bin", "wb");
+	if (file == NULL) {
+		DBG_LOG("Failed to create the file.\n");
+		free(mem);
+		return 0;
+	}
+	size_t bytes_written = fwrite(mem, sizeof(unsigned char), size, file);
+	if (bytes_written != size) {
+		DBG_LOG("Failed to write the file.\n");
+		fclose(file);
+		free(mem);
+		return 0;
+	}
+	fclose(file);
+	free(mem);
+
+	return mov_count;
+}
+
+uint8_t *sprd_get_sechdr_addr(uint8_t *buf) {
+	if (NULL == buf) {
+		return NULL;
+	}
+	sys_img_header *imghdr = (sys_img_header *)buf;
+
+	uint8_t *sechdr = buf + imghdr->mImgSize + sizeof(sys_img_header);
+	return sechdr;
+}
+
+#define MULTI_HEADER 0
+//MULTI_HEADER work for 0+0, not work for type 0+1 or 1+1
+//unsigned_img_name can be raw_payload
+int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, const char *merged_img_name) {
+	size_t signed_img_size = 0, modified_img_size = 0;
+
+	uint8_t *signed_img = loadfile(signed_img_name, &signed_img_size, 0),
+		*modified_img = loadfile(unsigned_img_name, &modified_img_size, 0),
+		*out_put_file = NULL;
+	uint8_t *signed_img0 = signed_img;
+
+	if (!signed_img || !modified_img) ERR_EXIT("load files failed\n");
+
+	size_t orig_signed_img_size = (*(uint32_t *)&signed_img[0x30]);
+
+	//if (*(uint32_t *)signed_img != 0x42544844 || !orig_signed_img_size) ERR_EXIT("The file is not sprd trusted firmware\n");
+
+	signed_img_size -= sizeof(sys_img_header);
+#if MULTI_HEADER
+	size_t signed_img_headers_size = signed_img_size - orig_signed_img_size;
+#endif
+	if (*(uint32_t *)modified_img == 0x42544844 && *(uint32_t *)&modified_img[0x30]) {
+		modified_img_size = *(uint32_t *)&modified_img[0x30];
+		modified_img += sizeof(sys_img_header);
+	}
+
+#if MULTI_HEADER
+	if (!(out_put_file = (uint8_t *)malloc(sizeof(sys_img_header) + modified_img_size + signed_img_headers_size + signed_img_size)))
+		ERR_EXIT("malloc failed\n");
+#else
+	if (!(out_put_file = (uint8_t *)malloc(sizeof(sys_img_header) + modified_img_size + signed_img_size))) ERR_EXIT("malloc failed\n");
+#endif
+
+
+	sys_img_header sys_img_hdr = *(sys_img_header *)signed_img;
+	sprdsignedimageheader *img_hdr = (sprdsignedimageheader *)sprd_get_sechdr_addr(signed_img);
+	if (img_hdr->payload_offset != sizeof(sys_img_header)) {
+		DBG_LOG("image already patched\n");
+		free(signed_img0);
+		free(modified_img);
+		return 0;
+	}
+
+	signed_img += sizeof(sys_img_header);
+
+#if MULTI_HEADER
+	memcpy(out_put_file + sizeof(sys_img_header) + modified_img_size, signed_img + orig_signed_img_size, signed_img_headers_size);
+
+	sys_img_hdr.mImgSize += modified_img_size + signed_img_headers_size;
+	img_hdr->payload_offset += modified_img_size + signed_img_headers_size;
+	img_hdr->cert_offset += modified_img_size + signed_img_headers_size;
+#else
+	sys_img_hdr.mImgSize += modified_img_size;
+	img_hdr->payload_offset += modified_img_size;
+	img_hdr->cert_offset += modified_img_size;
+#endif
+
+	memcpy(out_put_file, &sys_img_hdr, sizeof(sys_img_header));
+	memcpy(out_put_file + sizeof(sys_img_header), modified_img, modified_img_size);
+#if MULTI_HEADER
+	memcpy(out_put_file + sizeof(sys_img_header) + modified_img_size + signed_img_headers_size, signed_img, signed_img_size);
+#else
+	memcpy(out_put_file + sizeof(sys_img_header) + modified_img_size, signed_img, signed_img_size);
+#endif
+	free(signed_img0);
+	free(modified_img);
+
+	FILE *fo = fopen(merged_img_name, "wb");
+	if (fo == NULL) {
+		DBG_LOG("Failed to create the file.\n");
+		return 0;
+	}
+#if MULTI_HEADER
+	fwrite(out_put_file, 1, sizeof(sys_img_header) + modified_img_size + signed_img_headers_size + signed_img_size, fo);
+#else
+	fwrite(out_put_file, 1, sizeof(sys_img_header) + modified_img_size + signed_img_size, fo);
+#endif
+	fclose(fo);
+	return 1;
+}
+
+void dis_avb_with_cve(spdio_t *io, unsigned step) {
+	get_partition_info(io, "sml", 1);
+	if (gPartInfo.size) {
+		if (dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "sml.bin", step)) {
+			get_partition_info(io, "trustos", 1);
+			if (gPartInfo.size) {
+				if (dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "trustos.bin", step)) {
+					if (dis_avb("trustos.bin")) {
+						if (bsp_cve_2img("sml.bin", "tos-noavb.bin", "tos-noavb-bsp-bypassed.bin"))
+							load_partition_unify(io, gPartInfo.name, "tos-noavb-bsp-bypassed.bin", step);
+						else DBG_LOG("bsp_cve: failed or already patched.\n");
+					}
+					else DBG_LOG("dis_avb: failed or already patched.\n");
+				}
+				else DBG_LOG("get tos failed.\n");
+			}
+			else DBG_LOG("get tos failed.\n");
+		}
+		else DBG_LOG("get sml failed.\n");
+	}
+	else DBG_LOG("get sml failed.\n");
+}
 
 #if _WIN32
 const _TCHAR CLASS_NAME[] = _T("Sample Window Class");

@@ -1317,6 +1317,11 @@ rloop:
 			argc -= 2; argv += 2;
 
 		}
+		else if (!strcmp(str2[1], "dis_avb_V9RfBCB2Ct8c")) {
+			dis_avb_with_cve(io, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+			argc -= 1; argv += 1;
+
+		}
 		else if (!strcmp(str2[1], "reset")) {
 			if (!fdl1_loaded) {
 				DBG_LOG("FDL NOT READY\n");
