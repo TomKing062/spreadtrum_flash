@@ -2457,7 +2457,7 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 	uint8_t *signed_img = loadfile(signed_img_name, &signed_img_size, 0),
 		*modified_img = loadfile(unsigned_img_name, &modified_img_size, 0),
 		*out_put_file = NULL;
-	uint8_t *signed_img0 = signed_img;
+	uint8_t *signed_img0 = signed_img, *modified_img0 = modified_img;
 
 	if (!signed_img || !modified_img) ERR_EXIT("load files failed\n");
 
@@ -2487,7 +2487,7 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 	if (img_hdr->payload_offset != sizeof(sys_img_header)) {
 		DBG_LOG("image already patched\n");
 		free(signed_img0);
-		free(modified_img);
+		free(modified_img0);
 		return 0;
 	}
 
@@ -2513,7 +2513,7 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 	memcpy(out_put_file + sizeof(sys_img_header) + modified_img_size, signed_img, signed_img_size);
 #endif
 	free(signed_img0);
-	free(modified_img);
+	free(modified_img0);
 
 	FILE *fo = fopen(merged_img_name, "wb");
 	if (fo == NULL) {
