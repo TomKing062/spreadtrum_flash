@@ -120,6 +120,7 @@ typedef struct {
 #if USE_LIBUSB
 	libusb_device_handle *dev_handle;
 	int endp_in, endp_out;
+	int endp_in_blk, endp_out_blk;
 	int m_dwRecvThreadID;
 #else
 	ClassHandle *handle;
@@ -272,7 +273,7 @@ typedef struct
 libusb_device **FindPort(int pid);
 void startUsbEventHandle(void);
 void stopUsbEventHandle(void);
-void find_endpoints(libusb_device_handle *dev_handle, int result[2]);
+void find_endpoints(libusb_device_handle *dev_handle, int result[4]);
 void call_Initialize_libusb(spdio_t *io);
 #else
 DWORD *FindPort(const char *USB_DL);

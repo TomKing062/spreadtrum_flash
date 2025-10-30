@@ -145,8 +145,8 @@ void print_string(FILE *f, const void *src, size_t n) {
 }
 
 #if USE_LIBUSB
-void find_endpoints(libusb_device_handle *dev_handle, int result[2]) {
-	int endp_in = -1, endp_out = -1;
+void find_endpoints(libusb_device_handle *dev_handle, int result[4]) {
+	int endp_in = -1, endp_out = -1, endp_in_blk = 0, endp_out_blk = 0;
 	int i, k, err;
 	//struct libusb_device_descriptor desc;
 	struct libusb_config_descriptor *config;
@@ -175,11 +175,13 @@ void find_endpoints(libusb_device_handle *dev_handle, int result[2]) {
 				if (addr & 0x80) {
 					if (endp_in >= 0) ERR_EXIT("more than one endp_in\n");
 					endp_in = addr;
+					endp_in_blk = endpoint->wMaxPacketSize;
 					claim = 1;
 				}
 				else {
 					if (endp_out >= 0) ERR_EXIT("more than one endp_out\n");
 					endp_out = addr;
+					endp_out_blk = endpoint->wMaxPacketSize;
 					claim = 1;
 				}
 			}
@@ -209,6 +211,8 @@ void find_endpoints(libusb_device_handle *dev_handle, int result[2]) {
 
 	result[0] = endp_in;
 	result[1] = endp_out;
+	result[2] = endp_in_blk;
+	result[3] = endp_out_blk;
 }
 #endif
 
@@ -468,8 +472,11 @@ int send_msg(spdio_t *io) {
 
 #if USE_LIBUSB
 	int err = libusb_bulk_transfer(io->dev_handle, io->endp_out, io->send_buf, io->enc_len, &ret, io->timeout);
-	if (err < 0)
-		ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
+	if (err < 0) ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
+	if (!((unsigned)io->enc_len % io->endp_out_blk)) {
+		int dummy;
+		libusb_bulk_transfer(io->dev_handle, io->endp_out, NULL, 0, &dummy, io->timeout);
+	}
 #else
 	ret = call_Write(io->handle, io->send_buf, io->enc_len);
 #endif
@@ -1348,7 +1355,7 @@ void load_partition(spdio_t *io, const char *name,
 	if (send_and_check(io)) { fclose(fi); return; }
 
 	unsigned long long time_start = GetTickCount64();
-#if !USE_LIBUSB
+//#if !USE_LIBUSB
 	if (Da_Info.bSupportRawData) {
 		if (Da_Info.bSupportRawData > 1) {
 			encode_msg_nocpy(io, BSL_CMD_MIDST_RAW_START2, 0);
@@ -1378,6 +1385,10 @@ void load_partition(spdio_t *io, const char *name,
 #if USE_LIBUSB
 			int err = libusb_bulk_transfer(io->dev_handle, io->endp_out, rawbuf, n, &ret, io->timeout); //libusb will fail with rawbuf
 			if (err < 0) ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
+			if (!(n % io->endp_out_blk)) {
+				int dummy;
+				libusb_bulk_transfer(io->dev_handle, io->endp_out, NULL, 0, &dummy, io->timeout);
+			}
 #else
 			ret = call_Write(io->handle, rawbuf, n);
 #endif
@@ -1399,7 +1410,7 @@ void load_partition(spdio_t *io, const char *name,
 		free(rawbuf);
 	}
 	else {
-#endif
+//#endif
 fallback_load:
 		for (offset = 0; (n64 = len - offset); offset += n) {
 			n = (unsigned)(n64 > step ? step : n64);
@@ -1420,9 +1431,9 @@ fallback_load:
 			}
 			print_progress_bar(offset + n, len, time_start);
 		}
-#if !USE_LIBUSB
+//#if !USE_LIBUSB
 	}
-#endif
+//#endif
 	fclose(fi);
 	signal(SIGINT, SIG_DFL);
 	encode_msg_nocpy(io, BSL_CMD_END_DATA, 0);
@@ -2978,10 +2989,12 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 }
 
 void call_Initialize_libusb(spdio_t *io) {
-	int endpoints[2];
+	int endpoints[4];
 	find_endpoints(io->dev_handle, endpoints);
 	io->endp_in = endpoints[0];
 	io->endp_out = endpoints[1];
+	io->endp_in_blk = endpoints[2];
+	io->endp_out_blk = endpoints[3];
 	int ret = libusb_control_transfer(io->dev_handle, 0x21, 34, 0x601, 0, NULL, 0, io->timeout);
 	if (ret < 0) ERR_EXIT("libusb_control_transfer failed : %s\n", libusb_error_name(ret));
 	DBG_LOG("libusb_control_transfer ok\n");

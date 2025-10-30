@@ -640,8 +640,8 @@ int main(int argc, char **argv) {
 						}
 						encode_msg_nocpy(io, BSL_CMD_MIDST_DATA, execsize);
 						if (send_and_check(io)) exit(1);
-						free(execfile);
 						DBG_LOG("SEND %s to 0x%x\n", execfile, exec_addr);
+						free(execfile);
 					}
 					else {
 						send_file(io, fn, addr, end_data, 528, 0, 0);
