@@ -641,6 +641,7 @@ int main(int argc, char **argv) {
 						encode_msg_nocpy(io, BSL_CMD_MIDST_DATA, execsize);
 						if (send_and_check(io)) exit(1);
 						free(execfile);
+						DBG_LOG("SEND %s to 0x%x\n", execfile, exec_addr);
 					}
 					else {
 						send_file(io, fn, addr, end_data, 528, 0, 0);
@@ -649,6 +650,22 @@ int main(int argc, char **argv) {
 							free(execfile);
 						}
 						else {
+							size_t size = 0;
+							uint8_t *payload = loadfile(fn, &size, 0);
+							if (*(uint32_t *)payload == 0x42544844) {
+								sys_img_header *header = (sys_img_header *)payload;
+								if (header->mImgSize) {
+									if (header->mImgSize + 0x200 + sizeof(sprdsignedimageheader) < size) {
+										sprdsignedimageheader *footer = (sprdsignedimageheader *)&payload[header->mImgSize + 0x200];
+										if (footer->cert_offset) {
+											uint32_t key_size = *(uint32_t *)(payload + footer->cert_offset + 4);
+											if (key_size % 0x800)
+												DBG_LOG("bypassing BROM verification with CVE-2022-38691 (key size 0x%0X)\n", key_size);
+										}
+									}
+								}
+							}
+							free(payload);
 							encode_msg_nocpy(io, BSL_CMD_EXEC_DATA, 0);
 							if (send_and_check(io)) exit(1);
 						}
