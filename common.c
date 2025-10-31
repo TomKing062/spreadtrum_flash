@@ -768,16 +768,25 @@ size_t send_file(spdio_t *io, const char *fn,
 	return size;
 }
 
-FILE *my_fopen(const char *fn, const char *mode) {
+char *get_fix_fn(const char *fn) {
+	char *fix_fn = malloc(1024);
+	if (!fix_fn) ERR_EXIT("malloc failed\n");
 	if (savepath[0]) {
-		char fix_fn[1024];
 		char *ch;
 		if ((ch = strrchr(fn, '/'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
 		else if ((ch = strrchr(fn, '\\'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
 		else sprintf(fix_fn, "%s/%s", savepath, fn);
-		return fopen(fix_fn, mode);
+		return fix_fn;
 	}
-	else return fopen(fn, mode);
+	strcpy(fix_fn, fn);
+	return fix_fn;
+}
+
+FILE *my_fopen(const char *fn, const char *mode) {
+	char *fix_fn = get_fix_fn(fn);
+	FILE *ret = fopen(fix_fn, mode);
+	free(fix_fn);
+	return ret;
 }
 
 unsigned dump_flash(spdio_t *io,
@@ -998,10 +1007,12 @@ uint64_t dump_partition(spdio_t *io,
 	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 	if (is_bsp && offset <= 0xffffffff) {
-		return bsp_chsize(fn);
+		char *fix_fn = get_fix_fn(fn);
+		ret = bsp_chsize(fix_fn);
+		free(fix_fn);
+		return ret;
 	}
-	else
-		return offset - start;
+	return offset - start;
 }
 
 uint64_t read_pactime(spdio_t *io) {
@@ -1355,7 +1366,6 @@ void load_partition(spdio_t *io, const char *name,
 	if (send_and_check(io)) { fclose(fi); return; }
 
 	unsigned long long time_start = GetTickCount64();
-//#if !USE_LIBUSB
 	if (Da_Info.bSupportRawData) {
 		if (Da_Info.bSupportRawData > 1) {
 			encode_msg_nocpy(io, BSL_CMD_MIDST_RAW_START2, 0);
@@ -1410,7 +1420,6 @@ void load_partition(spdio_t *io, const char *name,
 		free(rawbuf);
 	}
 	else {
-//#endif
 fallback_load:
 		for (offset = 0; (n64 = len - offset); offset += n) {
 			n = (unsigned)(n64 > step ? step : n64);
@@ -1431,9 +1440,7 @@ fallback_load:
 			}
 			print_progress_bar(offset + n, len, time_start);
 		}
-//#if !USE_LIBUSB
 	}
-//#endif
 	fclose(fi);
 	signal(SIGINT, SIG_DFL);
 	encode_msg_nocpy(io, BSL_CMD_END_DATA, 0);
@@ -2256,7 +2263,6 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 	else DBG_LOG("for Non-VAB device\n");
 }
 
-// 1 main written and _bak not written, 2 both written or VAB
 int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned step) {
 	char name0[36], name1[40];
 	unsigned size0, size1;
@@ -2542,25 +2548,35 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 
 void dis_avb_with_cve(spdio_t *io, unsigned step) {
 	get_partition_info(io, "sml", 1);
-	if (gPartInfo.size) {
-		if (dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "sml.bin", step)) {
-			get_partition_info(io, "trustos", 1);
-			if (gPartInfo.size) {
-				if (dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "trustos.bin", step)) {
-					if (dis_avb("trustos.bin")) {
-						if (bsp_cve_2img("sml.bin", "tos-noavb.bin", "tos-noavb-bsp-bypassed.bin"))
-							load_partition_unify(io, gPartInfo.name, "tos-noavb-bsp-bypassed.bin", step);
-						else DBG_LOG("bsp_cve: failed or already patched.\n");
-					}
-					else DBG_LOG("dis_avb: failed or already patched.\n");
-				}
-				else DBG_LOG("get tos failed.\n");
-			}
-			else DBG_LOG("get tos failed.\n");
-		}
-		else DBG_LOG("get sml failed.\n");
+	if (!gPartInfo.size || !dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "sml.bin", step)) {
+		DBG_LOG("get sml failed.\n");
+		return;
 	}
-	else DBG_LOG("get sml failed.\n");
+
+	get_partition_info(io, "trustos", 1);
+	if (!gPartInfo.size || !dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "trustos.bin", step)) {
+		DBG_LOG("get tos failed.\n");
+		return;
+	}
+
+	char *fix_fn_tos = get_fix_fn("trustos.bin");
+	if (!dis_avb(fix_fn_tos)) {
+		DBG_LOG("dis_avb: failed or already patched.\n");
+		free(fix_fn_tos);
+		return;
+	}
+
+	char *fix_fn_sml = get_fix_fn("sml.bin");
+	if (!bsp_cve_2img(fix_fn_sml, "tos-noavb.bin", "tos-noavb-bsp-bypassed.bin")) {
+		DBG_LOG("bsp_cve: failed or already patched.\n");
+		free(fix_fn_tos);
+		free(fix_fn_sml);
+		return;
+	}
+
+	load_partition_unify(io, gPartInfo.name, "tos-noavb-bsp-bypassed.bin", step);
+	free(fix_fn_tos);
+	free(fix_fn_sml);
 }
 
 #if _WIN32
