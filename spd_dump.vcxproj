@@ -156,7 +156,7 @@
     </Link>
     <PreBuildEvent>
       <Command>for /f %%a in ('git rev-parse HEAD') do set GIT_SHA1=%%a
-for /f %%a in ('git rev-parse --abbrev-ref HEAD') do set GIT_VER=%%a
+for /f %%a in ('git rev-list HEAD --count') do set GIT_VER=%%a
 echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
@@ -179,7 +179,7 @@ copy /y Lib\Channel9.dll "$(TargetDir)"</Command>
     </Link>
     <PreBuildEvent>
       <Command>for /f %%a in ('git rev-parse HEAD') do set GIT_SHA1=%%a
-for /f %%a in ('git rev-parse --abbrev-ref HEAD') do set GIT_VER=%%a
+for /f %%a in ('git rev-list HEAD --count') do set GIT_VER=%%a
 echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
@@ -206,7 +206,7 @@ copy /y Lib\Channel9.dll "$(TargetDir)"</Command>
     </Link>
     <PreBuildEvent>
       <Command>for /f %%a in ('git rev-parse HEAD') do set GIT_SHA1=%%a
-for /f %%a in ('git rev-parse --abbrev-ref HEAD') do set GIT_VER=%%a
+for /f %%a in ('git rev-list HEAD --count') do set GIT_VER=%%a
 echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
@@ -235,7 +235,7 @@ copy /y Lib\Channel9.dll "$(TargetDir)"</Command>
     </Link>
     <PreBuildEvent>
       <Command>for /f %%a in ('git rev-parse HEAD') do set GIT_SHA1=%%a
-for /f %%a in ('git rev-parse --abbrev-ref HEAD') do set GIT_VER=%%a
+for /f %%a in ('git rev-list HEAD --count') do set GIT_VER=%%a
 echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
@@ -259,7 +259,7 @@ echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </Link>
     <PreBuildEvent>
       <Command>for /f %%a in ('git rev-parse HEAD') do set GIT_SHA1=%%a
-for /f %%a in ('git rev-parse --abbrev-ref HEAD') do set GIT_VER=%%a
+for /f %%a in ('git rev-list HEAD --count') do set GIT_VER=%%a
 echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
@@ -287,7 +287,7 @@ echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </Link>
     <PreBuildEvent>
       <Command>for /f %%a in ('git rev-parse HEAD') do set GIT_SHA1=%%a
-for /f %%a in ('git rev-parse --abbrev-ref HEAD') do set GIT_VER=%%a
+for /f %%a in ('git rev-list HEAD --count') do set GIT_VER=%%a
 echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
