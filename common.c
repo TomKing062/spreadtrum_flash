@@ -2401,7 +2401,7 @@ int dis_avb(const char *filename) {
 		ERR_EXIT("loadfile(\"%s\") failed\n", filename);
 
 	//need x32 x64 check here
-	size_t start_pos = 0, end_pos = 0, sp_pos = 0;
+	size_t start_pos = 0, end_pos = 0, sp_pos = 0, last_pos = 0;
 
 	for (size_t i = 0; i < size - 0x200; i += 4) {
 		int count1 = 0, count2 = 0;
@@ -2425,8 +2425,14 @@ int dis_avb(const char *filename) {
 				if (count1 && count2 && count1 + count2 > 2) {
 					for (size_t m = sp_pos + 4; m < end_pos; m += 4) {
 						if (*(uint16_t *)&mem[0x200 + m] == 0x3E0) {
-							*(uint32_t *)&mem[0x200 + m] = 0x52800000;
-							printf("patch mov at 0x%zx\n", 0x200 + m);
+							//*(uint32_t *)&mem[0x200 + m] = 0x52800000;
+							if (*(uint32_t *)&mem[0x200 + m] == 0x52800000) {
+								DBG_LOG("dis_avb: patched!!!\n");
+								free(mem);
+								return 0;
+							}
+							DBG_LOG("detected mov at 0x%zx\n", 0x200 + m);
+							last_pos = m;
 							mov_count++;
 						}
 					}
@@ -2436,6 +2442,12 @@ int dis_avb(const char *filename) {
 			sp_pos = 0;
 		}
 	}
+	if (mov_count < 2) {
+		DBG_LOG("dis_avb: skip saving!!!\n");
+		free(mem);
+		return 0;
+	}
+	*(uint32_t *)&mem[0x200 + last_pos] = 0x52800000;
 	FILE *file = fopen("tos-noavb.bin", "wb");
 	if (file == NULL) {
 		DBG_LOG("Failed to create the file.\n");

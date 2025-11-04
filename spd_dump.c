@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
 	io->handle = createClass();
 	call_Initialize(io->handle);
 #endif
-	DBG_LOG("branch:%s, sha1:%s\n", GIT_VER, GIT_SHA1);
+	DBG_LOG("ver:%s, sha1:%s\n", GIT_VER, GIT_SHA1);
 	sprintf(fn_partlist, "partition_%lld.xml", (long long)time(NULL));
 	while (argc > 1) {
 		if (!strcmp(argv[1], "--wait")) {
@@ -383,6 +383,7 @@ int main(int argc, char **argv) {
 				io->flags &= ~FLAGS_TRANSCODE;
 				DBG_LOG("DISABLE_TRANSCODE\n");
 			}
+			g_spl_size = check_partition(io, "splloader", 1);
 			fdl2_executed = 1;
 			break;
 		}
@@ -1339,14 +1340,16 @@ rloop:
 			argc -= 1; argv += 1;
 
 		}
-		else if (!strcmp(str2[1], "reset")) {
-			if (!fdl1_loaded) {
-				DBG_LOG("FDL NOT READY\n");
-				argc -= 1; argv += 1;
-				continue;
+		else if (!strcmp(str2[1], "dis_avb_ex_V9RfBCB2Ct8c")) {
+			if (argcount <= 3) { DBG_LOG("dis_avb_ex sml_or_teecfg tos\n"); argc = 1; continue; }
+			char *fn_tos = NULL;
+			if (dis_avb(str2[3])) fn_tos = "tos-noavb.bin";
+			else fn_tos = str2[3];
+			if (!bsp_cve_2img(str2[2], fn_tos, "tos-noavb-bsp-bypassed.bin")) {
+				DBG_LOG("bsp_cve: failed or already patched.\n");
+				argc -= 3; argv += 3; continue;
 			}
-			encode_msg_nocpy(io, BSL_CMD_NORMAL_RESET, 0);
-			if (!send_and_check(io)) break;
+			argc -= 3; argv += 3;
 
 		}
 		else if (!strcmp(str2[1], "reboot-recovery")) {
@@ -1378,6 +1381,16 @@ rloop:
 			strcpy(miscbuf + 0x40, "recovery\n--fastboot\n");
 			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
 			free(miscbuf);
+			encode_msg_nocpy(io, BSL_CMD_NORMAL_RESET, 0);
+			if (!send_and_check(io)) break;
+
+		}
+		else if (!strcmp(str2[1], "reset") || !strncmp(str2[1], "reboot", 6)) {
+			if (!fdl1_loaded) {
+				DBG_LOG("FDL NOT READY\n");
+				argc -= 1; argv += 1;
+				continue;
+			}
 			encode_msg_nocpy(io, BSL_CMD_NORMAL_RESET, 0);
 			if (!send_and_check(io)) break;
 
