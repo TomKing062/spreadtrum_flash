@@ -983,7 +983,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(str2[1], "r")) {
 			const char *name = str2[2];
 			int loop_count = 0, in_loop = 0;
-			const char *list[] = { "vbmeta", "splloader", "uboot", "sml", "trustos", "teecfg", "boot", "recovery" };
+			const char *list[] = { "vbmeta", "splloader", "uboot", "sml", "trustos", "teecfg", "boot", "recovery", "init_boot" };
 			if (argcount <= 2) { DBG_LOG("r all/all_lite/part_name/part_id\n"); argc = 1; continue; }
 			if (!strcmp(name, "preset_modem")) {
 				if (gpt_failed == 1) io->ptable = partition_list(io, fn_partlist, &io->part_count);
@@ -1343,12 +1343,14 @@ rloop:
 		else if (!strcmp(str2[1], "dis_avb_ex_V9RfBCB2Ct8c")) {
 			if (argcount <= 3) { DBG_LOG("dis_avb_ex sml_or_teecfg tos\n"); argc = 1; continue; }
 			char *fn_tos = NULL;
-			if (dis_avb(str2[3])) fn_tos = "tos-noavb.bin";
-			else fn_tos = str2[3];
-			if (!bsp_cve_2img(str2[2], fn_tos, "tos-noavb-bsp-bypassed.bin")) {
-				DBG_LOG("bsp_cve: failed or already patched.\n");
+			if (!bsp_chsize(str2[2])) {
+				DBG_LOG("sml_or_teecfg chsize error.\n");
 				argc -= 3; argv += 3; continue;
 			}
+			if (dis_avb(str2[3])) fn_tos = "tos-noavb.bin";
+			else fn_tos = str2[3];
+			if (!bsp_cve_2img(str2[2], fn_tos, "tos-noavb-bsp-bypassed.bin"))
+				DBG_LOG("bsp_cve: failed or already patched.\n");
 			argc -= 3; argv += 3;
 
 		}

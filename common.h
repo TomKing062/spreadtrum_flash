@@ -323,6 +323,7 @@ void dm_disable(spdio_t *io, unsigned step);
 void dm_enable(spdio_t *io, unsigned step);
 void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t *mem, size_t length, unsigned step);
 void set_active(spdio_t *io, char *arg);
+size_t bsp_chsize(const char *filename);
 int dis_avb(const char *filename);
 void dis_avb_with_cve(spdio_t *io, unsigned step);
 int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, const char *merged_img_name);
