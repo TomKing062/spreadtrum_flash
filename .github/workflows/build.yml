@@ -19,7 +19,7 @@ jobs:
         config: [Release, CustDebug]
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Setup MSVS
         uses: TheMrMilchmann/setup-msvc-dev@v4
@@ -51,7 +51,7 @@ jobs:
         run: echo "RELEASE_TAG=stable_$(TZ='Asia/Shanghai' date +'%Y%m%d_%H%M')" >> $GITHUB_ENV
 
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           path: stable
 
