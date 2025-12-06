@@ -327,3 +327,4 @@ size_t bsp_chsize(const char *filename);
 int dis_avb(const char *filename);
 void dis_avb_with_cve(spdio_t *io, unsigned step);
 int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, const char *merged_img_name);
+void get_nvlist(char *fn);

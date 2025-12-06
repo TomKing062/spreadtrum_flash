@@ -1,5 +1,6 @@
 #include "common.h"
 #include <signal.h>
+#include <libxml/parser.h>
 extern int g_spl_size;
 static int isCancel;
 void signal_handler(int sig) {
@@ -2335,7 +2336,7 @@ size_t bsp_chsize(const char *filename) {
 		postrom_main_header *postrom_header = (postrom_main_header *)(mem + header->mPostromOffset);
 		if (postrom_header->mImgSize && (header->mPostromOffset + 0x200 + postrom_header->mImgSize <= size)) {
 			size = header->mPostromOffset + 0x200 + postrom_header->mImgSize;
-			printf("chsize bsp image with postrom: 0x%zx\n", size);
+			DBG_LOG("chsize bsp image with postrom: 0x%zx\n", size);
 			bPostrom = 1;
 		}
 	}
@@ -2347,7 +2348,7 @@ size_t bsp_chsize(const char *filename) {
 		}
 		sprdsignedimageheader *footer = (sprdsignedimageheader *)&mem[header->mImgSize + 0x200];
 		if (header->mImgSize + 0x200 + sizeof(sprdsignedimageheader) >= size) {
-			printf("chsize bsp image: 0x%zx\n", size);
+			DBG_LOG("chsize bsp image: 0x%zx\n", size);
 			free(mem);
 			return size;
 		}
@@ -2359,7 +2360,7 @@ size_t bsp_chsize(const char *filename) {
 			size = footer->cert_size + footer->cert_offset;
 		else
 			size = header->mImgSize + 0x200;
-		printf("chsize bsp image: 0x%zx\n", size);
+		DBG_LOG("chsize bsp image: 0x%zx\n", size);
 	}
 
 
@@ -2439,7 +2440,7 @@ int dis_avb(const char *filename) {
 							}
 						}
 						if (count1 && count2 && count1 + count2 > 2) {
-							printf("detected mov at 0x%zx\n", i - 4);
+							DBG_LOG("detected mov at 0x%zx\n", i - 4);
 							last_pos = i - 4;
 							mov_count++;
 						}
@@ -2449,7 +2450,7 @@ int dis_avb(const char *filename) {
 		}
 	}
 	if (mov_count < 2 || mov_count > 3) {
-		printf("dis_avb: skip saving!!!\n");
+		DBG_LOG("dis_avb: skip saving!!!\n");
 		free(mem);
 		return 0;
 	}
@@ -2596,6 +2597,44 @@ void dis_avb_with_cve(spdio_t *io, unsigned step) {
 	free(fix_fn_tos);
 	free(fix_fn_sml);
 }
+
+int found_NVItem = 0;
+void get_nvlist_it(xmlNode *node) {
+	if (node->type == XML_ELEMENT_NODE && xmlStrEqual(node->name, (const xmlChar *)"NVItem")) {
+		found_NVItem = 1;
+		xmlNode *NVItem_node = node;
+		do {
+			for (xmlNode *cur = NVItem_node->children; cur != NULL; cur = cur->next) {
+				if (xmlStrcmp(cur->name, (const xmlChar *)"ID") == 0) {
+					xmlChar *id = xmlNodeGetContent(cur);
+					if (id) {
+						DBG_LOG("ID = %s\n", id);
+						xmlFree(id);
+					}
+					break;
+				}
+			}
+			NVItem_node = NVItem_node->next;
+		} while (NVItem_node != NULL);
+		return;
+	}
+	for (xmlNode *cur = node->children; cur != NULL; cur = cur->next) {
+		get_nvlist_it(cur);
+		if (found_NVItem) return;
+	}
+}
+
+void get_nvlist(char *fn) {
+	xmlDoc *doc;
+	xmlNode *root;
+	doc = xmlReadFile(fn, NULL, 0);
+	if (doc == NULL) ERR_EXIT("Failed to parse the XML file\n");
+	found_NVItem = 0;
+	root = xmlDocGetRootElement(doc);
+	get_nvlist_it(root);
+	xmlFreeDoc(doc);
+}
+
 
 #if _WIN32
 const _TCHAR CLASS_NAME[] = _T("Sample Window Class");
@@ -2791,7 +2830,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 			}
 			usleep(100000);
 		}
-		if (at != 0 && bootmode != 2) done = 1;
+		if (at == 0 && bootmode != 0 && bootmode != 2) done = 1;
 	}
 }
 
@@ -3018,7 +3057,7 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 			}
 			usleep(100000);
 		}
-		if (at != 0 && bootmode != 2) done = 1;
+		if (at == 0 && bootmode != 0 && bootmode != 2) done = 1;
 	}
 }
 

@@ -1354,6 +1354,22 @@ rloop:
 			argc -= 3; argv += 3;
 
 		}
+		else if (!strcmp(str2[1], "nvcfg_test")) {
+			if (argcount <= 2) { DBG_LOG("nvcfg_test cfg\n"); argc = 1; continue; }
+			get_nvlist(str2[2]);
+			argc -= 2; argv += 2;
+
+		}
+		else if (!strcmp(str2[1], "mergenv")) {
+			if (argcount <= 3) { DBG_LOG("mergenv cfg new_nv\n"); argc = 1; continue; }
+			argc -= 3; argv += 3;
+
+		}
+		else if (!strcmp(str2[1], "mergenv_ex")) {
+			if (argcount <= 3) { DBG_LOG("mergenv_ex cfg new_nv merged_nv\n"); argc = 1; continue; }
+			argc -= 4; argv += 4;
+
+		}
 		else if (!strcmp(str2[1], "reboot-recovery")) {
 			if (!fdl1_loaded) {
 				DBG_LOG("FDL NOT READY\n");
