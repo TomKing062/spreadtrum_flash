@@ -44,6 +44,9 @@
     <ClInclude Include="GITVER.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="Lib\iconv.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="Lib\libusb-1.0\libusb.h">
       <Filter>头文件</Filter>
     </ClInclude>

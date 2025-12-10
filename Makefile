@@ -1,8 +1,8 @@
 
 LIBUSB = 1
-CFLAGS = -O2 -Wall -Wextra -std=c99 -pedantic -Wno-unused
+CFLAGS = -O2 -Wall -Wextra -std=c99 -pedantic -Wno-unused -I/usr/include/libxml2 -L/usr/lib
 CFLAGS += -DUSE_LIBUSB=$(LIBUSB)
-LIBS = -lm -lpthread
+LIBS = -lm -lpthread -lxml2 -lz -liconv
 APPNAME = spd_dump
 
 ifeq ($(LIBUSB), 1)

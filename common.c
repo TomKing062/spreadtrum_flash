@@ -2431,7 +2431,7 @@ int dis_avb(const char *filename) {
 					if (*(uint16_t *)&mem[i - 4] == 0x3E0 && *(uint8_t *)&mem[i - 7] == 0x3) {
 						if (start_pos > i && last_start_pos)
 							start_pos = last_start_pos;
-						for (int m = start_pos; m < i; m += 4) {
+						for (size_t m = start_pos; m < i; m += 4) {
 							if (*(uint32_t *)&mem[m] >> 16 == 0x9400) {
 								count1++;
 							}
@@ -2598,6 +2598,67 @@ void dis_avb_with_cve(spdio_t *io, unsigned step) {
 	free(fix_fn_sml);
 }
 
+int nvid_list[0x10000] = { 0 };
+NVEntry nvid_list_offset[0x10000] = { 0 };
+
+void merge_nv(const uint8_t *a, size_t a_size, const uint8_t *b, size_t b_size, uint8_t *c, size_t *c_size) {
+	size_t pos = 4;
+	if (*(uint32_t *)a == 0x4e56) pos += 0x200;
+	while (pos + 4 <= a_size) {
+		uint16_t type = *(uint16_t *)(a + pos);
+		uint16_t length = *(uint16_t *)(a + pos + 2);
+		pos += 4;
+		if (pos + length > a_size) break;
+		nvid_list_offset[type].length = length;
+		nvid_list_offset[type].offset = pos;
+		nvid_list_offset[type].saved = 0;
+		pos += length;
+
+		uint32_t doffset = ((pos + 3) & 0xFFFFFFFC) - pos;
+		pos += doffset;
+		if (*(uint16_t *)(a + pos) == 0xffff) break;
+	}
+
+	uint8_t *c_ptr = c;
+	pos = 4;
+	if (*(uint32_t *)b == 0x4e56) pos += 0x200;
+	memcpy(c_ptr, b + pos - 4, 4);
+	c_ptr += 4;
+	while (pos + 4 <= b_size) {
+		uint16_t type = *(uint16_t *)(b + pos);
+		uint16_t length = *(uint16_t *)(b + pos + 2);
+		pos += 4;
+		if (pos + length > b_size) break;
+		if (nvid_list[type]) {
+			*(uint16_t *)c_ptr = type;
+			*(uint16_t *)(c_ptr + 2) = nvid_list_offset[type].length;
+			memcpy(c_ptr + 4, a + nvid_list_offset[type].offset, nvid_list_offset[type].length);
+			c_ptr += 4 + nvid_list_offset[type].length;
+			nvid_list_offset[type].saved = 1;
+		}
+		else {
+			memcpy(c_ptr, b + pos - 4, 4 + length);
+			c_ptr += 4 + length;
+		}
+		pos += length;
+
+		uint32_t doffset = ((pos + 3) & 0xFFFFFFFC) - pos;
+		memcpy(c_ptr, b + pos, doffset);
+		pos += doffset;
+		c_ptr += doffset;
+		if (*(uint16_t *)(b + pos) == 0xffff) break;
+	}
+	for (int i = 0; i < 0x10000; i++) {
+		if (nvid_list_offset[i].length && nvid_list_offset[i].saved == 0) {
+			*(uint16_t *)c_ptr = i;
+			*(uint16_t *)(c_ptr + 2) = nvid_list_offset[i].length;
+			memcpy(c_ptr + 4, a + nvid_list_offset[i].offset, nvid_list_offset[i].length);
+			c_ptr += 4 + nvid_list_offset[i].length;
+		}
+	}
+	*c_size = c_ptr - c;
+}
+
 int found_NVItem = 0;
 void get_nvlist_it(xmlNode *node) {
 	if (node->type == XML_ELEMENT_NODE && xmlStrEqual(node->name, (const xmlChar *)"NVItem")) {
@@ -2606,10 +2667,13 @@ void get_nvlist_it(xmlNode *node) {
 		do {
 			for (xmlNode *cur = NVItem_node->children; cur != NULL; cur = cur->next) {
 				if (xmlStrcmp(cur->name, (const xmlChar *)"ID") == 0) {
-					xmlChar *id = xmlNodeGetContent(cur);
-					if (id) {
-						DBG_LOG("ID = %s\n", id);
-						xmlFree(id);
+					xmlChar *id_str = xmlNodeGetContent(cur);
+					if (id_str) {
+						long id = strtol((const char *)id_str, NULL, 0);
+						if (id < 0x10000) {
+							nvid_list[id] = 1;
+						}
+						xmlFree(id_str);
 					}
 					break;
 				}
@@ -2624,17 +2688,48 @@ void get_nvlist_it(xmlNode *node) {
 	}
 }
 
-void get_nvlist(char *fn) {
+int get_nvlist_xml(char *fn) {
 	xmlDoc *doc;
 	xmlNode *root;
 	doc = xmlReadFile(fn, NULL, 0);
-	if (doc == NULL) ERR_EXIT("Failed to parse the XML file\n");
+	if (doc == NULL) return 0;;
 	found_NVItem = 0;
 	root = xmlDocGetRootElement(doc);
 	get_nvlist_it(root);
+	nvid_list[5] = 1;
+	nvid_list[0x179] = 1;
+	nvid_list[0x186] = 1;
+	nvid_list[0x1e4] = 1;
+	nvid_list[2] = 1;
+	nvid_list[0x516] = 1;
+	nvid_list[0x12d] = 1;
+	nvid_list[0x9c4] = 1;
 	xmlFreeDoc(doc);
+	return 1;
 }
 
+int get_nvlist_cfg(char *fn) {
+	char line[512];
+	unsigned int id = 0;
+	FILE *cfg_fd;
+
+	if (!(cfg_fd = fopen(fn, "rb"))) return 0;
+	while (fgets(line, sizeof(line), cfg_fd)) {
+		if (line[0] == '#' || line[0] == '\0') continue;
+		if (-1 == sscanf(line, "%*s %x", &id)) continue;
+		nvid_list[id] = 1;
+	}
+	fclose(cfg_fd);
+	nvid_list[5] = 1;
+	nvid_list[0x179] = 1;
+	nvid_list[0x186] = 1;
+	nvid_list[0x1e4] = 1;
+	nvid_list[2] = 1;
+	nvid_list[0x516] = 1;
+	nvid_list[0x12d] = 1;
+	nvid_list[0x9c4] = 1;
+	return 1;
+}
 
 #if _WIN32
 const _TCHAR CLASS_NAME[] = _T("Sample Window Class");

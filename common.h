@@ -116,6 +116,12 @@ typedef struct {
 } partition_t;
 
 typedef struct {
+	uint16_t length;
+	size_t offset;
+	int saved;
+} NVEntry;
+
+typedef struct {
 	uint8_t *raw_buf, *enc_buf, *recv_buf, *temp_buf, *untranscode_buf, *send_buf;
 #if USE_LIBUSB
 	libusb_device_handle *dev_handle;
@@ -327,4 +333,6 @@ size_t bsp_chsize(const char *filename);
 int dis_avb(const char *filename);
 void dis_avb_with_cve(spdio_t *io, unsigned step);
 int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, const char *merged_img_name);
-void get_nvlist(char *fn);
+int get_nvlist_xml(char *fn);
+int get_nvlist_cfg(char *fn);
+void merge_nv(const uint8_t *a, size_t a_size, const uint8_t *b, size_t b_size, uint8_t *c, size_t *c_size);

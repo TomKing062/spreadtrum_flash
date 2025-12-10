@@ -36,6 +36,7 @@
     <ClInclude Include="BMPlatform.h" />
     <ClInclude Include="common.h" />
     <ClInclude Include="GITVER.h" />
+    <ClInclude Include="Lib\iconv.h" />
     <ClInclude Include="Lib\libusb-1.0\libusb.h" />
     <ClInclude Include="Lib\libxml\parser.h" />
     <ClInclude Include="spd_cmd.h" />
@@ -154,7 +155,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>setupapi.lib;libxml2_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>setupapi.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PreBuildEvent>
@@ -165,9 +166,7 @@ echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
       <Command>copy /y Lib\Channel_Debug.ini "$(TargetDir)\Channel.ini"
-copy /y Lib\Channel9.dll "$(TargetDir)"
-copy /y Lib\libiconv_$(Platform).dll "$(TargetDir)\libiconv.dll"
-copy /y Lib\libxml2_$(Platform).dll "$(TargetDir)\libxml2.dll"</Command>
+copy /y Lib\Channel9.dll "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -181,7 +180,7 @@ copy /y Lib\libxml2_$(Platform).dll "$(TargetDir)\libxml2.dll"</Command>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>setupapi.lib;libxml2_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>setupapi.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PreBuildEvent>
@@ -192,9 +191,7 @@ echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
       <Command>copy /y Lib\Channel_Debug.ini "$(TargetDir)\Channel.ini"
-copy /y Lib\Channel9.dll "$(TargetDir)"
-copy /y Lib\libiconv_$(Platform).dll "$(TargetDir)\libiconv.dll"
-copy /y Lib\libxml2_$(Platform).dll "$(TargetDir)\libxml2.dll"</Command>
+copy /y Lib\Channel9.dll "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -212,7 +209,7 @@ copy /y Lib\libxml2_$(Platform).dll "$(TargetDir)\libxml2.dll"</Command>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>setupapi.lib;libxml2_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>setupapi.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PreBuildEvent>
@@ -223,9 +220,7 @@ echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
       <Command>copy /y Lib\Channel.ini "$(TargetDir)"
-copy /y Lib\Channel9.dll "$(TargetDir)"
-copy /y Lib\libiconv_$(Platform).dll "$(TargetDir)\libiconv.dll"
-copy /y Lib\libxml2_$(Platform).dll "$(TargetDir)\libxml2.dll"</Command>
+copy /y Lib\Channel9.dll "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='CustDebug|x64'">
@@ -243,7 +238,7 @@ copy /y Lib\libxml2_$(Platform).dll "$(TargetDir)\libxml2.dll"</Command>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>libusb-1.0.lib;libxml2_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libusb-1.0.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PreBuildEvent>
@@ -253,9 +248,7 @@ echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
-      <Command>copy /y Lib\libusb-1.0.dll "$(TargetDir)"
-copy /y Lib\libiconv_$(Platform).dll "$(TargetDir)\libiconv.dll"
-copy /y Lib\libxml2_$(Platform).dll "$(TargetDir)\libxml2.dll"</Command>
+      <Command>copy /y Lib\libusb-1.0.dll "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -269,7 +262,7 @@ copy /y Lib\libxml2_$(Platform).dll "$(TargetDir)\libxml2.dll"</Command>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>libusb-1.0.lib;libxml2_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libusb-1.0.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PreBuildEvent>
@@ -279,9 +272,7 @@ echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
-      <Command>copy /y Lib\libusb-1.0.dll "$(TargetDir)"
-copy /y Lib\libiconv_$(Platform).dll "$(TargetDir)\libiconv.dll"
-copy /y Lib\libxml2_$(Platform).dll "$(TargetDir)\libxml2.dll"</Command>
+      <Command>copy /y Lib\libusb-1.0.dll "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -299,7 +290,7 @@ copy /y Lib\libxml2_$(Platform).dll "$(TargetDir)\libxml2.dll"</Command>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>libusb-1.0.lib;libxml2_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libusb-1.0.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PreBuildEvent>
@@ -309,9 +300,7 @@ echo #define GIT_VER "%GIT_VER%"&gt;"$(ProjectDir)GITVER.h"
 echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
-      <Command>copy /y Lib\libusb-1.0.dll "$(TargetDir)"
-copy /y Lib\libiconv_$(Platform).dll "$(TargetDir)\libiconv.dll"
-copy /y Lib\libxml2_$(Platform).dll "$(TargetDir)\libxml2.dll"</Command>
+      <Command>copy /y Lib\libusb-1.0.dll "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
