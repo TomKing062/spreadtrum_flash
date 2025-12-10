@@ -1,8 +1,11 @@
 
 LIBUSB = 1
-CFLAGS = -O2 -Wall -Wextra -std=c99 -pedantic -Wno-unused -I/usr/include/libxml2 -L/usr/lib
-CFLAGS += -DUSE_LIBUSB=$(LIBUSB)
-LIBS = -lm -lpthread -lxml2 -lz -liconv
+LIBXML2_CFLAGS := $(shell pkg-config --static --cflags libxml-2.0)
+LIBXML2_LDFLAGS := $(shell pkg-config --static --libs libxml-2.0)
+CFLAGS = -O2 -Wall -Wextra -std=c99 -pedantic -Wno-unused -static
+CFLAGS += -DUSE_LIBUSB=$(LIBUSB) $(LIBXML2_CFLAGS)
+LIBS = $(LIBXML2_LDFLAGS) -lm -lpthread
+
 APPNAME = spd_dump
 
 ifeq ($(LIBUSB), 1)
@@ -20,4 +23,4 @@ GITVER.h:
 	echo "#define GIT_SHA1 \"$(shell git rev-parse HEAD)\"" >> GITVER.h
 
 $(APPNAME): $(APPNAME).c common.c
-	$(CC) -s $(CFLAGS) -o $@ $^ $(LIBS)
+	$(CC) -s $(CFLAGS) $^ $(LIBS) -o $@
