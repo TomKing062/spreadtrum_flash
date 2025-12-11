@@ -155,7 +155,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>setupapi.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>setupapi.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PreBuildEvent>
@@ -180,7 +180,7 @@ copy /y Lib\Channel9.dll "$(TargetDir)"</Command>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>setupapi.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>setupapi.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PreBuildEvent>
@@ -209,7 +209,7 @@ copy /y Lib\Channel9.dll "$(TargetDir)"</Command>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>setupapi.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>setupapi.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PreBuildEvent>
@@ -238,7 +238,7 @@ copy /y Lib\Channel9.dll "$(TargetDir)"</Command>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>libusb-1.0.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libusb-1.0.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PreBuildEvent>
@@ -262,7 +262,7 @@ echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>libusb-1.0.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libusb-1.0.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PreBuildEvent>
@@ -290,7 +290,7 @@ echo #define GIT_SHA1 "%GIT_SHA1%"&gt;&gt;"$(ProjectDir)GITVER.h"</Command>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>libusb-1.0.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libusb-1.0.lib;libxml2_$(Platform).lib;libiconv_$(Platform).lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PreBuildEvent>
