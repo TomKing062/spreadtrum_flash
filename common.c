@@ -2611,7 +2611,6 @@ void merge_nv(const uint8_t *a, size_t a_size, const uint8_t *b, size_t b_size, 
 		if (pos + length > a_size) break;
 		nvid_list_offset[type].length = length;
 		nvid_list_offset[type].offset = pos;
-		nvid_list_offset[type].saved = 0;
 		pos += length;
 
 		uint32_t doffset = ((pos + 3) & 0xFFFFFFFC) - pos;
@@ -2634,12 +2633,12 @@ void merge_nv(const uint8_t *a, size_t a_size, const uint8_t *b, size_t b_size, 
 			*(uint16_t *)(c_ptr + 2) = nvid_list_offset[type].length;
 			memcpy(c_ptr + 4, a + nvid_list_offset[type].offset, nvid_list_offset[type].length);
 			c_ptr += 4 + nvid_list_offset[type].length;
-			nvid_list_offset[type].saved = 1;
 		}
 		else {
 			memcpy(c_ptr, b + pos - 4, 4 + length);
 			c_ptr += 4 + length;
 		}
+		nvid_list_offset[type].saved = 1;
 		pos += length;
 
 		uint32_t doffset = ((pos + 3) & 0xFFFFFFFC) - pos;
@@ -2656,7 +2655,9 @@ void merge_nv(const uint8_t *a, size_t a_size, const uint8_t *b, size_t b_size, 
 			c_ptr += 4 + nvid_list_offset[i].length;
 		}
 	}
-	*c_size = c_ptr - c;
+	uint8_t endbuf[] = { 0xff,0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	memcpy(c_ptr, endbuf, 8);
+	*c_size = c_ptr - c + 8;
 }
 
 int found_NVItem = 0;

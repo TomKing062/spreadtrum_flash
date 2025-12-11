@@ -1355,7 +1355,7 @@ rloop:
 
 		}
 		else if (!strcmp(str2[1], "mergenv-xml")) {
-			if (argcount <= 3) { DBG_LOG("mergenv-xml cfg new_nv\n"); argc = 1; continue; }
+			if (argcount <= 3) { DBG_LOG("mergenv-xml xml new_nv\n"); argc = 1; continue; }
 			get_partition_info(io, "nr_fixnv1", 1);
 			if (!gPartInfo.size) get_partition_info(io, "l_fixnv1", 1);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n");  argc -= 3; argv += 3; continue; }
