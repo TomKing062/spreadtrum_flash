@@ -516,7 +516,35 @@ int main(int argc, char **argv) {
 				fclose(fi);
 			}
 			encode_msg_nocpy(io, strtoul(str2[2], NULL, 0), length);
-			if (send_and_check(io)) exit(1);
+			if (send_and_check(io)) print_mem(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+			argc -= 3; argv += 3;
+		}
+		else if (!strcmp(str2[1], "sendcmdv")) {
+			if (argcount <= 3) { DBG_LOG("sendcmdv type value(max is 0xFFFFFFFF)\n"); argc = 1; continue; }
+			uint64_t send_value = strtoull(str2[3], NULL, 0);
+			memcpy(io->temp_buf, &send_value, 8);
+			encode_msg_nocpy(io, strtoul(str2[2], NULL, 0), 8);
+			if (send_and_check(io)) print_mem(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+			argc -= 3; argv += 3;
+		}
+		else if (!strcmp(str2[1], "sendcmdvl")) {
+			if (argcount <= 3) { DBG_LOG("sendcmdvl type value(max is 0xFFFFFFFF)\n"); argc = 1; continue; }
+			uint64_t send_value = strtoull(str2[3], NULL, 0);;
+			char filename[64];
+			snprintf(filename, sizeof(filename), "0x%08llX.bin", (unsigned long long)send_value);
+			FILE *output_file = fopen(filename, "wb");
+			if (!output_file) { DBG_LOG("Failed to open output file: %s\n", filename); argc = 1; continue; }
+			for (; send_value < 0x100000000; send_value += 0x200) {
+				memcpy(io->temp_buf, &send_value, 8);
+				encode_msg_nocpy(io, strtoul(str2[2], NULL, 0), 8);
+				DBG_LOG("current 0x%08llX\n", (unsigned long long)send_value);
+				if (send_and_check(io)) {
+					print_mem(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+					fwrite(io->raw_buf + 4, 1, READ16_BE(io->raw_buf + 2), output_file);
+					fflush(output_file);
+				}
+			}
+			fclose(output_file);
 			argc -= 3; argv += 3;
 		}
 		else if (!strcmp(str2[1], "sendpack")) { //this is pack (7e type length data crc 7e)
@@ -532,7 +560,7 @@ int main(int argc, char **argv) {
 			fclose(fi);
 			io->send_buf = io->untranscode_buf;
 			io->enc_len = length;
-			if (send_and_check(io)) exit(1);
+			if (send_and_check(io)) print_mem(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
 			argc -= 2; argv += 2;
 		}
 		else if (!strcmp(str2[1], "rawpack")) { //this is pack (type length data [ignored-crc]), crc and transcode will be performed
@@ -547,7 +575,7 @@ int main(int argc, char **argv) {
 			ret = fread(io->untranscode_buf + 1, 1, length, fi);
 			fclose(fi);
 			encode_rawpack_nocpy(io);
-			if (send_and_check(io)) exit(1);
+			if (send_and_check(io)) print_mem(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
 			argc -= 2; argv += 2;
 		}
 		else if (!strcmp(str2[1], "write_word")) {
@@ -677,7 +705,7 @@ int main(int argc, char **argv) {
 					if (send_and_check(io)) exit(1);
 				}
 				DBG_LOG("EXEC FDL1\n");
-				if (addr == 0x5500 || addr == 0x65000800) {
+				if (addr == 0x5500 || addr == 0x65000800 || addr == 0x65008000) {
 					highspeed = 1;
 					if (!baudrate) baudrate = 921600;
 				}
@@ -1360,12 +1388,14 @@ rloop:
 			if (!gPartInfo.size) get_partition_info(io, "l_fixnv1", 1);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n");  argc -= 3; argv += 3; continue; }
 			dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "nvbak", blk_size ? blk_size : DEFAULT_BLK_SIZE);
-			get_nvlist_xml(str2[2]);
+			get_nvlist_xml(io, str2[2]);
 			size_t a_size = 0, b_size = 0, c_size = 0;
 			uint8_t *a = loadfile("nvbak", &a_size, 0);
 			uint8_t *b = loadfile(str2[3], &b_size, 0);
 			uint8_t *c = malloc(a_size + b_size);
-			merge_nv(a, a_size, b, b_size, c, &c_size);
+			merge_nv(io, a, a_size, b, b_size, c, &c_size);
+			free(io->nvid_list);
+			io->nvid_list = NULL;
 			FILE *fi = fopen("nvmerged", "wb");
 			if (!fi) ERR_EXIT("fopen failed\n");
 			if (fseek(fi, 0, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
@@ -1381,12 +1411,14 @@ rloop:
 			if (!gPartInfo.size) get_partition_info(io, "l_fixnv1", 1);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n");  argc -= 3; argv += 3; continue; }
 			dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "nvbak", blk_size ? blk_size : DEFAULT_BLK_SIZE);
-			get_nvlist_cfg(str2[2]);
+			get_nvlist_cfg(io, str2[2]);
 			size_t a_size = 0, b_size = 0, c_size = 0;
 			uint8_t *a = loadfile("nvbak", &a_size, 0);
 			uint8_t *b = loadfile(str2[3], &b_size, 0);
 			uint8_t *c = malloc(a_size + b_size);
-			merge_nv(a, a_size, b, b_size, c, &c_size);
+			merge_nv(io, a, a_size, b, b_size, c, &c_size);
+			free(io->nvid_list);
+			io->nvid_list = NULL;
 			FILE *fi = fopen("nvmerged", "wb");
 			if (!fi) ERR_EXIT("fopen failed\n");
 			if (fseek(fi, 0, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
@@ -1464,7 +1496,7 @@ rloop:
 				free(str2[i]);
 		free(str2);
 		if (m_bOpened == -1) {
-			DBG_LOG("device removed, exiting...\n");
+			DBG_LOG("[main] device removed, exiting...\n");
 			break;
 		}
 	}

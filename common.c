@@ -448,6 +448,23 @@ void encode_rawpack_nocpy(spdio_t *io) {
 	io->enc_len = len + 2;
 }
 
+void restart_program() {
+#if defined(_MYDEBUG) && defined(_WIN32)
+	char exePath[MAX_PATH];
+	if (!GetModuleFileNameA(NULL, exePath, MAX_PATH)) exit(0);
+	FreeConsole();
+	AllocConsole();
+	STARTUPINFO si = { 0 };
+	si.cb = sizeof(si);
+	PROCESS_INFORMATION pi;
+	if (CreateProcessA(exePath, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+		CloseHandle(pi.hProcess);
+		CloseHandle(pi.hThread);
+	}
+#endif
+	exit(0);
+}
+
 int send_msg(spdio_t *io) {
 	int ret;
 	if (!io->enc_len)
@@ -455,7 +472,8 @@ int send_msg(spdio_t *io) {
 
 	if (m_bOpened == -1) {
 		spdio_free(io);
-		ERR_EXIT("device removed, exiting...\n");
+		DBG_LOG("[send] device removed, exiting...\n");
+		restart_program();
 	}
 	if (io->verbose >= 2) {
 		DBG_LOG("send (%d):\n", io->enc_len);
@@ -492,7 +510,7 @@ int recv_read_data(spdio_t *io) {
 
 	if (m_bOpened == -1) {
 		spdio_free(io);
-		ERR_EXIT("device removed, exiting...\n");
+		ERR_EXIT("[recv] device removed, exiting...\n");
 	}
 #if USE_LIBUSB
 	int err = libusb_bulk_transfer(io->dev_handle, io->endp_in, io->recv_buf, RECV_BUF_LEN, &len, io->timeout);
@@ -736,13 +754,13 @@ void send_buf(spdio_t *io,
 	WRITE32_BE(data + 1, size);
 
 	encode_msg_nocpy(io, BSL_CMD_START_DATA, 4 * 2);
-	if (send_and_check(io)) return;
+	if (send_and_check(io)) exit(1);
 	for (i = 0; i < size; i += n) {
 		n = size - i;
 		// n = spd_transcode_max(mem + i, size - i, 2048 - 2 - 6);
 		if (n > step) n = step;
 		encode_msg(io, BSL_CMD_MIDST_DATA, mem + i, n);
-		if (send_and_check(io)) return;
+		if (send_and_check(io)) exit(1);
 	}
 	if (end_data) {
 		encode_msg_nocpy(io, BSL_CMD_END_DATA, 0);
@@ -1148,7 +1166,7 @@ int gpt_info(partition_t *ptable, const char *fn_xml, int *part_count_ptr) {
 		fclose(fp);
 		return -1;
 	}
-	else {
+	else if (!Da_Info.dwStorageType) {
 		if (sector_index == 1) Da_Info.dwStorageType = 0x102;
 		else Da_Info.dwStorageType = 0x103;
 	}
@@ -1258,8 +1276,10 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 			size = READ32_LE(p + 0x48);
 			while (!(size >> divisor)) divisor--;
 		}
-		if (divisor == 10) Da_Info.dwStorageType = 0x102;
-		else Da_Info.dwStorageType = 0x103;
+		if (!Da_Info.dwStorageType) {
+			if (divisor == 10) Da_Info.dwStorageType = 0x102;
+			else Da_Info.dwStorageType = 0x103;
+		}
 		p = io->raw_buf + 4;
 		DBG_LOG("  0 %36s     256KB\n", "splloader");
 		for (i = 0; i < n; i++, p += 0x4c) {
@@ -2319,6 +2339,7 @@ void set_active(spdio_t *io, char *arg) {
 	w_mem_to_part_offset(io, "misc", 0x800, (uint8_t *)abc, sizeof(bootloader_control), 0x1000);
 }
 
+#define max_size(x, y) ((x) > (y) ? (x) : (y))
 size_t bsp_chsize(const char *filename) {
 	uint8_t *mem;
 	size_t size = 0;
@@ -2330,39 +2351,37 @@ size_t bsp_chsize(const char *filename) {
 
 	//if (*(uint32_t *)mem != 0x42544844)
 	//	ERR_EXIT("The file is not sprd trusted firmware\n");
-	int bPostrom = 0;
+	size_t sizewithPostrom = 0, size_in_footer = 0;
 	sys_img_header *header = (sys_img_header *)mem;
 	if (header->mPostromOffset && header->mPostromOffset + 0x200 < size) {
 		postrom_main_header *postrom_header = (postrom_main_header *)(mem + header->mPostromOffset);
 		if (postrom_header->mImgSize && (header->mPostromOffset + 0x200 + postrom_header->mImgSize <= size)) {
-			size = header->mPostromOffset + 0x200 + postrom_header->mImgSize;
-			DBG_LOG("chsize bsp image with postrom: 0x%zx\n", size);
-			bPostrom = 1;
+			sizewithPostrom = header->mPostromOffset + 0x200 + postrom_header->mImgSize;
 		}
 	}
-	if (!bPostrom) {
-		if (!header->mImgSize) {
-			DBG_LOG("broken sprd trusted firmware\n");
-			free(mem);
-			return 0;
-		}
-		sprdsignedimageheader *footer = (sprdsignedimageheader *)&mem[header->mImgSize + 0x200];
-		if (header->mImgSize + 0x200 + sizeof(sprdsignedimageheader) >= size) {
-			DBG_LOG("chsize bsp image: 0x%zx\n", size);
-			free(mem);
-			return size;
-		}
-		if (footer->cert_dbg_developer_size && footer->cert_dbg_developer_offset)
-			size = footer->cert_dbg_developer_size + footer->cert_dbg_developer_offset;
-		else if (footer->priv_size && footer->priv_offset)
-			size = footer->priv_size + footer->priv_offset;
-		else if (footer->cert_size && footer->cert_offset)
-			size = footer->cert_size + footer->cert_offset;
-		else
-			size = header->mImgSize + 0x200;
+	if (!header->mImgSize) {
+		DBG_LOG("broken sprd trusted firmware\n");
+		free(mem);
+		return 0;
+	}
+	sprdsignedimageheader *footer = (sprdsignedimageheader *)&mem[header->mImgSize + 0x200];
+	if (header->mImgSize + 0x200 + sizeof(sprdsignedimageheader) >= size) {
 		DBG_LOG("chsize bsp image: 0x%zx\n", size);
+		free(mem);
+		return size;
 	}
-
+	if (footer->cert_dbg_developer_size && footer->cert_dbg_developer_offset)
+		size_in_footer = max_size(size_in_footer, footer->cert_dbg_developer_size + footer->cert_dbg_developer_offset);
+	if (footer->priv_size && footer->priv_offset)
+		size_in_footer = max_size(size_in_footer, footer->priv_size + footer->priv_offset);
+	if (footer->cert_size && footer->cert_offset)
+		size_in_footer = max_size(size_in_footer, footer->cert_size + footer->cert_offset);
+	if (footer->payload_size && footer->payload_offset)
+		size_in_footer = max_size(size_in_footer, footer->payload_size + footer->payload_offset);
+	else
+		size_in_footer = max_size(size_in_footer, header->mImgSize + 0x200);
+	size = max_size(size_in_footer, sizewithPostrom);
+	DBG_LOG("chsize bsp image: 0x%zx\n", size);
 
 	FILE *file = fopen("temp", "wb");
 	if (file == NULL) {
@@ -2474,16 +2493,6 @@ int dis_avb(const char *filename) {
 	return mov_count;
 }
 
-uint8_t *sprd_get_sechdr_addr(uint8_t *buf) {
-	if (NULL == buf) {
-		return NULL;
-	}
-	sys_img_header *imghdr = (sys_img_header *)buf;
-
-	uint8_t *sechdr = buf + imghdr->mImgSize + sizeof(sys_img_header);
-	return sechdr;
-}
-
 #define MULTI_HEADER 0
 //MULTI_HEADER work for 0+0, not work for type 0+1 or 1+1
 //unsigned_img_name can be raw_payload
@@ -2499,8 +2508,6 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 
 	size_t orig_signed_img_size = (*(uint32_t *)&signed_img[0x30]);
 
-	//if (*(uint32_t *)signed_img != 0x42544844 || !orig_signed_img_size) ERR_EXIT("The file is not sprd trusted firmware\n");
-
 	signed_img_size -= sizeof(sys_img_header);
 #if MULTI_HEADER
 	size_t signed_img_headers_size = signed_img_size - orig_signed_img_size;
@@ -2511,15 +2518,13 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 	}
 
 #if MULTI_HEADER
-	if (!(out_put_file = (uint8_t *)malloc(sizeof(sys_img_header) + modified_img_size + signed_img_headers_size + signed_img_size)))
-		ERR_EXIT("malloc failed\n");
+	if (!(out_put_file = (uint8_t *)malloc(sizeof(sys_img_header) + modified_img_size + signed_img_headers_size + signed_img_size))) ERR_EXIT("malloc failed\n");
 #else
 	if (!(out_put_file = (uint8_t *)malloc(sizeof(sys_img_header) + modified_img_size + signed_img_size))) ERR_EXIT("malloc failed\n");
 #endif
 
-
-	sys_img_header sys_img_hdr = *(sys_img_header *)signed_img;
-	sprdsignedimageheader *img_hdr = (sprdsignedimageheader *)sprd_get_sechdr_addr(signed_img);
+	sys_img_header *sys_img_hdr = (sys_img_header *)signed_img;
+	sprdsignedimageheader *img_hdr = (sprdsignedimageheader *)&signed_img[sys_img_hdr->mImgSize + 0x200];;
 	if (img_hdr->payload_offset != sizeof(sys_img_header)) {
 		DBG_LOG("image already patched\n");
 		free(signed_img0);
@@ -2531,17 +2536,16 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 
 #if MULTI_HEADER
 	memcpy(out_put_file + sizeof(sys_img_header) + modified_img_size, signed_img + orig_signed_img_size, signed_img_headers_size);
-
-	sys_img_hdr.mImgSize += modified_img_size + signed_img_headers_size;
+	sys_img_hdr->mImgSize += modified_img_size + signed_img_headers_size;
 	img_hdr->payload_offset += modified_img_size + signed_img_headers_size;
 	img_hdr->cert_offset += modified_img_size + signed_img_headers_size;
 #else
-	sys_img_hdr.mImgSize += modified_img_size;
+	sys_img_hdr->mImgSize += modified_img_size;
 	img_hdr->payload_offset += modified_img_size;
 	img_hdr->cert_offset += modified_img_size;
 #endif
 
-	memcpy(out_put_file, &sys_img_hdr, sizeof(sys_img_header));
+	memcpy(out_put_file, sys_img_hdr, sizeof(sys_img_header));
 	memcpy(out_put_file + sizeof(sys_img_header), modified_img, modified_img_size);
 #if MULTI_HEADER
 	memcpy(out_put_file + sizeof(sys_img_header) + modified_img_size + signed_img_headers_size, signed_img, signed_img_size);
@@ -2598,10 +2602,10 @@ void dis_avb_with_cve(spdio_t *io, unsigned step) {
 	free(fix_fn_sml);
 }
 
-int nvid_list[0x10000] = { 0 };
-NVEntry nvid_list_offset[0x10000] = { 0 };
-
-void merge_nv(const uint8_t *a, size_t a_size, const uint8_t *b, size_t b_size, uint8_t *c, size_t *c_size) {
+void merge_nv(spdio_t *io, const uint8_t *a, size_t a_size, const uint8_t *b, size_t b_size, uint8_t *c, size_t *c_size) {
+	NVEntry *nvid_list_offset = malloc(0x10000 * sizeof(NVEntry));
+	if (!nvid_list_offset) ERR_EXIT("malloc failed\n");
+	memset(nvid_list_offset, 0, 0x10000 * sizeof(NVEntry));
 	size_t pos = 4;
 	if (*(uint32_t *)a == 0x4e56) pos += 0x200;
 	while (pos + 4 <= a_size) {
@@ -2628,7 +2632,7 @@ void merge_nv(const uint8_t *a, size_t a_size, const uint8_t *b, size_t b_size, 
 		uint16_t length = *(uint16_t *)(b + pos + 2);
 		pos += 4;
 		if (pos + length > b_size) break;
-		if (nvid_list[type]) {
+		if (io->nvid_list[type]) {
 			*(uint16_t *)c_ptr = type;
 			*(uint16_t *)(c_ptr + 2) = nvid_list_offset[type].length;
 			memcpy(c_ptr + 4, a + nvid_list_offset[type].offset, nvid_list_offset[type].length);
@@ -2658,10 +2662,11 @@ void merge_nv(const uint8_t *a, size_t a_size, const uint8_t *b, size_t b_size, 
 	uint8_t endbuf[] = { 0xff,0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	memcpy(c_ptr, endbuf, 8);
 	*c_size = c_ptr - c + 8;
+	free(nvid_list_offset);
 }
 
 int found_NVItem = 0;
-void get_nvlist_it(xmlNode *node) {
+void get_nvlist_it(spdio_t *io, xmlNode *node) {
 	if (node->type == XML_ELEMENT_NODE && xmlStrEqual(node->name, (const xmlChar *)"NVItem")) {
 		found_NVItem = 1;
 		xmlNode *NVItem_node = node;
@@ -2672,7 +2677,8 @@ void get_nvlist_it(xmlNode *node) {
 					if (id_str) {
 						long id = strtol((const char *)id_str, NULL, 0);
 						if (id < 0x10000) {
-							nvid_list[id] = 1;
+							io->nvid_list[id] = 1;
+							if (io->verbose) DBG_LOG("saved id 0x%lX to list\n", id);
 						}
 						xmlFree(id_str);
 					}
@@ -2684,51 +2690,58 @@ void get_nvlist_it(xmlNode *node) {
 		return;
 	}
 	for (xmlNode *cur = node->children; cur != NULL; cur = cur->next) {
-		get_nvlist_it(cur);
+		get_nvlist_it(io, cur);
 		if (found_NVItem) return;
 	}
 }
 
-int get_nvlist_xml(char *fn) {
+int get_nvlist_xml(spdio_t *io, char *fn) {
 	xmlDoc *doc;
 	xmlNode *root;
 	doc = xmlReadFile(fn, NULL, 0);
 	if (doc == NULL) return 0;;
 	found_NVItem = 0;
 	root = xmlDocGetRootElement(doc);
-	get_nvlist_it(root);
-	nvid_list[5] = 1;
-	nvid_list[0x179] = 1;
-	nvid_list[0x186] = 1;
-	nvid_list[0x1e4] = 1;
-	nvid_list[2] = 1;
-	nvid_list[0x516] = 1;
-	nvid_list[0x12d] = 1;
-	nvid_list[0x9c4] = 1;
+	io->nvid_list = malloc(0x10000 * sizeof(int));
+	if (!io->nvid_list) ERR_EXIT("malloc failed\n");
+	memset(io->nvid_list, 0, 0x10000 * sizeof(int));
+	get_nvlist_it(io, root);
 	xmlFreeDoc(doc);
+	io->nvid_list[5] = 1;
+	io->nvid_list[0x179] = 1;
+	io->nvid_list[0x186] = 1;
+	io->nvid_list[0x1e4] = 1;
+	io->nvid_list[2] = 1;
+	io->nvid_list[0x516] = 1;
+	io->nvid_list[0x12d] = 1;
+	io->nvid_list[0x9c4] = 1;
 	return 1;
 }
 
-int get_nvlist_cfg(char *fn) {
+int get_nvlist_cfg(spdio_t *io, char *fn) {
 	char line[512];
 	unsigned int id = 0;
 	FILE *cfg_fd;
 
 	if (!(cfg_fd = fopen(fn, "rb"))) return 0;
+	io->nvid_list = malloc(0x10000 * sizeof(int));
+	if (!io->nvid_list) ERR_EXIT("malloc failed\n");
+	memset(io->nvid_list, 0, 0x10000 * sizeof(int));
 	while (fgets(line, sizeof(line), cfg_fd)) {
 		if (line[0] == '#' || line[0] == '\0') continue;
 		if (-1 == sscanf(line, "%*s %x", &id)) continue;
-		nvid_list[id] = 1;
+		io->nvid_list[id] = 1;
+		if (io->verbose) DBG_LOG("saved id 0x%X to list\n", id);
 	}
 	fclose(cfg_fd);
-	nvid_list[5] = 1;
-	nvid_list[0x179] = 1;
-	nvid_list[0x186] = 1;
-	nvid_list[0x1e4] = 1;
-	nvid_list[2] = 1;
-	nvid_list[0x516] = 1;
-	nvid_list[0x12d] = 1;
-	nvid_list[0x9c4] = 1;
+	io->nvid_list[5] = 1;
+	io->nvid_list[0x179] = 1;
+	io->nvid_list[0x186] = 1;
+	io->nvid_list[0x1e4] = 1;
+	io->nvid_list[2] = 1;
+	io->nvid_list[0x516] = 1;
+	io->nvid_list[0x12d] = 1;
+	io->nvid_list[0x9c4] = 1;
 	return 1;
 }
 
@@ -2862,6 +2875,20 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 			if (curPort) {
 				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
 				break;
+			}
+			if (!(i % 20)) {
+				DWORD *ports;
+				if ((ports = FindPort("SPRD U2S Diag"))) {
+					for (DWORD *port = ports; *port != 0; port++) {
+						if (call_ConnectChannel(io->handle, *port, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) {
+							curPort = *port;
+							break;
+						}
+					}
+					free(ports);
+					ports = NULL;
+					if (m_bOpened) break;
+				}
 			}
 			if (100 * i >= ms) ERR_EXIT("find port failed\n");
 			usleep(100000);
@@ -3084,6 +3111,21 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				if (libusb_open(curPort, &io->dev_handle) < 0) ERR_EXIT("Connection failed\n");
 				call_Initialize_libusb(io);
 				break;
+			}
+			if (!(i % 20)) {
+				libusb_device **ports;
+				if ((ports = FindPort(0x4d00))) {
+					for (libusb_device **port = ports; *port != NULL; port++) {
+						if (libusb_open(*port, &io->dev_handle) >= 0) {
+							call_Initialize_libusb(io);
+							curPort = *port;
+							break;
+						}
+					}
+					libusb_free_device_list(ports, 1);
+					ports = NULL;
+					if (m_bOpened) break;
+				}
 			}
 			if (100 * i >= ms) ERR_EXIT("find port failed\n");
 			usleep(100000);
