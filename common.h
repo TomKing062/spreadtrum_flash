@@ -13,6 +13,7 @@
 #include <ctype.h> // tolower
 #include <math.h>
 #include <time.h>
+#include <signal.h>
 
 #ifndef LIBUSB_DETACH
 /* detach the device from crappy kernel drivers */
@@ -42,6 +43,7 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam);
 #ifndef _MSC_VER
 #include <pthread.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #endif
 #else
 #include <setupapi.h>
@@ -290,7 +292,7 @@ void DestroyRecvThread(spdio_t *io);
 
 void print_mem(FILE *f, uint8_t *buf, size_t len);
 void print_string(FILE *f, const void *src, size_t n);
-void ChangeMode(spdio_t *io, int ms, int bootmode, int at);
+void ChangeMode(spdio_t *io, int ms, int bootmode);
 
 spdio_t *spdio_init(int flags);
 void spdio_free(spdio_t *io);
@@ -338,3 +340,6 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 int get_nvlist_xml(spdio_t *io, char *fn);
 int get_nvlist_cfg(spdio_t *io, char *fn);
 void merge_nv(spdio_t *io, const uint8_t *a, size_t a_size, const uint8_t *b, size_t b_size, uint8_t *c, size_t *c_size);
+int my_mkdir(const char *path);
+void clean_tmpdir(void);
+void signal_exit(int sig);

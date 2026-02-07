@@ -1,10 +1,71 @@
 #include "common.h"
-#include <signal.h>
 #include <libxml/parser.h>
+char fn_partlist[80] = { 0 };
+char savepath[ARGV_LEN] = { 0 };
+DA_INFO_T Da_Info;
+partition_t gPartInfo;
 extern int g_spl_size;
+extern int g_w_force;
 static int isCancel;
 void signal_handler(int sig) {
 	isCancel = 1;
+}
+
+void signal_exit(int sig) {
+	exit(1);
+}
+
+int my_mkdir(const char *path) {
+#if _WIN32
+	if (CreateDirectoryA(path, NULL)) return 0;
+#else
+	if (mkdir(path, 0777) == 0) return 0;
+#endif
+	return 1;
+}
+
+void my_rmdir(const char *path, int remove_all) {
+	char *fn;
+#if _WIN32
+	char searchPath[ARGV_LEN];
+	snprintf(searchPath, ARGV_LEN, "%s\\*", path);
+	WIN32_FIND_DATAA findData;
+	HANDLE hFind = FindFirstFileA(searchPath, &findData);
+	if (hFind == INVALID_HANDLE_VALUE) {
+		DBG_LOG("Error opening directory.\n");
+		return;
+	}
+	if (remove_all)
+		for (fn = findData.cFileName; FindNextFileA(hFind, &findData); fn = findData.cFileName) {
+			if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+			char fullPath[1024];
+			snprintf(fullPath, sizeof(fullPath), "%s/%s", path, fn);
+			remove(fullPath);
+		}
+	FindClose(hFind);
+	RemoveDirectoryA(path);
+#else
+	DIR *dir;
+	struct dirent *entry;
+	if ((dir = opendir(path)) == NULL || (entry = readdir(dir)) == NULL) {
+		DBG_LOG("Error opening directory.\n");
+		return;
+	}
+	if (remove_all)
+		for (fn = entry->d_name; (entry = readdir(dir)); fn = entry->d_name) {
+			if (entry->d_type == DT_DIR) continue;
+			char fullPath[1024];
+			snprintf(fullPath, sizeof(fullPath), "%s/%s", path, fn);
+			remove(fullPath);
+		}
+	closedir(dir);
+	rmdir(path);
+#endif
+}
+
+//we registered this in atexit, don't call it manually
+void clean_tmpdir(void) {
+	if (savepath[0]) my_rmdir(savepath, 0);
 }
 
 #if !USE_LIBUSB
@@ -218,12 +279,6 @@ void find_endpoints(libusb_device_handle *dev_handle, int result[4]) {
 #endif
 
 #define RECV_BUF_LEN (0x8000)
-
-char fn_partlist[40] = { 0 };
-char savepath[ARGV_LEN] = { 0 };
-DA_INFO_T Da_Info;
-partition_t gPartInfo;
-
 spdio_t *spdio_init(int flags) {
 	uint8_t *p; spdio_t *io;
 
@@ -966,9 +1021,16 @@ uint64_t dump_partition(spdio_t *io,
 		if (len > 512)
 			len -= 512;
 	}
+	else if (strstr(name, "downloadnv") || strstr(name, "factorynv")) {
+		len = len > 0x1000000 ? 0x1000000 : len;
+		start = 0;
+		if (len > 512)
+			len -= 512;
+	}
 	DBG_LOG("Start to read partition %s, ", name);
 	DBG_LOG("type CTRL + C to cancel...\n");
-	signal(SIGINT, signal_handler);
+	void (*old_handler)(int);
+	old_handler = signal(SIGINT, signal_handler);
 	isCancel = 0;
 
 	select_partition(io, name, start + len, mode64, BSL_CMD_READ_START);
@@ -1016,7 +1078,7 @@ uint64_t dump_partition(spdio_t *io,
 			if (saved_size >= fblk_size) { usleep(1000000); saved_size = 0; }
 		}
 	}
-	signal(SIGINT, SIG_DFL);
+	signal(SIGINT, old_handler);
 	DBG_LOG("\nRead Part Done: %s+0x%llx, target: 0x%llx, read: 0x%llx\n",
 		name, (long long)start, (long long)len,
 		(long long)(offset - start));
@@ -1182,7 +1244,10 @@ int gpt_info(partition_t *ptable, const char *fn_xml, int *part_count_ptr) {
 		DBG_LOG("only read %d/%d\n", bytes_read, (int)(header.number_of_partition_entries * sizeof(efi_entry)));
 	FILE *fo = NULL;
 	if (strcmp(fn_xml, "-")) {
-		fo = my_fopen(fn_xml, "wb");
+		char *ch;
+		if ((ch = strrchr(fn_xml, '/'))) fo = fopen(fn_xml, "wb");
+		else if ((ch = strrchr(fn_xml, '\\'))) fo = fopen(fn_xml, "wb");
+		else fo = my_fopen(fn_xml, "wb");
 		if (!fo) ERR_EXIT("fopen failed\n");
 		fprintf(fo, "<Partitions>\n");
 	}
@@ -1218,8 +1283,7 @@ int gpt_info(partition_t *ptable, const char *fn_xml, int *part_count_ptr) {
 	free(entries);
 	fclose(fp);
 	*part_count_ptr = n;
-	DBG_LOG("standard gpt table saved to pgpt.bin\n");
-	DBG_LOG("skip saving sprd partition list packet\n");
+	DBG_LOG("standard gpt table dumped successfully\n");
 	return 0;
 }
 
@@ -1265,7 +1329,10 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 		fclose(fpkt);
 		n = size / 0x4c;
 		if (strcmp(fn, "-")) {
-			fo = my_fopen(fn, "wb");
+			char *ch;
+			if ((ch = strrchr(fn, '/'))) fo = fopen(fn, "wb");
+			else if ((ch = strrchr(fn, '\\'))) fo = fopen(fn, "wb");
+			else fo = my_fopen(fn, "wb");
 			if (!fo) ERR_EXIT("fopen failed\n");
 			fprintf(fo, "<Partitions>\n");
 		}
@@ -1303,12 +1370,10 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 			fclose(fo);
 		}
 		*part_count_ptr = n;
-		DBG_LOG("unable to get standard gpt table\n");
-		DBG_LOG("sprd partition list packet saved to sprdpart.bin\n");
+		DBG_LOG("sprd partition list packet dumped successfully\n");
 		gpt_failed = 0;
 	}
 	if (*part_count_ptr) {
-		if (strcmp(fn, "-")) DBG_LOG("partition list saved to %s\n", fn);
 		DBG_LOG("Total number of partitions: %d\n", *part_count_ptr);
 		if (Da_Info.dwStorageType == 0x102) DBG_LOG("Storage is emmc\n");
 		else if (Da_Info.dwStorageType == 0x103) DBG_LOG("Storage is ufs\n");
@@ -1378,7 +1443,8 @@ void load_partition(spdio_t *io, const char *name,
 	DBG_LOG("file size : 0x%llx\n", (long long)len);
 	DBG_LOG("Start to write partition %s, ", name);
 	DBG_LOG("type CTRL + C to cancel...\n");
-	signal(SIGINT, signal_handler);
+	void (*old_handler)(int);
+	old_handler = signal(SIGINT, signal_handler);
 	isCancel = 0;
 
 	mode64 = len >> 32;
@@ -1462,7 +1528,7 @@ fallback_load:
 		}
 	}
 	fclose(fi);
-	signal(SIGINT, SIG_DFL);
+	signal(SIGINT, old_handler);
 	encode_msg_nocpy(io, BSL_CMD_END_DATA, 0);
 	if (!send_and_check(io)) DBG_LOG("\nWrite Part Done: %s, target: 0x%llx, written: 0x%llx\n",
 		name, (long long)len, (long long)offset);
@@ -1576,7 +1642,13 @@ void load_nv_partition(spdio_t *io, const char *name,
 			break;
 		}
 	}
-	crc = crc16(crc, mem + 2, len - 2);
+	if (strstr(name, "factorynv")) {
+		dump_partition(io, name, 0, 16, "nvcrc", 4096);
+		uint8_t *crc_mem = loadfile("nvcrc", NULL, 0);
+		crc = *(uint16_t *)crc_mem;
+		free(crc_mem);
+	}
+	else crc = crc16(crc, mem + 2, len - 2);
 	WRITE16_BE(mem, crc);
 	for (offset = 0; offset < len; offset++) cs += mem[offset];
 	DBG_LOG("file size : 0x%zx\n", len);
@@ -1601,8 +1673,11 @@ void load_nv_partition(spdio_t *io, const char *name,
 		ret = recv_msg_timeout(io, 15000);
 		if (!ret) ERR_EXIT("timeout reached\n");
 		if ((ret = recv_type(io)) != BSL_REP_ACK) {
-			DBG_LOG("unexpected response (0x%04x)\n", ret);
-			break;
+			if (n == rsz) DBG_LOG("Got response (0x%04x) when writing last packet to %s\n", ret, name);
+			else {
+				DBG_LOG("unexpected response (0x%04x)\n", ret);
+				break;
+			}
 		}
 	}
 	free(mem0);
@@ -1657,6 +1732,18 @@ uint64_t check_partition(spdio_t *io, const char *name, int need_size) {
 		char *dot = strrchr(name_tmp, '1');
 		if (dot != NULL) *dot = '2';
 		name = name_tmp;
+	}
+	else if (strstr(name, "downloadnv")) {
+		if (selected_ab > 0) {
+			size_t namelen = strlen(name);
+			if (strcmp(name + namelen - 2, "_a") && strcmp(name + namelen - 2, "_b")) return 0;
+		}
+	}
+	else if (strstr(name, "factorynv")) {
+		if (selected_ab > 0) {
+			size_t namelen = strlen(name);
+			if (strcmp(name + namelen - 2, "_a") == 0 || strcmp(name + namelen - 2, "_b") == 0) return 0;
+		}
 	}
 	else if (strstr(name, "runtimenv")) {
 		size_t namelen = strlen(name);
@@ -2286,11 +2373,19 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned step) {
 	char name0[36], name1[40];
 	unsigned size0, size1;
-	if (strstr(name, "fixnv1")) { load_nv_partition(io, name, fn, 4096); return 1; }
-	if (selected_ab > 0 ||
-		Da_Info.dwStorageType == 0x101 ||
+	if (strstr(name, "fixnv1") ||
+		strstr(name, "downloadnv") ||
+		strstr(name, "factorynv")) {
+		load_nv_partition(io, name, fn, 4096);
+		return 1;
+	}
+	if (Da_Info.dwStorageType == 0x101 ||
 		io->part_count == 0 ||
 		strncmp(name, "splloader", 9) == 0) {
+		load_partition(io, name, fn, step);
+		return 1;
+	}
+	if (selected_ab > 0 && g_w_force == 0) {
 		load_partition(io, name, fn, step);
 		return 1;
 	}
@@ -2299,7 +2394,18 @@ int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned
 	if (strlen(name0) >= sizeof(name0) - 4) { load_partition(io, name0, fn, step); return 1; }
 	snprintf(name1, sizeof(name1), "%s_bak", name0);
 	get_partition_info(io, name1, 1);
-	if (!gPartInfo.size) { load_partition(io, name0, fn, step); return 1; }
+	if (!gPartInfo.size) {
+		if (g_w_force) {
+			for (int i = 0; i < io->part_count; i++)
+				if (!strcmp(name0, (*(io->ptable + i)).name)) {
+					load_partition_force(io, i, fn, step);
+					break;
+				}
+		}
+		else
+			load_partition(io, name0, fn, step);
+		return 1;
+	}
 	size1 = gPartInfo.size;
 	size0 = check_partition(io, name0, 1);
 
@@ -2383,7 +2489,7 @@ size_t bsp_chsize(const char *filename) {
 	size = max_size(size_in_footer, sizewithPostrom);
 	DBG_LOG("chsize bsp image: 0x%zx\n", size);
 
-	FILE *file = fopen("temp", "wb");
+	FILE *file = fopen(filename, "wb");
 	if (file == NULL) {
 		DBG_LOG("Failed to create the file.\n");
 		free(mem);
@@ -2398,16 +2504,6 @@ size_t bsp_chsize(const char *filename) {
 	}
 	fclose(file);
 	free(mem);
-
-	if (remove(filename)) {
-		DBG_LOG("Failed to delete the file.\n");
-		return 0;
-	}
-	if (rename("temp", filename)) {
-		DBG_LOG("Failed to rename the file.\n");
-		return 0;
-	}
-
 	return size;
 }
 
@@ -2419,8 +2515,16 @@ int dis_avb(const char *filename) {
 	if (!mem)
 		ERR_EXIT("loadfile(\"%s\") failed\n", filename);
 
+	sys_img_header *sys_img_hdr = (sys_img_header *)mem;
+	sprdsignedimageheader *img_hdr = (sprdsignedimageheader *)&mem[sys_img_hdr->mImgSize + 0x200];;
+	if (img_hdr->payload_offset != sizeof(sys_img_header)) {
+		DBG_LOG("image already patched\n");
+		free(mem);
+		return 0;
+	}
 	//need x32 x64 check here
-	size_t last_start_pos = 0, start_pos = 0, last_pos = 0;
+	size_t pmov[3] = { 0 };
+	size_t last_start_pos = 0, start_pos = 0;
 
 	for (size_t i = 0x200; i < size; i += 4) {
 		uint32_t current = *(uint32_t *)&mem[i];
@@ -2460,21 +2564,31 @@ int dis_avb(const char *filename) {
 						}
 						if (count1 && count2 && count1 + count2 > 2) {
 							DBG_LOG("detected mov at 0x%zx\n", i - 4);
-							last_pos = i - 4;
-							mov_count++;
+							if (mov_count < 3) {
+								pmov[mov_count] = i - 4;
+								mov_count++;
+							}
+							else {
+								pmov[0] = pmov[1];
+								pmov[1] = pmov[2];
+								pmov[2] = i - 4;
+							}
 						}
 					}
 				}
 			}
 		}
 	}
-	if (mov_count < 2 || mov_count > 3) {
+	if (mov_count < 2) {
 		DBG_LOG("dis_avb: skip saving!!!\n");
 		free(mem);
 		return 0;
 	}
-	*(uint32_t *)&mem[last_pos] = 0x52800000;
-	FILE *file = fopen("tos-noavb.bin", "wb");
+	if (mov_count > 2) mov_count = (pmov[2] - 2 * pmov[1] + pmov[0] > 0) ? 1 : 2;
+	else mov_count--;
+	DBG_LOG("patch mov at 0x%zx\n", pmov[mov_count]);
+	*(uint32_t *)&mem[pmov[mov_count]] = 0x52800000;
+	FILE *file = fopen("tmp/tos-noavb.bin", "wb");
 	if (file == NULL) {
 		DBG_LOG("Failed to create the file.\n");
 		free(mem);
@@ -2525,13 +2639,6 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 
 	sys_img_header *sys_img_hdr = (sys_img_header *)signed_img;
 	sprdsignedimageheader *img_hdr = (sprdsignedimageheader *)&signed_img[sys_img_hdr->mImgSize + 0x200];;
-	if (img_hdr->payload_offset != sizeof(sys_img_header)) {
-		DBG_LOG("image already patched\n");
-		free(signed_img0);
-		free(modified_img0);
-		return 0;
-	}
-
 	signed_img += sizeof(sys_img_header);
 
 #if MULTI_HEADER
@@ -2864,7 +2971,7 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam) {
 #endif
 
 #if !USE_LIBUSB
-void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
+void ChangeMode(spdio_t *io, int ms, int bootmode) {
 	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
 	DWORD bytes_written;
 	int ret = 0, done = 0;
@@ -2898,11 +3005,11 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 		if (!bootmode) {
 			uint8_t hello[10] = { 0x7e,0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e };
 
-			if (!(bytes_written = call_Write(io->handle, hello, sizeof(hello)))) ERR_EXIT("Error writing to serial port\n");
 			if (io->verbose >= 2) {
 				DBG_LOG("send (%d):\n", (int)sizeof(hello));
 				print_mem(stderr, hello, sizeof(hello));
 			}
+			if (!(bytes_written = call_Write(io->handle, hello, sizeof(hello)))) ERR_EXIT("Error writing to serial port\n");
 			if (!recv_msg(io)) ERR_EXIT("read response from boot mode failed\n");
 			ret = recv_type(io);
 			if (ret == BSL_REP_VER ||
@@ -2910,14 +3017,16 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				ret == BSL_REP_UNSUPPORTED_COMMAND) {
 				return;
 			}
+			bootmode = 2;
+			done = -1;
 		}
-		else if (!at) payload[8] = bootmode + 0x80;
+		else payload[8] = bootmode + 0x80;
 
-		if (!(bytes_written = call_Write(io->handle, payload, sizeof(payload)))) ERR_EXIT("Error writing to serial port\n");
 		if (io->verbose >= 2) {
 			DBG_LOG("send (%d):\n", (int)sizeof(payload));
 			print_mem(stderr, payload, sizeof(payload));
 		}
+		if (!(bytes_written = call_Write(io->handle, payload, sizeof(payload)))) ERR_EXIT("Error writing to serial port\n");
 		if (recv_msg(io)) {
 			ret = recv_type(io);
 			if (ret == BSL_REP_VER ||
@@ -2929,15 +3038,16 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 			else if (ret != 0x7e7e) {
 				uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
 				usleep(500000);
+				if (io->verbose >= 2) {
+					DBG_LOG("send (%d):\n", (int)sizeof(autod));
+					print_mem(stderr, autod, sizeof(autod));
+				}
 				if ((bytes_written = call_Write(io->handle, autod, sizeof(autod)))) {
-					if (io->verbose >= 2) {
-						DBG_LOG("send (%d):\n", (int)sizeof(autod));
-						print_mem(stderr, autod, sizeof(autod));
-					}
 					if (recv_msg(io)) done = -1;
 				}
 			}
 		}
+		else done = -1;
 		for (int i = 0; ; i++) {
 			if (m_bOpened == -1) {
 				call_DisconnectChannel(io->handle);
@@ -2948,12 +3058,11 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				break;
 			}
 			if (i >= 100) {
-				if (ret == BSL_REP_VER) return;
-				else ERR_EXIT("kick reboot timeout, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
+				if (ret != BSL_REP_VER) DBG_LOG("Warning: kick reboot timeout\n");
+				return;
 			}
 			usleep(100000);
 		}
-		if (at == 0 && bootmode != 0 && bootmode != 2) done = 1;
 	}
 }
 
@@ -3099,7 +3208,7 @@ void stopUsbEventHandle(void) {
 	DBG_LOG("stopUsbEventHandle() is not supported in MSVC. Please use MSYS2 if you need it.\n");
 }
 #endif
-void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
+void ChangeMode(spdio_t *io, int ms, int bootmode) {
 	int err, bytes_written;
 	if (bootmode >= 0x80) ERR_EXIT("mode not exist\n");
 	int ret = 0, done = 0;
@@ -3135,13 +3244,13 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 		if (!bootmode) {
 			uint8_t hello[10] = { 0x7e,0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e };
 
-			err = libusb_bulk_transfer(io->dev_handle, io->endp_out, hello, sizeof(hello), &bytes_written, io->timeout);
-			if (err < 0)
-				ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
 			if (io->verbose >= 2) {
 				DBG_LOG("send (%d):\n", (int)sizeof(hello));
 				print_mem(stderr, hello, sizeof(hello));
 			}
+			err = libusb_bulk_transfer(io->dev_handle, io->endp_out, hello, sizeof(hello), &bytes_written, io->timeout);
+			if (err < 0)
+				ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
 			if (!recv_msg(io)) ERR_EXIT("read response from boot mode failed\n");
 			ret = recv_type(io);
 			if (ret == BSL_REP_VER ||
@@ -3149,16 +3258,19 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				ret == BSL_REP_UNSUPPORTED_COMMAND) {
 				return;
 			}
+			bootmode = 2;
+			done = -1;
 		}
-		else if (!at) payload[8] = bootmode + 0x80;
+		else payload[8] = bootmode + 0x80;
 
-		err = libusb_bulk_transfer(io->dev_handle, io->endp_out, payload, sizeof(payload), &bytes_written, io->timeout);
-		if (err < 0)
-			ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
 		if (io->verbose >= 2) {
 			DBG_LOG("send (%d):\n", (int)sizeof(payload));
 			print_mem(stderr, payload, sizeof(payload));
 		}
+		err = libusb_bulk_transfer(io->dev_handle, io->endp_out, payload, sizeof(payload), &bytes_written, io->timeout);
+		if (err < 0)
+			ERR_EXIT("usb_send failed : %s\n", libusb_error_name(err));
+
 		if (recv_msg(io)) {
 			ret = recv_type(io);
 			if (ret == BSL_REP_VER ||
@@ -3170,16 +3282,17 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 			else if (ret != 0x7e7e) {
 				uint8_t autod[] = { 0x7e,0,0,0,0,0x20,0,0x68,0,0x41,0x54,0x2b,0x53,0x50,0x52,0x45,0x46,0x3d,0x22,0x41,0x55,0x54,0x4f,0x44,0x4c,0x4f,0x41,0x44,0x45,0x52,0x22,0xd,0xa,0x7e };
 				usleep(500000);
+				if (io->verbose >= 2) {
+					DBG_LOG("send (%d):\n", (int)sizeof(autod));
+					print_mem(stderr, autod, sizeof(autod));
+				}
 				err = libusb_bulk_transfer(io->dev_handle, io->endp_out, autod, sizeof(autod), &bytes_written, io->timeout);
 				if (err >= 0) {
-					if (io->verbose >= 2) {
-						DBG_LOG("send (%d):\n", (int)sizeof(autod));
-						print_mem(stderr, autod, sizeof(autod));
-					}
 					if (recv_msg(io)) done = -1;
 				}
 			}
 		}
+		else done = -1;
 		for (int i = 0; ; i++) {
 			if (m_bOpened == -1) {
 				libusb_close(io->dev_handle);
@@ -3190,12 +3303,11 @@ void ChangeMode(spdio_t *io, int ms, int bootmode, int at) {
 				break;
 			}
 			if (i >= 100) {
-				if (ret == BSL_REP_VER) return;
-				else ERR_EXIT("kick reboot timeout, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
+				if (ret != BSL_REP_VER) DBG_LOG("Warning: kick reboot timeout\n");
+				return;
 			}
 			usleep(100000);
 		}
-		if (at == 0 && bootmode != 0 && bootmode != 2) done = 1;
 	}
 }
 

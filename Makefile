@@ -15,10 +15,10 @@ endif
 ifeq ($(IS_WINDOWS),1)
     CFLAGS += -static
     LIBXML2_CFLAGS := $(shell pkg-config --static --cflags libxml-2.0)
-    LIBXML2_LIBS   := $(shell pkg-config --static --libs libxml-2.0)
+    LIBXML2_LDFLAGS   := $(shell pkg-config --static --libs libxml-2.0)
 else
     LIBXML2_CFLAGS := $(shell pkg-config --cflags libxml-2.0)
-    LIBXML2_LIBS   := $(shell pkg-config --libs libxml-2.0)
+    LIBXML2_LDFLAGS   := $(shell pkg-config --libs libxml-2.0)
 endif
 
 CFLAGS += -DUSE_LIBUSB=$(LIBUSB) $(LIBXML2_CFLAGS)
@@ -42,7 +42,7 @@ clean:
 	$(RM) GITVER.h $(APPNAME)
 
 GITVER.h:
-	echo "#define GIT_VER \"$(shell git rev-parse --abbrev-ref HEAD)\"" > GITVER.h
+	echo "#define GIT_VER \"$(shell git rev-list HEAD --count)\"" > GITVER.h
 	echo "#define GIT_SHA1 \"$(shell git rev-parse HEAD)\"" >> GITVER.h
 
 $(APPNAME): $(APPNAME).c common.c

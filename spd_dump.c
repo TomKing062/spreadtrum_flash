@@ -118,7 +118,7 @@ void print_help(void) {
 }
 
 #define REOPEN_FREQ 2
-extern char fn_partlist[40];
+extern char fn_partlist[80];
 extern char savepath[ARGV_LEN];
 extern DA_INFO_T Da_Info;
 extern partition_t gPartInfo;
@@ -130,6 +130,7 @@ int fdl2_executed = 0;
 int selected_ab = -1;
 uint64_t fblk_size = 0;
 int g_spl_size = 0;
+int g_w_force = 0;
 int main(int argc, char **argv) {
 	spdio_t *io = NULL; int ret, i, in_quote;
 	int wait = 30 * REOPEN_FREQ;
@@ -141,7 +142,7 @@ int main(int argc, char **argv) {
 	char str1[(ARGC_MAX - 1) * ARGV_LEN];
 	char **str2;
 	char *execfile;
-	int bootmode = -1, at = 0, async = 1;
+	int bootmode = -1, async = 1;
 #if !USE_LIBUSB
 	extern DWORD curPort;
 	DWORD *ports;
@@ -170,6 +171,9 @@ int main(int argc, char **argv) {
 #endif
 	DBG_LOG("ver:%s, sha1:%s\n", GIT_VER, GIT_SHA1);
 	sprintf(fn_partlist, "partition_%lld.xml", (long long)time(NULL));
+	if (atexit(clean_tmpdir)) ERR_EXIT("Failed to register cleanup function.\n");
+	signal(SIGINT, signal_exit);
+	signal(SIGTERM, signal_exit);
 	while (argc > 1) {
 		if (!strcmp(argv[1], "--wait")) {
 			if (argc <= 2) ERR_EXIT("bad option\n");
@@ -202,12 +206,12 @@ int main(int argc, char **argv) {
 #endif
 		}
 		else if (!strcmp(argv[1], "--kick")) {
-			at = 1;
+			bootmode = 2;
 			argc -= 1; argv += 1;
 		}
 		else if (!strcmp(argv[1], "--kickto")) {
 			if (argc <= 2) ERR_EXIT("bad option\n");
-			bootmode = strtol(argv[2], NULL, 0); at = 0;
+			bootmode = strtol(argv[2], NULL, 0);
 			argc -= 2; argv += 2;
 		}
 		else if (!strcmp(argv[1], "--sync")) {
@@ -219,7 +223,7 @@ int main(int argc, char **argv) {
 #if defined(_MYDEBUG) && defined(USE_LIBUSB)
 	io->verbose = 2;
 #endif
-	if (stage == 99) { bootmode = -1; at = 0; }
+	if (stage == 99) bootmode = -1;
 #ifdef __ANDROID__
 	bListenLibusb = 0;
 	DBG_LOG("Try to convert termux transfered usb port fd.\n");
@@ -249,18 +253,18 @@ int main(int argc, char **argv) {
 			DBG_LOG("Create Receive Thread Fail.\n");
 		}
 	}
-	if (at || bootmode >= 0) {
+	if (bootmode >= 0) {
 		io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
 		if (io->hThread == NULL) return -1;
-		ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode, at);
+		ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode);
 		wait = 30 * REOPEN_FREQ;
 		stage = -1;
 	}
 #else
-	if (!libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) { DBG_LOG("hotplug unsupported on this platform\n"); bListenLibusb = 0; bootmode = -1; at = 0; }
-	if (at || bootmode >= 0) {
+	if (!libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) { DBG_LOG("hotplug unsupported on this platform\n"); bListenLibusb = 0; bootmode = -1; }
+	if (bootmode >= 0) {
 		startUsbEventHandle();
-		ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode, at);
+		ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode);
 		wait = 30 * REOPEN_FREQ;
 		stage = -1;
 	}
@@ -865,6 +869,7 @@ int main(int argc, char **argv) {
 		}
 		else if (!strcmp(str2[1], "path")) {
 			if (argcount > 2) strcpy(savepath, str2[2]);
+			my_mkdir(savepath);
 			DBG_LOG("save dir is %s\n", savepath);
 			argc -= 2; argv += 2;
 
@@ -1186,6 +1191,12 @@ rloop:
 			argc -= 2; argv += 2;
 
 		}
+		else if (!strcmp(str2[1], "g_w_force")) {
+			if (argcount <= 2) { DBG_LOG("g_w_force {0,1}\n"); argc = 1; continue; }
+			g_w_force = atoi(str2[2]);
+			argc -= 2; argv += 2;
+
+		}
 		else if (!strcmp(str2[1], "w_force")) {
 			const char *fn; FILE *fi;
 			const char *name = str2[2];
@@ -1363,12 +1374,12 @@ rloop:
 			argc -= 2; argv += 2;
 
 		}
-		else if (!strcmp(str2[1], "dis_avb_V9RfBCB2Ct8c")) {
+		else if (!strcmp(str2[1], "dis_avb")) {
 			dis_avb_with_cve(io, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			argc -= 1; argv += 1;
 
 		}
-		else if (!strcmp(str2[1], "dis_avb_ex_V9RfBCB2Ct8c")) {
+		else if (!strcmp(str2[1], "dis_avb_ex")) {
 			if (argcount <= 3) { DBG_LOG("dis_avb_ex sml_or_teecfg tos\n"); argc = 1; continue; }
 			char *fn_tos = NULL;
 			if (!bsp_chsize(str2[2])) {
