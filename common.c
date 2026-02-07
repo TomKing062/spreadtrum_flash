@@ -1646,10 +1646,14 @@ void load_nv_partition(spdio_t *io, const char *name,
 		dump_partition(io, name, 0, 16, "nvcrc", 4096);
 		uint8_t *crc_mem = loadfile("nvcrc", NULL, 0);
 		crc = *(uint16_t *)crc_mem;
+		mem[0] = crc_mem[0];
+		mem[1] = crc_mem[1];
 		free(crc_mem);
 	}
-	else crc = crc16(crc, mem + 2, len - 2);
-	WRITE16_BE(mem, crc);
+	else {
+		crc = crc16(crc, mem + 2, len - 2);
+		WRITE16_BE(mem, crc);
+	}
 	for (offset = 0; offset < len; offset++) cs += mem[offset];
 	DBG_LOG("file size : 0x%zx\n", len);
 
