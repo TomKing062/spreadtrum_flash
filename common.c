@@ -2592,7 +2592,7 @@ int dis_avb(const char *filename) {
 	else mov_count--;
 	DBG_LOG("patch mov at 0x%zx\n", pmov[mov_count]);
 	*(uint32_t *)&mem[pmov[mov_count]] = 0x52800000;
-	FILE *file = fopen("tmp/tos-noavb.bin", "wb");
+	FILE *file = fopen("tos-noavb.bin", "wb");
 	if (file == NULL) {
 		DBG_LOG("Failed to create the file.\n");
 		free(mem);
