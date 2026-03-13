@@ -2175,12 +2175,16 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 		namelen = strlen(fn);
 		if (selected_ab == 1 && namelen > 2 && 0 == strcmp(fn + namelen - 2, "_b")) { partitions[i].written_flag = 1; continue; }
 		else if (selected_ab == 2 && namelen > 2 && 0 == strcmp(fn + namelen - 2, "_a")) { partitions[i].written_flag = 1; continue; }
-		if (!strcmp(fn, "splloader") ||
-			!strcmp(fn, "uboot_a") ||
+		if (!strcmp(fn, "splloader")) {
+			load_partition(io, fn, partitions[i].file_path, step);
+			partitions[i].written_flag = 1;
+			continue;
+		}
+		if (!strcmp(fn, "uboot_a") ||
 			!strcmp(fn, "uboot_b") ||
 			!strcmp(fn, "vbmeta_a") ||
 			!strcmp(fn, "vbmeta_b")) {
-			load_partition(io, fn, partitions[i].file_path, step);
+			load_partition_unify(io, fn, partitions[i].file_path, step);
 			partitions[i].written_flag = 1;
 			continue;
 		}
@@ -2334,7 +2338,7 @@ uint32_t const crc32_tab[] = {
 	0xb3667a2e, 0xc4614ab8, 0x5d681b02, 0x2a6f2b94, 0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d
 };
 
-uint32_t crc32(uint32_t crc_in, const uint8_t *buf, int size) {
+static uint32_t crc32(uint32_t crc_in, const uint8_t *buf, int size) {
 	const uint8_t *p = buf;
 	uint32_t crc;
 
@@ -2669,6 +2673,7 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 	FILE *fo = fopen(merged_img_name, "wb");
 	if (fo == NULL) {
 		DBG_LOG("Failed to create the file.\n");
+		free(out_put_file);
 		return 0;
 	}
 #if MULTI_HEADER
@@ -2677,6 +2682,7 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 	fwrite(out_put_file, 1, sizeof(sys_img_header) + modified_img_size + signed_img_size, fo);
 #endif
 	fclose(fo);
+	free(out_put_file);
 	return 1;
 }
 
@@ -2718,12 +2724,13 @@ void merge_nv(spdio_t *io, const uint8_t *a, size_t a_size, const uint8_t *b, si
 	if (!nvid_list_offset) ERR_EXIT("malloc failed\n");
 	memset(nvid_list_offset, 0, 0x10000 * sizeof(NVEntry));
 	size_t pos = 4;
+	int nv_broken = 0;
 	if (*(uint32_t *)a == 0x4e56) pos += 0x200;
 	while (pos + 4 <= a_size) {
 		uint16_t type = *(uint16_t *)(a + pos);
 		uint16_t length = *(uint16_t *)(a + pos + 2);
 		pos += 4;
-		if (pos + length > a_size) break;
+		if (length == 0 || pos + length > a_size) { nv_broken++; break; }
 		nvid_list_offset[type].length = length;
 		nvid_list_offset[type].offset = pos;
 		pos += length;
@@ -2732,6 +2739,7 @@ void merge_nv(spdio_t *io, const uint8_t *a, size_t a_size, const uint8_t *b, si
 		pos += doffset;
 		if (*(uint16_t *)(a + pos) == 0xffff) break;
 	}
+	if (nv_broken) memset(nvid_list_offset, 0, 0x10000 * sizeof(NVEntry));
 
 	uint8_t *c_ptr = c;
 	pos = 4;
@@ -2743,7 +2751,7 @@ void merge_nv(spdio_t *io, const uint8_t *a, size_t a_size, const uint8_t *b, si
 		uint16_t length = *(uint16_t *)(b + pos + 2);
 		pos += 4;
 		if (pos + length > b_size) break;
-		if (io->nvid_list[type]) {
+		if (nv_broken == 0 && io->nvid_list[type]) {
 			*(uint16_t *)c_ptr = type;
 			*(uint16_t *)(c_ptr + 2) = nvid_list_offset[type].length;
 			memcpy(c_ptr + 4, a + nvid_list_offset[type].offset, nvid_list_offset[type].length);
@@ -2762,61 +2770,65 @@ void merge_nv(spdio_t *io, const uint8_t *a, size_t a_size, const uint8_t *b, si
 		c_ptr += doffset;
 		if (*(uint16_t *)(b + pos) == 0xffff) break;
 	}
-	for (int i = 0; i < 0x10000; i++) {
-		if (nvid_list_offset[i].length && nvid_list_offset[i].saved == 0) {
-			*(uint16_t *)c_ptr = i;
-			*(uint16_t *)(c_ptr + 2) = nvid_list_offset[i].length;
-			memcpy(c_ptr + 4, a + nvid_list_offset[i].offset, nvid_list_offset[i].length);
-			c_ptr += 4 + nvid_list_offset[i].length;
+	if (!nv_broken)
+		for (int i = 0; i < 0x10000; i++) {
+			if (nvid_list_offset[i].length && nvid_list_offset[i].saved == 0) {
+				*(uint16_t *)c_ptr = i;
+				*(uint16_t *)(c_ptr + 2) = nvid_list_offset[i].length;
+				memcpy(c_ptr + 4, a + nvid_list_offset[i].offset, nvid_list_offset[i].length);
+				c_ptr += 4 + nvid_list_offset[i].length;
+			}
 		}
-	}
 	uint8_t endbuf[] = { 0xff,0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	memcpy(c_ptr, endbuf, 8);
 	*c_size = c_ptr - c + 8;
 	free(nvid_list_offset);
 }
 
-int found_NVItem = 0;
-void get_nvlist_it(spdio_t *io, xmlNode *node) {
-	if (node->type == XML_ELEMENT_NODE && xmlStrEqual(node->name, (const xmlChar *)"NVItem")) {
-		found_NVItem = 1;
-		xmlNode *NVItem_node = node;
-		do {
-			for (xmlNode *cur = NVItem_node->children; cur != NULL; cur = cur->next) {
-				if (xmlStrcmp(cur->name, (const xmlChar *)"ID") == 0) {
-					xmlChar *id_str = xmlNodeGetContent(cur);
-					if (id_str) {
-						long id = strtol((const char *)id_str, NULL, 0);
-						if (id < 0x10000) {
-							io->nvid_list[id] = 1;
-							if (io->verbose) DBG_LOG("saved id 0x%lX to list\n", id);
-						}
-						xmlFree(id_str);
-					}
-					break;
-				}
-			}
-			NVItem_node = NVItem_node->next;
-		} while (NVItem_node != NULL);
-		return;
+xmlNode *findFirstNodeByName(xmlNode *node, const xmlChar *targetName) {
+	if (node->type == XML_ELEMENT_NODE && xmlStrEqual(node->name, targetName)) {
+		return node;
 	}
-	for (xmlNode *cur = node->children; cur != NULL; cur = cur->next) {
-		get_nvlist_it(io, cur);
-		if (found_NVItem) return;
+	xmlNode *child = node->children;
+	while (child) {
+		xmlNode *found = findFirstNodeByName(child, targetName);
+		if (found) return found;
+		child = child->next;
 	}
+	return NULL;
 }
 
 int get_nvlist_xml(spdio_t *io, char *fn) {
 	xmlDoc *doc;
 	xmlNode *root;
 	doc = xmlReadFile(fn, NULL, 0);
-	if (doc == NULL) return 0;;
-	found_NVItem = 0;
+	if (doc == NULL) return 0;
 	root = xmlDocGetRootElement(doc);
 	io->nvid_list = malloc(0x10000 * sizeof(int));
 	if (!io->nvid_list) ERR_EXIT("malloc failed\n");
 	memset(io->nvid_list, 0, 0x10000 * sizeof(int));
-	get_nvlist_it(io, root);
+	xmlNode *NVItem_node = findFirstNodeByName(root, (const xmlChar *)"NVItem");
+	if (!NVItem_node) {
+		DBG_LOG("can't find NVItem from input\n");
+		return 0;
+	}
+	do {
+		for (xmlNode *cur = NVItem_node->children; cur != NULL; cur = cur->next) {
+			if (xmlStrEqual(cur->name, (const xmlChar *)"ID")) {
+				xmlChar *id_str = xmlNodeGetContent(cur);
+				if (id_str) {
+					long id = strtol((const char *)id_str, NULL, 0);
+					if (id < 0x10000) {
+						io->nvid_list[id] = 1;
+						if (io->verbose) DBG_LOG("saved id 0x%lX to list\n", id);
+					}
+					xmlFree(id_str);
+				}
+				break;
+			}
+		}
+		NVItem_node = NVItem_node->next;
+	} while (NVItem_node != NULL);
 	xmlFreeDoc(doc);
 	io->nvid_list[5] = 1;
 	io->nvid_list[0x179] = 1;

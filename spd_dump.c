@@ -742,7 +742,7 @@ int main(int argc, char **argv) {
 				char *pdump;
 				char chdump;
 				FILE *fdump;
-				fdump = my_fopen("memdump.bin", "wb");
+				fdump = fopen("memdump.bin", "wb");
 				encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
 				while (1) {
 					send_msg(io);
@@ -1103,7 +1103,7 @@ rloop:
 			if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
 			else {
 				DBG_LOG("  0 %36s     256KB\n", "splloader");
-				FILE *fo = my_fopen(str2[2], "wb");
+				FILE *fo = fopen(str2[2], "wb");
 				if (!fo) ERR_EXIT("fopen failed\n");
 				fprintf(fo, "<Partitions>\n");
 				for (i = 0; i < io->part_count; i++) {
@@ -1399,20 +1399,22 @@ rloop:
 			if (!gPartInfo.size) get_partition_info(io, "l_fixnv1", 1);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n");  argc -= 3; argv += 3; continue; }
 			dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "nvbak", blk_size ? blk_size : DEFAULT_BLK_SIZE);
-			get_nvlist_xml(io, str2[2]);
-			size_t a_size = 0, b_size = 0, c_size = 0;
-			uint8_t *a = loadfile("nvbak", &a_size, 0);
-			uint8_t *b = loadfile(str2[3], &b_size, 0);
-			uint8_t *c = malloc(a_size + b_size);
-			merge_nv(io, a, a_size, b, b_size, c, &c_size);
+			if (get_nvlist_xml(io, str2[2])) {
+				size_t a_size = 0, b_size = 0, c_size = 0;
+				uint8_t *a = loadfile("nvbak", &a_size, 0);
+				uint8_t *b = loadfile(str2[3], &b_size, 0);
+				uint8_t *c = malloc(a_size + b_size);
+				merge_nv(io, a, a_size, b, b_size, c, &c_size);
+				FILE *fi = fopen("nvmerged", "wb");
+				if (!fi) ERR_EXIT("fopen failed\n");
+				if (fseek(fi, 0, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
+				if (fwrite(c, 1, c_size, fi) != c_size) ERR_EXIT("fwrite failed\n");
+				fclose(fi);
+				load_nv_partition(io, gPartInfo.name, "nvmerged", 4096);
+				free(a); free(b); free(c);
+			}
 			free(io->nvid_list);
 			io->nvid_list = NULL;
-			FILE *fi = fopen("nvmerged", "wb");
-			if (!fi) ERR_EXIT("fopen failed\n");
-			if (fseek(fi, 0, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
-			if (fwrite(c, 1, c_size, fi) != c_size) ERR_EXIT("fwrite failed\n");
-			fclose(fi);
-			load_nv_partition(io, gPartInfo.name, "nvmerged", 4096);
 			argc -= 3; argv += 3;
 
 		}
@@ -1422,21 +1424,63 @@ rloop:
 			if (!gPartInfo.size) get_partition_info(io, "l_fixnv1", 1);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n");  argc -= 3; argv += 3; continue; }
 			dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "nvbak", blk_size ? blk_size : DEFAULT_BLK_SIZE);
-			get_nvlist_cfg(io, str2[2]);
-			size_t a_size = 0, b_size = 0, c_size = 0;
-			uint8_t *a = loadfile("nvbak", &a_size, 0);
-			uint8_t *b = loadfile(str2[3], &b_size, 0);
-			uint8_t *c = malloc(a_size + b_size);
-			merge_nv(io, a, a_size, b, b_size, c, &c_size);
+			if (get_nvlist_cfg(io, str2[2])) {
+				size_t a_size = 0, b_size = 0, c_size = 0;
+				uint8_t *a = loadfile("nvbak", &a_size, 0);
+				uint8_t *b = loadfile(str2[3], &b_size, 0);
+				uint8_t *c = malloc(a_size + b_size);
+				merge_nv(io, a, a_size, b, b_size, c, &c_size);
+				FILE *fi = fopen("nvmerged", "wb");
+				if (!fi) ERR_EXIT("fopen failed\n");
+				if (fseek(fi, 0, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
+				if (fwrite(c, 1, c_size, fi) != c_size) ERR_EXIT("fwrite failed\n");
+				fclose(fi);
+				load_nv_partition(io, gPartInfo.name, "nvmerged", 4096);
+				free(a); free(b); free(c);
+			}
 			free(io->nvid_list);
 			io->nvid_list = NULL;
-			FILE *fi = fopen("nvmerged", "wb");
-			if (!fi) ERR_EXIT("fopen failed\n");
-			if (fseek(fi, 0, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
-			if (fwrite(c, 1, c_size, fi) != c_size) ERR_EXIT("fwrite failed\n");
-			fclose(fi);
-			load_nv_partition(io, gPartInfo.name, "nvmerged", 4096);
 			argc -= 3; argv += 3;
+
+		}
+		else if (!strcmp(str2[1], "mergenv-xml-ex")) {
+			if (argcount <= 4) { DBG_LOG("mergenv-xml-ex xml old_nv new_nv\n"); argc = 1; continue; }
+			if (get_nvlist_xml(io, str2[2])) {
+				size_t a_size = 0, b_size = 0, c_size = 0;
+				uint8_t *a = loadfile(str2[3], &a_size, 0);
+				uint8_t *b = loadfile(str2[4], &b_size, 0);
+				uint8_t *c = malloc(a_size + b_size);
+				merge_nv(io, a, a_size, b, b_size, c, &c_size);
+				FILE *fi = fopen("nvmerged", "wb");
+				if (!fi) ERR_EXIT("fopen failed\n");
+				if (fseek(fi, 0, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
+				if (fwrite(c, 1, c_size, fi) != c_size) ERR_EXIT("fwrite failed\n");
+				fclose(fi);
+				free(a); free(b); free(c);
+			}
+			free(io->nvid_list);
+			io->nvid_list = NULL;
+			argc -= 4; argv += 4;
+
+		}
+		else if (!strcmp(str2[1], "mergenv-cfg-ex")) {
+			if (argcount <= 4) { DBG_LOG("mergenv-cfg-ex cfg old_nv new_nv\n"); argc = 1; continue; }
+			if (get_nvlist_cfg(io, str2[2])) {
+				size_t a_size = 0, b_size = 0, c_size = 0;
+				uint8_t *a = loadfile(str2[3], &a_size, 0);
+				uint8_t *b = loadfile(str2[4], &b_size, 0);
+				uint8_t *c = malloc(a_size + b_size);
+				merge_nv(io, a, a_size, b, b_size, c, &c_size);
+				FILE *fi = fopen("nvmerged", "wb");
+				if (!fi) ERR_EXIT("fopen failed\n");
+				if (fseek(fi, 0, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
+				if (fwrite(c, 1, c_size, fi) != c_size) ERR_EXIT("fwrite failed\n");
+				fclose(fi);
+				free(a); free(b); free(c);
+			}
+			free(io->nvid_list);
+			io->nvid_list = NULL;
+			argc -= 4; argv += 4;
 
 		}
 		else if (!strcmp(str2[1], "reboot-recovery")) {
