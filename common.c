@@ -68,6 +68,16 @@ void clean_tmpdir(void) {
 	if (savepath[0]) my_rmdir(savepath, 0);
 }
 
+#if _WIN32
+BOOL WINAPI ConsoleHandler(DWORD dwCtrlType) {
+	if (dwCtrlType == CTRL_CLOSE_EVENT) {
+		clean_tmpdir();
+		return TRUE;
+	}
+	return FALSE;
+}
+#endif
+
 #if !USE_LIBUSB
 DWORD curPort = 0;
 DWORD *FindPort(const char *USB_DL) {
@@ -2622,25 +2632,30 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 	size_t signed_img_size = 0, modified_img_size = 0;
 
 	uint8_t *signed_img = loadfile(signed_img_name, &signed_img_size, 0),
-		*modified_img = loadfile(unsigned_img_name, &modified_img_size, 0),
+		*modified_img = loadfile(unsigned_img_name, &modified_img_size, 16),
 		*out_put_file = NULL;
 	uint8_t *signed_img0 = signed_img, *modified_img0 = modified_img;
 
 	if (!signed_img || !modified_img) ERR_EXIT("load files failed\n");
+	modified_img_size = ((modified_img_size + 15) / 16) * 16;
 
 	size_t orig_signed_img_size = (*(uint32_t *)&signed_img[0x30]);
 
 	signed_img_size -= sizeof(sys_img_header);
 #if MULTI_HEADER
-	size_t signed_img_headers_size = signed_img_size - orig_signed_img_size;
+	size_t modified_img_headers_size = 0;
 #endif
-	if (*(uint32_t *)modified_img == 0x42544844 && *(uint32_t *)&modified_img[0x30]) {
-		modified_img_size = *(uint32_t *)&modified_img[0x30];
+	size_t orig_modified_img_size = *(uint32_t *)&modified_img[0x30];
+	if (*(uint32_t *)modified_img == 0x42544844 && orig_modified_img_size) {
+#if MULTI_HEADER
+		modified_img_headers_size = modified_img_size - orig_modified_img_size - sizeof(sys_img_header);
+#endif
+		modified_img_size = orig_modified_img_size;
 		modified_img += sizeof(sys_img_header);
 	}
 
 #if MULTI_HEADER
-	if (!(out_put_file = (uint8_t *)malloc(sizeof(sys_img_header) + modified_img_size + signed_img_headers_size + signed_img_size))) ERR_EXIT("malloc failed\n");
+	if (!(out_put_file = (uint8_t *)malloc(sizeof(sys_img_header) + modified_img_size + modified_img_headers_size + signed_img_size))) ERR_EXIT("malloc failed\n");
 #else
 	if (!(out_put_file = (uint8_t *)malloc(sizeof(sys_img_header) + modified_img_size + signed_img_size))) ERR_EXIT("malloc failed\n");
 #endif
@@ -2650,10 +2665,10 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 	signed_img += sizeof(sys_img_header);
 
 #if MULTI_HEADER
-	memcpy(out_put_file + sizeof(sys_img_header) + modified_img_size, signed_img + orig_signed_img_size, signed_img_headers_size);
-	sys_img_hdr->mImgSize += modified_img_size + signed_img_headers_size;
-	img_hdr->payload_offset += modified_img_size + signed_img_headers_size;
-	img_hdr->cert_offset += modified_img_size + signed_img_headers_size;
+	memcpy(out_put_file + sizeof(sys_img_header) + modified_img_size, modified_img + modified_img_size, modified_img_headers_size);
+	sys_img_hdr->mImgSize += modified_img_size + modified_img_headers_size;
+	img_hdr->payload_offset += modified_img_size + modified_img_headers_size;
+	img_hdr->cert_offset += modified_img_size + modified_img_headers_size;
 #else
 	sys_img_hdr->mImgSize += modified_img_size;
 	img_hdr->payload_offset += modified_img_size;
@@ -2663,7 +2678,7 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 	memcpy(out_put_file, sys_img_hdr, sizeof(sys_img_header));
 	memcpy(out_put_file + sizeof(sys_img_header), modified_img, modified_img_size);
 #if MULTI_HEADER
-	memcpy(out_put_file + sizeof(sys_img_header) + modified_img_size + signed_img_headers_size, signed_img, signed_img_size);
+	memcpy(out_put_file + sizeof(sys_img_header) + modified_img_size + modified_img_headers_size, signed_img, signed_img_size);
 #else
 	memcpy(out_put_file + sizeof(sys_img_header) + modified_img_size, signed_img, signed_img_size);
 #endif
@@ -2677,7 +2692,7 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 		return 0;
 	}
 #if MULTI_HEADER
-	fwrite(out_put_file, 1, sizeof(sys_img_header) + modified_img_size + signed_img_headers_size + signed_img_size, fo);
+	fwrite(out_put_file, 1, sizeof(sys_img_header) + modified_img_size + modified_img_headers_size + signed_img_size, fo);
 #else
 	fwrite(out_put_file, 1, sizeof(sys_img_header) + modified_img_size + signed_img_size, fo);
 #endif

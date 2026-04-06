@@ -25,7 +25,7 @@
 #include <Dbt.h>
 #include <tchar.h>
 #define WM_RCV_CHANNEL_DATA WM_USER + 1
-
+BOOL WINAPI ConsoleHandler(DWORD dwCtrlType);
 DWORD WINAPI ThrdFunc(LPVOID lpParam);
 #if UNICODE
 #define my_strstr wcsstr

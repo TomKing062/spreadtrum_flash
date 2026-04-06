@@ -174,6 +174,9 @@ int main(int argc, char **argv) {
 	if (atexit(clean_tmpdir)) ERR_EXIT("Failed to register cleanup function.\n");
 	signal(SIGINT, signal_exit);
 	signal(SIGTERM, signal_exit);
+#if _WIN32
+	if (!SetConsoleCtrlHandler(ConsoleHandler, TRUE)) ERR_EXIT("Failed to register cleanup function.\n");;
+#endif
 	while (argc > 1) {
 		if (!strcmp(argv[1], "--wait")) {
 			if (argc <= 2) ERR_EXIT("bad option\n");
@@ -1294,6 +1297,7 @@ rloop:
 		else if (!strcmp(str2[1], "set_active")) {
 			if (argcount <= 2) { DBG_LOG("set_active {a,b}\n"); argc = 1; continue; }
 			set_active(io, str2[2]);
+			selected_ab = str2[2][0] - 'a' + 1;
 			argc -= 2; argv += 2;
 
 		}
