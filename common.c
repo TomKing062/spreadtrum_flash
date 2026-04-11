@@ -36,12 +36,13 @@ void my_rmdir(const char *path, int remove_all) {
 		return;
 	}
 	if (remove_all)
-		for (fn = findData.cFileName; FindNextFileA(hFind, &findData); fn = findData.cFileName) {
+		do {
 			if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+			fn = findData.cFileName;
 			char fullPath[1024];
 			snprintf(fullPath, sizeof(fullPath), "%s/%s", path, fn);
 			remove(fullPath);
-		}
+		} while (FindNextFileA(hFind, &findData));
 	FindClose(hFind);
 	RemoveDirectoryA(path);
 #else
@@ -52,12 +53,15 @@ void my_rmdir(const char *path, int remove_all) {
 		return;
 	}
 	if (remove_all)
-		for (fn = entry->d_name; (entry = readdir(dir)); fn = entry->d_name) {
-			if (entry->d_type == DT_DIR) continue;
+		do {
+			struct stat st;
+			fn = entry->d_name;
+			if (stat(fn, &st) == 0 && S_ISDIR(st.st_mode))
+				continue;
 			char fullPath[1024];
 			snprintf(fullPath, sizeof(fullPath), "%s/%s", path, fn);
 			remove(fullPath);
-		}
+		} while ((entry = readdir(dir)));
 	closedir(dir);
 	rmdir(path);
 #endif
@@ -1438,7 +1442,7 @@ void load_partition(spdio_t *io, const char *name,
 	FILE *fi;
 
 	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
-	if (!strcmp(name, "calinv")) { return; } //skip calinv
+	if (strcmp(name, "calinv") == 0 || strcmp(name, "factorynv") == 0) { return; } //skip calinv and factorynv
 
 	fi = fopen(fn, "rb");
 	if (!fi) ERR_EXIT("fopen(load) failed\n");
@@ -1652,18 +1656,8 @@ void load_nv_partition(spdio_t *io, const char *name,
 			break;
 		}
 	}
-	if (strstr(name, "factorynv")) {
-		dump_partition(io, name, 0, 16, "nvcrc", 4096);
-		uint8_t *crc_mem = loadfile("nvcrc", NULL, 0);
-		crc = *(uint16_t *)crc_mem;
-		mem[0] = crc_mem[0];
-		mem[1] = crc_mem[1];
-		free(crc_mem);
-	}
-	else {
-		crc = crc16(crc, mem + 2, len - 2);
-		WRITE16_BE(mem, crc);
-	}
+	crc = crc16(crc, mem + 2, len - 2);
+	WRITE16_BE(mem, crc);
 	for (offset = 0; offset < len; offset++) cs += mem[offset];
 	DBG_LOG("file size : 0x%zx\n", len);
 
@@ -1687,11 +1681,8 @@ void load_nv_partition(spdio_t *io, const char *name,
 		ret = recv_msg_timeout(io, 15000);
 		if (!ret) ERR_EXIT("timeout reached\n");
 		if ((ret = recv_type(io)) != BSL_REP_ACK) {
-			if (n == rsz) DBG_LOG("Got response (0x%04x) when writing last packet to %s\n", ret, name);
-			else {
-				DBG_LOG("unexpected response (0x%04x)\n", ret);
-				break;
-			}
+			DBG_LOG("unexpected response (0x%04x)\n", ret);
+			break;
 		}
 	}
 	free(mem0);
@@ -2086,8 +2077,9 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 		DBG_LOG("Error opening directory.\n");
 		return;
 	}
-	for (fn = findData.cFileName; FindNextFileA(hFind, &findData); fn = findData.cFileName) {
+	do {
 		if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+		fn = findData.cFileName;
 		namelen = strlen(fn);
 		if (namelen >= 4) {
 			if (!strcmp(fn + namelen - 4, ".xml") ||
@@ -2115,7 +2107,7 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 		strcpy(partitions[partition_count].name, fn);
 		partitions[partition_count].written_flag = 0;
 		partition_count++;
-	}
+	} while (FindNextFileA(hFind, &findData));
 	FindClose(hFind);
 #else
 	DIR *dir;
@@ -2125,8 +2117,11 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 		DBG_LOG("Error opening directory.\n");
 		return;
 	}
-	for (fn = entry->d_name; (entry = readdir(dir)); fn = entry->d_name) {
-		if (entry->d_type == DT_DIR) continue;
+	do {
+		struct stat st;
+		fn = entry->d_name;
+		if (stat(fn, &st) == 0 && S_ISDIR(st.st_mode))
+			continue;
 		namelen = strlen(fn);
 		if (namelen >= 4) {
 			if (!strcmp(fn + namelen - 4, ".xml") ||
@@ -2154,7 +2149,7 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 		strcpy(partitions[partition_count].name, fn);
 		partitions[partition_count].written_flag = 0;
 		partition_count++;
-	}
+	} while ((entry = readdir(dir)));
 	closedir(dir);
 #endif
 	if (selected_ab < 0) select_ab(io);
@@ -2392,8 +2387,7 @@ int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned
 	char name0[36], name1[40];
 	unsigned size0, size1;
 	if (strstr(name, "fixnv1") ||
-		strstr(name, "downloadnv") ||
-		strstr(name, "factorynv")) {
+		strstr(name, "downloadnv")) {
 		load_nv_partition(io, name, fn, 4096);
 		return 1;
 	}
