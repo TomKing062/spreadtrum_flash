@@ -538,7 +538,7 @@ int main(int argc, char **argv) {
 			if (argcount <= 3) { DBG_LOG("sendcmdvl type value(max is 0xFFFFFFFF)\n"); argc = 1; continue; }
 			uint64_t send_value = strtoull(str2[3], NULL, 0);;
 			char filename[64];
-			snprintf(filename, sizeof(filename), "0x%08llX.bin", (unsigned long long)send_value);
+			snprintf(filename, sizeof(filename), "0x%08llX", (unsigned long long)send_value);
 			FILE *output_file = fopen(filename, "wb");
 			if (!output_file) { DBG_LOG("Failed to open output file: %s\n", filename); argc = 1; continue; }
 			for (; send_value < 0x100000000; send_value += 0x200) {
@@ -745,7 +745,7 @@ int main(int argc, char **argv) {
 				char *pdump;
 				char chdump;
 				FILE *fdump;
-				fdump = fopen("memdump.bin", "wb");
+				fdump = fopen("memdump", "wb");
 				encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
 				while (1) {
 					send_msg(io);
@@ -1024,27 +1024,22 @@ int main(int argc, char **argv) {
 			if (!strcmp(name, "preset_modem")) {
 				if (gpt_failed == 1) io->ptable = partition_list(io, fn_partlist, &io->part_count);
 				if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
-				if (selected_ab > 0) { DBG_LOG("saving slot info\n"); dump_partition(io, "misc", 0, 1048576, "misc.bin", blk_size); }
+				if (selected_ab > 0) { DBG_LOG("saving slot info\n"); dump_partition(io, "misc", 0, 1048576, "misc", blk_size); }
 				for (i = 0; i < io->part_count; i++)
-					if (0 == strncmp("l_", (*(io->ptable + i)).name, 2) || 0 == strncmp("nr_", (*(io->ptable + i)).name, 3)) {
-						char dfile[40];
-						snprintf(dfile, sizeof(dfile), "%s.bin", (*(io->ptable + i)).name);
-						dump_partition(io, (*(io->ptable + i)).name, 0, (*(io->ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
-					}
+					if (0 == strncmp("l_", (*(io->ptable + i)).name, 2) || 0 == strncmp("nr_", (*(io->ptable + i)).name, 3))
+						dump_partition(io, (*(io->ptable + i)).name, 0, (*(io->ptable + i)).size, (*(io->ptable + i)).name, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				argc -= 2; argv += 2;
 				continue;
 			}
 			else if (!strcmp(name, "all")) {
 				if (gpt_failed == 1) io->ptable = partition_list(io, fn_partlist, &io->part_count);
 				if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
-				dump_partition(io, "splloader", 0, g_spl_size, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				dump_partition(io, "splloader", 0, g_spl_size, "splloader", blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				for (i = 0; i < io->part_count; i++) {
-					char dfile[40];
 					if (!strncmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
 					else if (!strncmp((*(io->ptable + i)).name, "cache", 5)) continue;
 					else if (!strncmp((*(io->ptable + i)).name, "userdata", 8)) continue;
-					snprintf(dfile, sizeof(dfile), "%s.bin", (*(io->ptable + i)).name);
-					dump_partition(io, (*(io->ptable + i)).name, 0, (*(io->ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+					dump_partition(io, (*(io->ptable + i)).name, 0, (*(io->ptable + i)).size, (*(io->ptable + i)).name, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				}
 				argc -= 2; argv += 2;
 				continue;
@@ -1052,17 +1047,15 @@ int main(int argc, char **argv) {
 			else if (!strcmp(name, "all_lite")) {
 				if (gpt_failed == 1) io->ptable = partition_list(io, fn_partlist, &io->part_count);
 				if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
-				dump_partition(io, "splloader", 0, g_spl_size, "splloader.bin", blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				dump_partition(io, "splloader", 0, g_spl_size, "splloader", blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				for (i = 0; i < io->part_count; i++) {
-					char dfile[40];
 					size_t namelen = strlen((*(io->ptable + i)).name);
 					if (!strncmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
 					else if (!strncmp((*(io->ptable + i)).name, "cache", 5)) continue;
 					else if (!strncmp((*(io->ptable + i)).name, "userdata", 8)) continue;
 					if (selected_ab == 1 && namelen > 2 && 0 == strcmp((*(io->ptable + i)).name + namelen - 2, "_b")) continue;
 					else if (selected_ab == 2 && namelen > 2 && 0 == strcmp((*(io->ptable + i)).name + namelen - 2, "_a")) continue;
-					snprintf(dfile, sizeof(dfile), "%s.bin", (*(io->ptable + i)).name);
-					dump_partition(io, (*(io->ptable + i)).name, 0, (*(io->ptable + i)).size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
+					dump_partition(io, (*(io->ptable + i)).name, 0, (*(io->ptable + i)).size, (*(io->ptable + i)).name, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				}
 				argc -= 2; argv += 2;
 				continue;
@@ -1081,9 +1074,9 @@ rloop:
 				}
 			}
 			char dfile[40];
-			if (isdigit(str2[2][0])) snprintf(dfile, sizeof(dfile), "%s.bin", gPartInfo.name);
-			else if (in_loop) snprintf(dfile, sizeof(dfile), "%s.bin", list[loop_count]);
-			else snprintf(dfile, sizeof(dfile), "%s.bin", name);
+			if (isdigit(str2[2][0])) snprintf(dfile, sizeof(dfile), "%s", gPartInfo.name);
+			else if (in_loop) snprintf(dfile, sizeof(dfile), "%s", list[loop_count]);
+			else snprintf(dfile, sizeof(dfile), "%s", name);
 			dump_partition(io, gPartInfo.name, 0, gPartInfo.size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			if (loop_count--) { name = list[loop_count]; goto rloop; }
 			argc -= 2; argv += 2;
@@ -1390,9 +1383,9 @@ rloop:
 				DBG_LOG("sml_or_teecfg chsize error.\n");
 				argc -= 3; argv += 3; continue;
 			}
-			if (dis_avb(str2[3])) fn_tos = "tos-noavb.bin";
+			if (dis_avb(str2[3])) fn_tos = "tos-noavb";
 			else fn_tos = str2[3];
-			if (!bsp_cve_2img(str2[2], fn_tos, "tos-noavb-bsp-bypassed.bin"))
+			if (!bsp_cve_2img(str2[2], fn_tos, "tos-noavb-bsp-bypassed"))
 				DBG_LOG("bsp_cve: failed or already patched.\n");
 			argc -= 3; argv += 3;
 

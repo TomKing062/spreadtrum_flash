@@ -856,17 +856,22 @@ size_t send_file(spdio_t *io, const char *fn,
 	return size;
 }
 
+static const char *get_basename(const char *fn) {
+	const char *p1 = strrchr(fn, '/');
+	const char *p2 = strrchr(fn, '\\');
+	const char *p = (p1 > p2) ? p1 : p2;
+	return p ? p + 1 : fn;
+}
+
 char *get_fix_fn(const char *fn) {
 	char *fix_fn = malloc(1024);
 	if (!fix_fn) ERR_EXIT("malloc failed\n");
-	if (savepath[0]) {
-		char *ch;
-		if ((ch = strrchr(fn, '/'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
-		else if ((ch = strrchr(fn, '\\'))) sprintf(fix_fn, "%s/%s", savepath, ch + 1);
-		else sprintf(fix_fn, "%s/%s", savepath, fn);
-		return fix_fn;
-	}
-	strcpy(fix_fn, fn);
+	memset(fix_fn, 0, 1024);
+	const char *base = get_basename(fn);
+	if (savepath[0])
+		sprintf(fix_fn, "%s/%s", savepath, base);
+	else
+		sprintf(fix_fn, "%s", base);
 	return fix_fn;
 }
 
@@ -1024,7 +1029,7 @@ uint64_t dump_partition(spdio_t *io,
 	int ret, mode64 = (start + len) >> 32, is_bsp = 0;
 	char name_tmp[36];
 
-	if (!strcmp(name, "super")) dump_partition(io, "metadata", 0, check_partition(io, "metadata", 1), "metadata.bin", step);
+	if (!strcmp(name, "super")) dump_partition(io, "metadata", 0, check_partition(io, "metadata", 1), "metadata", step);
 	else if (!strncmp(name, "userdata", 8)) { if (!check_confirm("read userdata")) return 0; }
 	else if (strstr(name, "nv1")) {
 		strcpy(name_tmp, name);
@@ -1214,7 +1219,7 @@ int scan_xml_partitions(spdio_t *io, const char *fn, uint8_t *buf, size_t buf_si
 
 extern int selected_ab;
 int gpt_info(partition_t *ptable, const char *fn_xml, int *part_count_ptr) {
-	FILE *fp = my_fopen("pgpt.bin", "rb");
+	FILE *fp = my_fopen("pgpt", "rb");
 	if (fp == NULL) {
 		return -1;
 	}
@@ -1313,12 +1318,12 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 	if (selected_ab < 0) select_ab(io);
 	int verbose = io->verbose;
 	io->verbose = 0;
-	size = dump_partition(io, "user_partition", 0, 32 * 1024, "pgpt.bin", 4096);
+	size = dump_partition(io, "user_partition", 0, 32 * 1024, "pgpt", 4096);
 	io->verbose = verbose;
 	if (32 * 1024 == size)
 		gpt_failed = gpt_info(ptable, fn, part_count_ptr);
 	if (gpt_failed) {
-		remove("pgpt.bin");
+		remove("pgpt");
 		encode_msg_nocpy(io, BSL_CMD_READ_PARTITION, 0);
 		send_msg(io);
 		ret = recv_msg(io);
@@ -1337,7 +1342,7 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 			free(ptable);
 			return NULL;
 		}
-		FILE *fpkt = my_fopen("sprdpart.bin", "wb");
+		FILE *fpkt = my_fopen("sprdpart", "wb");
 		if (!fpkt) ERR_EXIT("fopen failed\n");
 		fwrite(io->raw_buf + 4, 1, size, fpkt);
 		fclose(fpkt);
@@ -2036,11 +2041,9 @@ void dump_partitions(spdio_t *io, const char *fn, int *nand_info, unsigned step)
 		}
 		else gPartInfo.size = partitions[i].size << 20;
 
-		char dfile[40];
-		snprintf(dfile, sizeof(dfile), "%s.bin", partitions[i].name);
-		dump_partition(io, gPartInfo.name, 0, gPartInfo.size, dfile, step);
+		dump_partition(io, gPartInfo.name, 0, gPartInfo.size, partitions[i].name, step);
 	}
-	if (selected_ab > 0) { DBG_LOG("saving slot info\n"); dump_partition(io, "misc", 0, 1048576, "misc.bin", step); }
+	if (selected_ab > 0) { DBG_LOG("saving slot info\n"); dump_partition(io, "misc", 0, 1048576, "misc", step); }
 
 	if (savepath[0]) {
 		DBG_LOG("saving dump list\n");
@@ -2358,27 +2361,20 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 	if (!gPartInfo.size) { DBG_LOG("part not exist\n"); return; }
 	else if (gPartInfo.size > 0xffffffff) { DBG_LOG("part too large\n"); return; }
 
-	char dfile[40];
-	snprintf(dfile, sizeof(dfile), "%s.bin", name);
-
-	char fix_fn[1024];
-	if (savepath[0]) sprintf(fix_fn, "%s/%s", savepath, dfile);
-	else strcpy(fix_fn, dfile);
-
 	FILE *fi;
-	if (offset == 0) fi = fopen(fix_fn, "wb");
+	if (offset == 0) fi = fopen(name, "wb");
 	else {
-		if (gPartInfo.size != (long long)dump_partition(io, gPartInfo.name, 0, gPartInfo.size, fix_fn, step)) {
-			remove(fix_fn);
+		if (gPartInfo.size != (long long)dump_partition(io, gPartInfo.name, 0, gPartInfo.size, name, step)) {
+			remove(name);
 			return;
 		}
-		fi = fopen(fix_fn, "rb+");
+		fi = fopen(name, "rb+");
 	}
-	if (!fi) ERR_EXIT("fopen %s failed\n", fix_fn);
+	if (!fi) ERR_EXIT("fopen %s failed\n", name);
 	if (fseek(fi, offset, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
 	if (fwrite(mem, 1, length, fi) != length) ERR_EXIT("fwrite failed\n");
 	fclose(fi);
-	DBG_LOG("w_mem_to_part_offset: wrote to %d part(s) ", load_partition_unify(io, gPartInfo.name, fix_fn, step));
+	DBG_LOG("w_mem_to_part_offset: wrote to %d part(s) ", load_partition_unify(io, gPartInfo.name, name, step));
 	if (selected_ab > 0) DBG_LOG("for VAB device\n");
 	else DBG_LOG("for Non-VAB device\n");
 }
@@ -2600,7 +2596,7 @@ int dis_avb(const char *filename) {
 	else mov_count--;
 	DBG_LOG("patch mov at 0x%zx\n", pmov[mov_count]);
 	*(uint32_t *)&mem[pmov[mov_count]] = 0x52800000;
-	FILE *file = fopen("tos-noavb.bin", "wb");
+	FILE *file = fopen("tos-noavb", "wb");
 	if (file == NULL) {
 		DBG_LOG("Failed to create the file.\n");
 		free(mem);
@@ -2697,33 +2693,33 @@ int bsp_cve_2img(const char *signed_img_name, const char *unsigned_img_name, con
 
 void dis_avb_with_cve(spdio_t *io, unsigned step) {
 	get_partition_info(io, "sml", 1);
-	if (!gPartInfo.size || !dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "sml.bin", step)) {
+	if (!gPartInfo.size || !dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "sml", step)) {
 		DBG_LOG("get sml failed.\n");
 		return;
 	}
 
 	get_partition_info(io, "trustos", 1);
-	if (!gPartInfo.size || !dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "trustos.bin", step)) {
+	if (!gPartInfo.size || !dump_partition(io, gPartInfo.name, 0, gPartInfo.size, "trustos", step)) {
 		DBG_LOG("get tos failed.\n");
 		return;
 	}
 
-	char *fix_fn_tos = get_fix_fn("trustos.bin");
+	char *fix_fn_tos = get_fix_fn("trustos");
 	if (!dis_avb(fix_fn_tos)) {
 		DBG_LOG("dis_avb: failed or already patched.\n");
 		free(fix_fn_tos);
 		return;
 	}
 
-	char *fix_fn_sml = get_fix_fn("sml.bin");
-	if (!bsp_cve_2img(fix_fn_sml, "tos-noavb.bin", "tos-noavb-bsp-bypassed.bin")) {
+	char *fix_fn_sml = get_fix_fn("sml");
+	if (!bsp_cve_2img(fix_fn_sml, "tos-noavb", "tos-noavb-bsp-bypassed")) {
 		DBG_LOG("bsp_cve: failed or already patched.\n");
 		free(fix_fn_tos);
 		free(fix_fn_sml);
 		return;
 	}
 
-	load_partition_unify(io, gPartInfo.name, "tos-noavb-bsp-bypassed.bin", step);
+	load_partition_unify(io, gPartInfo.name, "tos-noavb-bsp-bypassed", step);
 	free(fix_fn_tos);
 	free(fix_fn_sml);
 }
