@@ -1022,6 +1022,7 @@ void print_progress_bar(uint64_t done, uint64_t total, unsigned long long time0)
 }
 
 extern uint64_t fblk_size;
+// fn can be lite
 uint64_t dump_partition(spdio_t *io,
 	const char *name, uint64_t start, uint64_t len,
 	const char *fn, unsigned step) {
@@ -1440,6 +1441,7 @@ void erase_partition(spdio_t *io, const char *name) {
 	io->timeout = timeout0;
 }
 
+// fn must be full
 void load_partition(spdio_t *io, const char *name,
 	const char *fn, unsigned step) {
 	uint64_t offset, len, n64;
@@ -1447,7 +1449,7 @@ void load_partition(spdio_t *io, const char *name,
 	FILE *fi;
 
 	if (strstr(name, "runtimenv")) { erase_partition(io, name); return; }
-	if (strcmp(name, "calinv") == 0 || strcmp(name, "factorynv") == 0) { return; } //skip calinv and factorynv
+	if (strstr(name, "calinv") || strstr(name, "factorynv")) { return; } //skip calinv and factorynv
 
 	fi = fopen(fn, "rb");
 	if (!fi) ERR_EXIT("fopen(load) failed\n");
@@ -1553,6 +1555,7 @@ fallback_load:
 		name, (long long)len, (long long)offset);
 }
 
+// fn must be full
 void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned step) {
 	int i, j; char a;
 	uint8_t *buf = io->temp_buf;
@@ -2361,24 +2364,29 @@ void w_mem_to_part_offset(spdio_t *io, const char *name, size_t offset, uint8_t 
 	if (!gPartInfo.size) { DBG_LOG("part not exist\n"); return; }
 	else if (gPartInfo.size > 0xffffffff) { DBG_LOG("part too large\n"); return; }
 
+	char fix_fn[1024];
+	if (savepath[0]) sprintf(fix_fn, "%s/%s", savepath, name);
+	else strcpy(fix_fn, name);
+
 	FILE *fi;
-	if (offset == 0) fi = fopen(name, "wb");
+	if (offset == 0) fi = fopen(fix_fn, "wb");
 	else {
 		if (gPartInfo.size != (long long)dump_partition(io, gPartInfo.name, 0, gPartInfo.size, name, step)) {
-			remove(name);
+			remove(fix_fn);
 			return;
 		}
-		fi = fopen(name, "rb+");
+		fi = fopen(fix_fn, "rb+");
 	}
-	if (!fi) ERR_EXIT("fopen %s failed\n", name);
+	if (!fi) ERR_EXIT("fopen %s failed\n", fix_fn);
 	if (fseek(fi, offset, SEEK_SET) != 0) ERR_EXIT("fseek failed\n");
 	if (fwrite(mem, 1, length, fi) != length) ERR_EXIT("fwrite failed\n");
 	fclose(fi);
-	DBG_LOG("w_mem_to_part_offset: wrote to %d part(s) ", load_partition_unify(io, gPartInfo.name, name, step));
+	DBG_LOG("w_mem_to_part_offset: wrote to %d part(s) ", load_partition_unify(io, gPartInfo.name, fix_fn, step));
 	if (selected_ab > 0) DBG_LOG("for VAB device\n");
 	else DBG_LOG("for Non-VAB device\n");
 }
 
+// fn must be full
 int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned step) {
 	char name0[36], name1[40];
 	unsigned size0, size1;
