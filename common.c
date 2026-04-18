@@ -1560,6 +1560,7 @@ void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned st
 	int i, j; char a;
 	uint8_t *buf = io->temp_buf;
 	char name[] = "w_force";
+	if (strstr((*(io->ptable + id)).name, "calinv") || strstr((*(io->ptable + id)).name, "factorynv")) { return; } //skip calinv and factorynv
 	for (i = 0; i < io->part_count; i++) {
 		memset(buf, 0, 36 * 2);
 		if (i == id)
