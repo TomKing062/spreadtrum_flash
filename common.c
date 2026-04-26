@@ -3177,8 +3177,6 @@ void DestroyRecvThread(spdio_t *io) {
 	io->m_dwRecvThreadID = 0;
 }
 #else
-#ifndef _MSC_VER
-pthread_t gUsbEventThrd;
 libusb_hotplug_callback_handle gHotplugCbHandle = 0;
 
 // SPRD DIAG, bInterfaceNumber 0
@@ -3190,6 +3188,8 @@ int HotplugCbFunc(libusb_context *ctx, libusb_device *device, libusb_hotplug_eve
 	return 0;
 }
 
+#ifndef _MSC_VER
+pthread_t gUsbEventThrd;
 void *UsbThrdFunc(void *param) {
 	int ret;
 	while (bListenLibusb) {
@@ -3213,13 +3213,12 @@ void startUsbEventHandle(void) {
 		&gHotplugCbHandle);
 	if (ret != LIBUSB_SUCCESS) ERR_EXIT("libusb_hotplug_register_callback failed, error: %d\n", ret);
 
+	bListenLibusb = 1;
 	ret = pthread_create(&gUsbEventThrd, NULL, UsbThrdFunc, NULL);
 	if (ret != 0) {
 		libusb_hotplug_deregister_callback(NULL, gHotplugCbHandle);
 		ERR_EXIT("Failed to create thread, error: %d\n", ret);
 	}
-
-	bListenLibusb = 1;
 }
 
 void stopUsbEventHandle(void) {
@@ -3230,12 +3229,45 @@ void stopUsbEventHandle(void) {
 	if (ret != 0) DBG_LOG("Failed to join thread, error: %d\n", ret);
 }
 #else
+HANDLE gUsbEventThrd;
+DWORD WINAPI UsbThrdFunc(LPVOID param) {
+	int ret;
+	while (bListenLibusb) {
+		ret = libusb_handle_events(NULL);
+		if (ret < 0)
+			DBG_LOG("libusb_handle_events() failed: %s\n", libusb_error_name(ret));
+	}
+	return 0;
+}
+
 void startUsbEventHandle(void) {
-	DBG_LOG("startUsbEventHandle() is not supported in MSVC. Please use MSYS2 if you need it.\n");
+	int ret = libusb_hotplug_register_callback(
+		NULL,
+		LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED | LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT,
+		LIBUSB_HOTPLUG_NO_FLAGS,
+		0x1782,
+		LIBUSB_HOTPLUG_MATCH_ANY,
+		LIBUSB_HOTPLUG_MATCH_ANY,
+		HotplugCbFunc,
+		NULL,
+		&gHotplugCbHandle);
+	if (ret != LIBUSB_SUCCESS) ERR_EXIT("libusb_hotplug_register_callback failed, error: %d\n", ret);
+
+	bListenLibusb = 1;
+	gUsbEventThrd = CreateThread(NULL, 0, UsbThrdFunc, NULL, 0, NULL);
+	if (!gUsbEventThrd) {
+		libusb_hotplug_deregister_callback(NULL, gHotplugCbHandle);
+		ERR_EXIT("Failed to create thread, error: %d\n", ret);
+	}
 }
 
 void stopUsbEventHandle(void) {
-	DBG_LOG("stopUsbEventHandle() is not supported in MSVC. Please use MSYS2 if you need it.\n");
+	bListenLibusb = 0;
+	libusb_hotplug_deregister_callback(NULL, gHotplugCbHandle);
+
+	WaitForSingleObject(gUsbEventThrd, INFINITE);
+	CloseHandle(gUsbEventThrd);
+	gUsbEventThrd = NULL;
 }
 #endif
 void ChangeMode(spdio_t *io, int ms, int bootmode) {
