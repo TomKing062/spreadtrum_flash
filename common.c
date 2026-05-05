@@ -1411,7 +1411,8 @@ void repartition(spdio_t *io, const char *fn) {
 	int n = scan_xml_partitions(io, fn, buf, 0xffff);
 	// print_mem(stderr, io->temp_buf, n * 0x4c);
 	encode_msg_nocpy(io, BSL_CMD_REPARTITION, n * 0x4c);
-	if (!send_and_check(io)) gpt_failed = 0;
+	if (send_and_check(io)) g_w_force = 0;
+	else gpt_failed = 0;
 }
 
 void erase_partition(spdio_t *io, const char *name) {
@@ -1575,7 +1576,7 @@ void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned st
 		buf += 0x4c;
 	}
 	encode_msg_nocpy(io, BSL_CMD_REPARTITION, io->part_count * 0x4c);
-	if (send_and_check(io)) return; //repart failed
+	if (send_and_check(io)) { g_w_force = 0; return; } //repart failed
 	load_partition(io, name, fn, step);
 	buf = io->temp_buf;
 	for (i = 0; i < io->part_count; i++) {

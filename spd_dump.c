@@ -695,8 +695,10 @@ int main(int argc, char **argv) {
 										sprdsignedimageheader *footer = (sprdsignedimageheader *)&payload[header->mImgSize + 0x200];
 										if (footer->cert_offset) {
 											uint32_t key_size = *(uint32_t *)(payload + footer->cert_offset + 4);
-											if (key_size % 0x800)
+											if (key_size % 0x800) {
+												exec_addr = 1;
 												DBG_LOG("bypassing BROM verification with CVE-2022-38691 (key size 0x%0X)\n", key_size);
+											}
 										}
 									}
 								}
@@ -840,6 +842,7 @@ int main(int argc, char **argv) {
 				}
 				else if (Da_Info.dwStorageType == 0x101) DBG_LOG("Storage is nand\n");
 				if (gpt_failed != 1) {
+					if (exec_addr) g_w_force = 1;
 					if (selected_ab == 2) DBG_LOG("Device is using slot b\n");
 					else if (selected_ab == 1) DBG_LOG("Device is using slot a\n");
 					else {
@@ -1114,7 +1117,7 @@ rloop:
 			argc -= 2; argv += 2;
 
 		}
-		else if (!strcmp(str2[1], "repartition")) {
+		else if (!strncmp(str2[1], "repart", 6)) {
 			const char *fn; FILE *fi;
 			if (argcount <= 2) { DBG_LOG("repartition FILE\n"); argc = 1; continue; }
 			fn = str2[2];
