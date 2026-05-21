@@ -406,7 +406,9 @@ int main(int argc, char **argv) {
 	else if (fdl2_executed == -1) argc += 1;
 	while (1) {
 		if (argc > 1) {
-			str2 = (char **)malloc(argc * sizeof(char *));
+			int str2_len = (argc > 2) ? argc : 3;
+			str2 = (char **)malloc(str2_len * sizeof(char *));
+			if (!str2) ERR_EXIT("malloc failed\n");
 			if (fdl1_loaded == -1) {
 				save_argv = argv;
 				str2[1] = "loadfdl";
@@ -426,6 +428,7 @@ int main(int argc, char **argv) {
 		else {
 			char ifs = '"';
 			str2 = (char **)malloc(ARGC_MAX * sizeof(char *));
+			if (!str2) ERR_EXIT("malloc failed\n");
 			memset(str1, 0, sizeof(str1));
 			argcount = 0;
 			in_quote = 0;
@@ -444,9 +447,8 @@ int main(int argc, char **argv) {
 				if (!in_quote) {
 					argcount++;
 					if (argcount == ARGC_MAX) break;
-					str2[argcount] = (char *)malloc(ARGV_LEN);
+					str2[argcount] = (char *)calloc(ARGV_LEN, 1);
 					if (!str2[argcount]) ERR_EXIT("malloc failed\n");
-					memset(str2[argcount], 0, ARGV_LEN);
 				}
 				if (temp[0] == '\'') ifs = '\'';
 				if (temp[0] == ifs) {
@@ -1403,7 +1405,8 @@ rloop:
 				size_t a_size = 0, b_size = 0, c_size = 0;
 				uint8_t *a = loadfile("nvbak", &a_size, 0);
 				uint8_t *b = loadfile(str2[3], &b_size, 0);
-				uint8_t *c = malloc(a_size + b_size);
+				uint8_t *c = calloc(a_size + b_size, 1);
+				if (!c) ERR_EXIT("malloc failed\n");
 				merge_nv(io, a, a_size, b, b_size, c, &c_size);
 				FILE *fi = fopen("nvmerged", "wb");
 				if (!fi) ERR_EXIT("fopen failed\n");
@@ -1428,7 +1431,8 @@ rloop:
 				size_t a_size = 0, b_size = 0, c_size = 0;
 				uint8_t *a = loadfile("nvbak", &a_size, 0);
 				uint8_t *b = loadfile(str2[3], &b_size, 0);
-				uint8_t *c = malloc(a_size + b_size);
+				uint8_t *c = calloc(a_size + b_size, 1);
+				if (!c) ERR_EXIT("malloc failed\n");
 				merge_nv(io, a, a_size, b, b_size, c, &c_size);
 				FILE *fi = fopen("nvmerged", "wb");
 				if (!fi) ERR_EXIT("fopen failed\n");
@@ -1449,7 +1453,8 @@ rloop:
 				size_t a_size = 0, b_size = 0, c_size = 0;
 				uint8_t *a = loadfile(str2[3], &a_size, 0);
 				uint8_t *b = loadfile(str2[4], &b_size, 0);
-				uint8_t *c = malloc(a_size + b_size);
+				uint8_t *c = calloc(a_size + b_size, 1);
+				if (!c) ERR_EXIT("malloc failed\n");
 				merge_nv(io, a, a_size, b, b_size, c, &c_size);
 				FILE *fi = fopen("nvmerged", "wb");
 				if (!fi) ERR_EXIT("fopen failed\n");
@@ -1469,7 +1474,8 @@ rloop:
 				size_t a_size = 0, b_size = 0, c_size = 0;
 				uint8_t *a = loadfile(str2[3], &a_size, 0);
 				uint8_t *b = loadfile(str2[4], &b_size, 0);
-				uint8_t *c = malloc(a_size + b_size);
+				uint8_t *c = calloc(a_size + b_size, 1);
+				if (!c) ERR_EXIT("malloc failed\n");
 				merge_nv(io, a, a_size, b, b_size, c, &c_size);
 				FILE *fi = fopen("nvmerged", "wb");
 				if (!fi) ERR_EXIT("fopen failed\n");
@@ -1489,9 +1495,8 @@ rloop:
 				argc -= 1; argv += 1;
 				continue;
 			}
-			char *miscbuf = malloc(0x800);
+			char *miscbuf = calloc(0x800, 1);
 			if (!miscbuf) ERR_EXIT("malloc failed\n");
-			memset(miscbuf, 0, 0x800);
 			strcpy(miscbuf, "boot-recovery");
 			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
 			free(miscbuf);
@@ -1505,9 +1510,8 @@ rloop:
 				argc -= 1; argv += 1;
 				continue;
 			}
-			char *miscbuf = malloc(0x800);
+			char *miscbuf = calloc(0x800, 1);
 			if (!miscbuf) ERR_EXIT("malloc failed\n");
-			memset(miscbuf, 0, 0x800);
 			strcpy(miscbuf, "boot-recovery");
 			strcpy(miscbuf + 0x40, "recovery\n--fastboot\n");
 			w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);

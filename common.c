@@ -2,8 +2,8 @@
 #include <libxml/parser.h>
 char fn_partlist[80] = { 0 };
 char savepath[ARGV_LEN] = { 0 };
-DA_INFO_T Da_Info;
-partition_t gPartInfo;
+DA_INFO_T Da_Info = { 0 };
+partition_t gPartInfo = { 0 };
 extern int g_spl_size;
 extern int g_w_force;
 static int isCancel;
@@ -803,7 +803,7 @@ uint8_t *loadfile(const char *fn, size_t *num, size_t extra) {
 	if (fi) {
 		fseek(fi, 0, SEEK_END);
 		n = ftell(fi);
-		if (n) {
+		if (n && extra <= SIZE_MAX - n) {
 			fseek(fi, 0, SEEK_SET);
 			buf = (uint8_t *)malloc(n + extra);
 			if (buf) j = fread(buf, 1, n, fi);
@@ -864,9 +864,8 @@ static const char *get_basename(const char *fn) {
 }
 
 char *get_fix_fn(const char *fn) {
-	char *fix_fn = malloc(1024);
+	char *fix_fn = calloc(1024, 1);
 	if (!fix_fn) ERR_EXIT("malloc failed\n");
-	memset(fix_fn, 0, 1024);
 	const char *base = get_basename(fn);
 	if (savepath[0])
 		sprintf(fix_fn, "%s/%s", savepath, base);
@@ -1159,6 +1158,7 @@ int scan_xml_partitions(spdio_t *io, const char *fn, uint8_t *buf, size_t buf_si
 	char *src, *p; size_t fsize = 0;
 	int part1_len = strlen(part1), found = 0, stage = 0;
 	if (io->ptable == NULL) io->ptable = malloc(128 * sizeof(partition_t));
+	if (io->ptable == NULL) ERR_EXIT("malloc failed\n");
 	src = (char *)loadfile(fn, &fsize, 1);
 	if (!src) ERR_EXIT("loadfile failed\n");
 	src[fsize] = 0;
@@ -1419,9 +1419,8 @@ void erase_partition(spdio_t *io, const char *name) {
 	int timeout0 = io->timeout;
 	char name0[36];
 	if (!strcmp(name, "userdata")) {
-		char *miscbuf = malloc(0x800);
+		char *miscbuf = calloc(0x800, 1);
 		if (!miscbuf) ERR_EXIT("malloc failed\n");
-		memset(miscbuf, 0, 0x800);
 		strcpy(miscbuf, "boot-recovery");
 		strcpy(miscbuf + 0x40, "recovery\n--wipe_data\n");
 		w_mem_to_part_offset(io, "misc", 0, (uint8_t *)miscbuf, 0x800, 0x1000);
@@ -1647,20 +1646,19 @@ void load_nv_partition(spdio_t *io, const char *name,
 
 	uint8_t *mem0 = mem;
 	if (*(uint32_t *)mem == 0x4e56) mem += 0x200;
-	len = 0;
-	len += sizeof(uint32_t);
+	len = sizeof(uint32_t);
 
-	uint16_t tmp[2];
 	while (1) {
-		tmp[0] = 0;
-		tmp[1] = 0;
+		uint16_t tmp[2];
 		memcpy(tmp, mem + len, sizeof(tmp));
-		if (!tmp[1]) { DBG_LOG("broken NV file, skipping!\n"); return; }
-		len += sizeof(tmp);
-		len += tmp[1];
+		if (tmp[1] == 0) {
+			DBG_LOG("broken NV file at id %x, skipping!\n", tmp[0]);
+			free(mem0);
+			return;
+		}
+		len += sizeof(tmp) + tmp[1];
+		len = (len + 3) & 0xFFFFFFFC;
 
-		uint32_t doffset = ((len + 3) & 0xFFFFFFFC) - len;
-		len += doffset;
 		if (*(uint16_t *)(mem + len) == 0xffff) {
 			len += 8;
 			break;
@@ -2735,68 +2733,68 @@ void dis_avb_with_cve(spdio_t *io, unsigned step) {
 }
 
 void merge_nv(spdio_t *io, const uint8_t *a, size_t a_size, const uint8_t *b, size_t b_size, uint8_t *c, size_t *c_size) {
-	NVEntry *nvid_list_offset = malloc(0x10000 * sizeof(NVEntry));
+	NVEntry *nvid_list_offset = calloc(0x10000, sizeof(NVEntry));
 	if (!nvid_list_offset) ERR_EXIT("malloc failed\n");
-	memset(nvid_list_offset, 0, 0x10000 * sizeof(NVEntry));
 	size_t pos = 4;
-	int nv_broken = 0;
 	if (*(uint32_t *)a == 0x4e56) pos += 0x200;
 	while (pos + 4 <= a_size) {
 		uint16_t type = *(uint16_t *)(a + pos);
 		uint16_t length = *(uint16_t *)(a + pos + 2);
+		if (length == 0 || pos + 4 + length > a_size) break;
 		pos += 4;
-		if (length == 0 || pos + length > a_size) { nv_broken++; break; }
 		nvid_list_offset[type].length = length;
 		nvid_list_offset[type].offset = pos;
 		pos += length;
 
-		uint32_t doffset = ((pos + 3) & 0xFFFFFFFC) - pos;
-		pos += doffset;
-		if (*(uint16_t *)(a + pos) == 0xffff) break;
+		pos += (pos + 3) & 0xFFFFFFFC;
+		if (pos + 2 <= a_size && *(uint16_t *)(a + pos) == 0xffff) break;
 	}
-	if (nv_broken) memset(nvid_list_offset, 0, 0x10000 * sizeof(NVEntry));
 
 	uint8_t *c_ptr = c;
 	pos = 4;
 	if (*(uint32_t *)b == 0x4e56) pos += 0x200;
 	memcpy(c_ptr, b + pos - 4, 4);
 	c_ptr += 4;
+	*c_size = 4;
 	while (pos + 4 <= b_size) {
 		uint16_t type = *(uint16_t *)(b + pos);
 		uint16_t length = *(uint16_t *)(b + pos + 2);
+		if (pos + 4 + length > b_size) break;
 		pos += 4;
-		if (pos + length > b_size) break;
-		if (nv_broken == 0 && io->nvid_list[type]) {
+		if (io->nvid_list[type] && nvid_list_offset[type].length) {
 			*(uint16_t *)c_ptr = type;
 			*(uint16_t *)(c_ptr + 2) = nvid_list_offset[type].length;
 			memcpy(c_ptr + 4, a + nvid_list_offset[type].offset, nvid_list_offset[type].length);
 			c_ptr += 4 + nvid_list_offset[type].length;
+			*c_size += 4 + nvid_list_offset[type].length;
 		}
 		else {
 			memcpy(c_ptr, b + pos - 4, 4 + length);
 			c_ptr += 4 + length;
+			*c_size += 4 + length;
 		}
 		nvid_list_offset[type].saved = 1;
 		pos += length;
-
-		uint32_t doffset = ((pos + 3) & 0xFFFFFFFC) - pos;
-		memcpy(c_ptr, b + pos, doffset);
-		pos += doffset;
-		c_ptr += doffset;
-		if (*(uint16_t *)(b + pos) == 0xffff) break;
+		pos += (pos + 3) & 0xFFFFFFFC;
+		*c_size += (*c_size + 3) & 0xFFFFFFFC;
+		c_ptr = c + *c_size;
+		if (pos + 2 <= b_size && *(uint16_t *)(b + pos) == 0xffff) break;
 	}
-	if (!nv_broken)
-		for (int i = 0; i < 0x10000; i++) {
-			if (nvid_list_offset[i].length && nvid_list_offset[i].saved == 0) {
-				*(uint16_t *)c_ptr = i;
-				*(uint16_t *)(c_ptr + 2) = nvid_list_offset[i].length;
-				memcpy(c_ptr + 4, a + nvid_list_offset[i].offset, nvid_list_offset[i].length);
-				c_ptr += 4 + nvid_list_offset[i].length;
-			}
+	for (int i = 0; i < 0x10000; i++) {
+		if (nvid_list_offset[i].length && nvid_list_offset[i].saved == 0) {
+			*(uint16_t *)c_ptr = i;
+			*(uint16_t *)(c_ptr + 2) = nvid_list_offset[i].length;
+			memcpy(c_ptr + 4, a + nvid_list_offset[i].offset, nvid_list_offset[i].length);
+			c_ptr += 4 + nvid_list_offset[i].length;
+			*c_size += 4 + nvid_list_offset[i].length;
+			*c_size += (*c_size + 3) & 0xFFFFFFFC;
+			c_ptr = c + *c_size;
+
 		}
+	}
 	uint8_t endbuf[] = { 0xff,0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	memcpy(c_ptr, endbuf, 8);
-	*c_size = c_ptr - c + 8;
+	*c_size += 8;
 	free(nvid_list_offset);
 }
 
@@ -2819,9 +2817,8 @@ int get_nvlist_xml(spdio_t *io, char *fn) {
 	doc = xmlReadFile(fn, NULL, 0);
 	if (doc == NULL) return 0;
 	root = xmlDocGetRootElement(doc);
-	io->nvid_list = malloc(0x10000 * sizeof(int));
+	io->nvid_list = calloc(0x10000, sizeof(int));
 	if (!io->nvid_list) ERR_EXIT("malloc failed\n");
-	memset(io->nvid_list, 0, 0x10000 * sizeof(int));
 	xmlNode *NVItem_node = findFirstNodeByName(root, (const xmlChar *)"NVItem");
 	if (!NVItem_node) {
 		DBG_LOG("can't find NVItem from input\n");
@@ -2862,9 +2859,8 @@ int get_nvlist_cfg(spdio_t *io, char *fn) {
 	FILE *cfg_fd;
 
 	if (!(cfg_fd = fopen(fn, "rb"))) return 0;
-	io->nvid_list = malloc(0x10000 * sizeof(int));
+	io->nvid_list = calloc(0x10000, sizeof(int));
 	if (!io->nvid_list) ERR_EXIT("malloc failed\n");
-	memset(io->nvid_list, 0, 0x10000 * sizeof(int));
 	while (fgets(line, sizeof(line), cfg_fd)) {
 		if (line[0] == '#' || line[0] == '\0') continue;
 		if (-1 == sscanf(line, "%*s %x", &id)) continue;
