@@ -1041,7 +1041,6 @@ uint64_t dump_partition(spdio_t *io,
 			len -= 512;
 	}
 	else if (strstr(name, "downloadnv") || strstr(name, "factorynv")) {
-		len = len > 0x1000000 ? 0x1000000 : len;
 		start = 0;
 		if (len > 512)
 			len -= 512;
@@ -1636,25 +1635,27 @@ void load_nv_partition(spdio_t *io, const char *name,
 	const char *fn, unsigned step) {
 	size_t offset, rsz;
 	unsigned n; int ret;
-	size_t len = 0;
+	size_t len = 0, olen = 0;
 	uint8_t *mem;
 	uint16_t crc = 0;
 	uint32_t cs = 0;
 
-	mem = loadfile(fn, &len, 0);
+	mem = loadfile(fn, &olen, 0);
 	if (!mem) ERR_EXIT("loadfile(\"%s\") failed\n", fn);
 
 	uint8_t *mem0 = mem;
-	if (*(uint32_t *)mem == 0x4e56) mem += 0x200;
+	if (*(uint32_t *)mem == 0x4e56) {
+		mem += 0x200;
+		olen -= 0x200;
+	}
 	len = sizeof(uint32_t);
 
-	while (1) {
+	while (len + 4 < olen) {
 		uint16_t tmp[2];
 		memcpy(tmp, mem + len, sizeof(tmp));
-		if (tmp[1] == 0) {
-			DBG_LOG("broken NV file at id %x, skipping!\n", tmp[0]);
-			free(mem0);
-			return;
+		if (tmp[1] == 0 || len + tmp[1] > olen) {
+			DBG_LOG("broken NV file at id %x!\n", tmp[0]);
+			break;
 		}
 		len += sizeof(tmp) + tmp[1];
 		len = (len + 3) & 0xFFFFFFFC;
@@ -2746,7 +2747,7 @@ void merge_nv(spdio_t *io, const uint8_t *a, size_t a_size, const uint8_t *b, si
 		nvid_list_offset[type].offset = pos;
 		pos += length;
 
-		pos += (pos + 3) & 0xFFFFFFFC;
+		pos = (pos + 3) & 0xFFFFFFFC;
 		if (pos + 2 <= a_size && *(uint16_t *)(a + pos) == 0xffff) break;
 	}
 
@@ -2775,8 +2776,8 @@ void merge_nv(spdio_t *io, const uint8_t *a, size_t a_size, const uint8_t *b, si
 		}
 		nvid_list_offset[type].saved = 1;
 		pos += length;
-		pos += (pos + 3) & 0xFFFFFFFC;
-		*c_size += (*c_size + 3) & 0xFFFFFFFC;
+		pos = (pos + 3) & 0xFFFFFFFC;
+		*c_size = (*c_size + 3) & 0xFFFFFFFC;
 		c_ptr = c + *c_size;
 		if (pos + 2 <= b_size && *(uint16_t *)(b + pos) == 0xffff) break;
 	}
@@ -2787,7 +2788,7 @@ void merge_nv(spdio_t *io, const uint8_t *a, size_t a_size, const uint8_t *b, si
 			memcpy(c_ptr + 4, a + nvid_list_offset[i].offset, nvid_list_offset[i].length);
 			c_ptr += 4 + nvid_list_offset[i].length;
 			*c_size += 4 + nvid_list_offset[i].length;
-			*c_size += (*c_size + 3) & 0xFFFFFFFC;
+			*c_size = (*c_size + 3) & 0xFFFFFFFC;
 			c_ptr = c + *c_size;
 
 		}
