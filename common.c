@@ -779,8 +779,7 @@ int send_and_check(spdio_t *io) {
 	send_msg(io);
 	ret = recv_msg(io);
 	if (!ret) ERR_EXIT("timeout reached\n");
-	ret = recv_type(io);
-	if (ret != BSL_REP_ACK) {
+	if ((ret = recv_type(io)) != BSL_REP_ACK) {
 		DBG_LOG("unexpected response (0x%04x)\n", ret);
 		return -1;
 	}
@@ -1328,8 +1327,7 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 		send_msg(io);
 		ret = recv_msg(io);
 		if (!ret) ERR_EXIT("timeout reached\n");
-		ret = recv_type(io);
-		if (ret != BSL_REP_READ_PARTITION) {
+		if ((ret = recv_type(io)) != BSL_REP_READ_PARTITION) {
 			DBG_LOG("unexpected response (0x%04x)\n", ret);
 			gpt_failed = -1;
 			free(ptable);
@@ -1559,7 +1557,28 @@ void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned st
 	int i, j; char a;
 	uint8_t *buf = io->temp_buf;
 	char name[] = "w_force";
-	if (strstr((*(io->ptable + id)).name, "calinv") || strstr((*(io->ptable + id)).name, "factorynv")) { return; } //skip calinv and factorynv
+	const char *part_name = (*(io->ptable + id)).name;
+	if (strstr(part_name, "calinv") || strstr(part_name, "factorynv")) { return; } //skip calinv and factorynv
+
+	if (selected_ab > 0) {
+		size_t namelen = strlen(part_name);
+		int has_ab = (namelen > 2 && (0 == strcmp(part_name + namelen - 2, "_a") || 0 == strcmp(part_name + namelen - 2, "_b")));
+		if (!has_ab) {
+			load_partition(io, part_name, fn, step);
+			return;
+		}
+	}
+	else {
+		const char *force_whitelist[] = { "system", "super", "userdata" };
+		int force_whitelist_count = sizeof(force_whitelist) / sizeof(force_whitelist[0]);
+		for (i = 0; i < force_whitelist_count; i++) {
+			if (!strcmp(part_name, force_whitelist[i])) {
+				load_partition(io, part_name, fn, step);
+				return;
+			}
+		}
+	}
+
 	for (i = 0; i < io->part_count; i++) {
 		memset(buf, 0, 36 * 2);
 		if (i == id)
@@ -1587,7 +1606,7 @@ void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned st
 		buf += 0x4c;
 	}
 	encode_msg_nocpy(io, BSL_CMD_REPARTITION, io->part_count * 0x4c);
-	if (!send_and_check(io)) DBG_LOG("Force Write %s Done\n", (*(io->ptable + id)).name);
+	if (!send_and_check(io)) DBG_LOG("Force Write %s Done\n", part_name);
 }
 
 unsigned short const crc16_table[256] = {
@@ -2292,16 +2311,17 @@ void select_ab(spdio_t *io) {
 	send_msg(io);
 	ret = recv_msg(io);
 	if (!ret) ERR_EXIT("timeout reached\n");
-	if (recv_type(io) == BSL_REP_READ_FLASH) abc = (bootloader_control *)(io->raw_buf + 4);
+	if (recv_type(io) == BSL_REP_READ_FLASH) {
+		abc = (bootloader_control *)(io->raw_buf + 4);
+		if (abc->nb_slot != 2) { selected_ab = 0; return; }
+		if (ab_compare_slots(&abc->slot_info[1], &abc->slot_info[0]) < 0) selected_ab = 2;
+		else selected_ab = 1;
+	}
 	encode_msg_nocpy(io, BSL_CMD_READ_END, 0);
 	send_and_check(io);
 
-	if (abc == NULL) { selected_ab = 0; return; }
-	if (abc->nb_slot != 2) { selected_ab = 0; return; }
-	if (ab_compare_slots(&abc->slot_info[1], &abc->slot_info[0]) < 0) selected_ab = 2;
-	else selected_ab = 1;
-
-	if (selected_ab > 0 && check_partition(io, "uboot_a", 0) == 0) selected_ab = 0;
+	if (abc == NULL) selected_ab = 0;
+	if (selected_ab > 0 && check_partition(io, "uboot_a", 0) == 0) selected_ab = 0; //fake misc
 }
 
 void dm_disable(spdio_t *io, unsigned step) {

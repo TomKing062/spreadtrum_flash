@@ -1039,6 +1039,20 @@ int main(int argc, char **argv) {
 			else if (!strcmp(name, "all")) {
 				if (gpt_failed == 1) io->ptable = partition_list(io, fn_partlist, &io->part_count);
 				if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
+				{ /* save partition.xml */
+					FILE *fo = fopen("partition.xml", "wb");
+					if (fo) {
+						fprintf(fo, "<Partitions>\n");
+						for (i = 0; i < io->part_count; i++) {
+							fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(io->ptable + i)).name);
+							if (i + 1 == io->part_count) fprintf(fo, "0x%x\"/>\n", ~0);
+							else fprintf(fo, "%lld\"/>\n", ((*(io->ptable + i)).size >> 20));
+						}
+						fprintf(fo, "</Partitions>\n");
+						fclose(fo);
+					}
+					else DBG_LOG("create partition.xml failed, skipping.\n");
+				}
 				dump_partition(io, "splloader", 0, g_spl_size, "splloader", blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				for (i = 0; i < io->part_count; i++) {
 					if (!strncmp((*(io->ptable + i)).name, "blackbox", 8)) continue;
@@ -1052,6 +1066,20 @@ int main(int argc, char **argv) {
 			else if (!strcmp(name, "all_lite")) {
 				if (gpt_failed == 1) io->ptable = partition_list(io, fn_partlist, &io->part_count);
 				if (!io->part_count) { DBG_LOG("Partition table not available\n"); argc -= 2; argv += 2; continue; }
+				{ /* save partition.xml */
+					FILE *fo = fopen("partition.xml", "wb");
+					if (fo) {
+						fprintf(fo, "<Partitions>\n");
+						for (i = 0; i < io->part_count; i++) {
+							fprintf(fo, "    <Partition id=\"%s\" size=\"", (*(io->ptable + i)).name);
+							if (i + 1 == io->part_count) fprintf(fo, "0x%x\"/>\n", ~0);
+							else fprintf(fo, "%lld\"/>\n", ((*(io->ptable + i)).size >> 20));
+						}
+						fprintf(fo, "</Partitions>\n");
+						fclose(fo);
+					}
+					else DBG_LOG("create partition.xml failed, skipping.\n");
+				}
 				dump_partition(io, "splloader", 0, g_spl_size, "splloader", blk_size ? blk_size : DEFAULT_BLK_SIZE);
 				for (i = 0; i < io->part_count; i++) {
 					size_t namelen = strlen((*(io->ptable + i)).name);
@@ -1558,7 +1586,7 @@ rloop:
 			DBG_LOG("[main] device removed, exiting...\n");
 			break;
 		}
-	}
+		}
 	spdio_free(io);
 	return 0;
-}
+	}
