@@ -214,6 +214,20 @@ enum {
 	BSL_REP_READ_FLASH_ERROR = 0xD2,
 	BSL_REP_MALLOC_ERROR = 0xD3,
 
+	BSL_CMD_E_READ_MEM = 0x70, /* Read memory to file */
+	BSL_CMD_E_BL = 0x71, /* BL unknown command */
+	BSL_CMD_E_RPMB_PAGECOUNT = 0x73, /* RPMB page count */
+	BSL_CMD_E_RPMB_COUNTER = 0x74, /* RPMB counter */
+	BSL_CMD_E_RPMB_READ = 0x75, /* RPMB read */
+	BSL_CMD_E_RPMB_WRITE = 0x76, /* RPMB write */
+	BSL_CMD_E_PWN = 0x79, /* e_pwn command */
+	BSL_CMD_E_CHECKPWN = 0x7A, /* e_checkpwn command */
+	BSL_REP_E_READ_MEM = 0xE0, /* Read memory data response */
+	BSL_REP_E_BL = 0xE1, /* BL response */
+	BSL_REP_E_RPMB_PAGECOUNT = 0xE3, /* RPMB page count response */
+	BSL_REP_E_RPMB_COUNTER = 0xE4, /* RPMB counter response */
+	BSL_REP_E_RPMB_READ = 0xE5, /* RPMB read response */
+
 	BSL_REP_UNSUPPORTED_COMMAND = 0xFE, /* Software has not supported this feature */
 	BSL_REP_LOG = 0xFF /* FDL can output some log info use this type */
 };

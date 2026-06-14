@@ -83,6 +83,13 @@ void print_help(void) {
 		"\t\tWrites the specified file to a partition.\n"
 		"\twrite_parts|write_parts_a|write_parts_b save_location\n"
 		"\t\tWrites all partitions dumped by read_parts.\n"
+		"\tw_force part_name|part_id FILE\n"
+		"\t\tForce-writes a partition file bypassing size/name checks.\n"
+		"\tg_w_force {0,1,2}\n"
+		"\t\tSets the global write-force flag.\n"
+		"\t\t0 = disable force write feature\n"
+		"\t\t1 = non-AB partitions written normally, AB-slot partitions force-written\n"
+		"\t\t2 = Force all partitions\n"
 		"\twof part_name offset FILE\n"
 		"\t\tWrites the specified file to a partition at the given offset.\n"
 		"\twov part_name offset VALUE\n"
@@ -107,6 +114,89 @@ void print_help(void) {
 		"\t\tSets the active slot on VAB devices.\n"
 		"\tfirstmode mode_id\n"
 		"\t\tSets the mode the device will enter after reboot.\n"
+	);
+	DBG_LOG(
+		"\tskip_confirm {0,1}\n"
+		"\t\tSets whether to skip confirmation prompts.\n"
+		"\tkeep_charge {0,1}\n"
+		"\t\tSets whether to send keep-charge command during FDL1 init.\n"
+		"\tdis_avb\n"
+		"\t\tDisables Android Verified Boot (AVB) via CVE.\n"
+		"\tdis_avb_ex sml_or_teecfg tos\n"
+		"\t\tDisables AVB externally by patching partition images.\n"
+		"\tmergenv-xml xml new_nv\n"
+		"\t\tMerges NV changes from XML list and writes back to device.\n"
+		"\tmergenv-cfg cfg new_nv\n"
+		"\t\tMerges NV changes from CFG list and writes back to device.\n"
+		"\tmergenv-xml-ex xml old_nv new_nv\n"
+		"\t\tMerges NV from XML list on two files externally (no device write).\n"
+		"\tmergenv-cfg-ex cfg old_nv new_nv\n"
+		"\t\tMerges NV from CFG list on two files externally (no device write).\n"
+	);
+	DBG_LOG(
+		"\nLegacy Commands\n"
+		"\tsend|write_flash FILE addr\n"
+		"\t\tSends a file to flash at the given address.\n"
+		"\tread_flash addr offset size FILE\n"
+		"\t\tReads a region of flash memory to a file.\n"
+		"\terase_flash addr size\n"
+		"\t\tErases a region of flash.\n"
+		"\tread_mem addr size FILE\n"
+		"\t\tReads device memory to a file.\n"
+		"\tread_pactime\n"
+		"\t\tReads and prints packet timing information.\n"
+		"\tchip_uid\n"
+		"\t\tReads and prints the chip UID.\n"
+		"\tdisable_transcode\n"
+		"\t\tSends command to disable HDLC transcoding on the device.\n"
+	);
+	DBG_LOG(
+		"\nDebug Commands\n"
+		"\tsendloop addr\n"
+		"\t\tDebug: repeatedly sends 4 zero bytes to decrementing addresses.\n"
+		"\tsendloopadd addr\n"
+		"\t\tDebug: repeatedly sends zero-byte packets to incrementing addresses.\n"
+		"\tsendcmd type file\n"
+		"\t\tSends raw command with given type from file.\n"
+		"\tsendcmdv type value(max is 0xFFFFFFFF)\n"
+		"\t\tSends raw command with given type and 8-byte value.\n"
+		"\tsendcmdvl type value(max is 0xFFFFFFFF)\n"
+		"\t\tSends looped raw command from value to 0x100000000, saves each response.\n"
+		"\tsendpack file\n"
+		"\t\tSends a pre-formatted 7E-packed packet from file.\n"
+		"\trawpack file\n"
+		"\t\tSends raw file as a packet (CRC and transcode added automatically).\n"
+		"\twrite_word addr VALUE(max is 0xFFFFFFFF)\n"
+		"\t\tWrites a 32-bit value to a memory address.\n"
+		"\ttranscode {0,1}\n"
+		"\t\tLocally enables or disables HDLC transcoding.\n"
+		"\tend_data {0,1}\n"
+		"\t\tSets whether to append end-of-data markers when writing to flash.\n"
+		"\tfblk_size|fbs mb\n"
+		"\t\tSets the flash block size in megabytes.\n"
+		"\tslot {0,1,2}\n"
+		"\t\tSets the A/B slot selection (0=auto, 1=a, 2=b).\n"
+	);
+	DBG_LOG(
+		"\nEXTENDED Commands (need special loaders)\n"
+		"\te_readmem addr length FILE\n"
+		"\t\tReads memory at addr for length bytes and saves to FILE.\n"
+		"\te_bl\n"
+		"\t\tSends e_bl command.\n"
+		"\te_rpmb_pagecount\n"
+		"\t\tQueries RPMB page count.\n"
+		"\te_rpmb_counter\n"
+		"\t\tQueries RPMB write counter.\n"
+		"\te_rpmb_read page_start page_count FILE\n"
+		"\t\tReads RPMB pages starting at page_start and saves to FILE.\n"
+		"\te_rpmb_write page_start FILE\n"
+		"\t\tWrites FILE data to RPMB starting at page_start.\n"
+		"\te_rpmb_read_auto\n"
+		"\t\tAutomatically reads all RPMB pages to file rpmb_dump.\n"
+		"\te_pwn\n"
+		"\t\tpwn trustos (bypass verification in modem).\n"
+		"\te_checkpwn\n"
+		"\t\tChecks if device's trustos is pwned.\n"
 	);
 	DBG_LOG(
 		"\nExit Commands\n"
@@ -555,6 +645,247 @@ int main(int argc, char **argv) {
 			}
 			fclose(output_file);
 			argc -= 3; argv += 3;
+		}
+		else if (!strcmp(str2[1], "e_readmem")) {
+			if (argcount <= 4) { DBG_LOG("e_readmem addr length FILE\n"); argc = 1; continue; }
+			uint32_t addr = strtoull(str2[2], NULL, 0);
+			uint32_t length = strtoull(str2[3], NULL, 0);
+			const char *fn = str2[4];
+			uint32_t total_read = 0;
+			FILE *fo = my_fopen(fn, "wb");
+			if (!fo) ERR_EXIT("fopen(e_readmem) failed\n");
+			while (total_read < length) {
+				uint32_t chunk = length - total_read;
+				if (chunk > (uint32_t)(blk_size ? blk_size : DEFAULT_BLK_SIZE)) chunk = (blk_size ? blk_size : DEFAULT_BLK_SIZE);
+				WRITE32_LE(io->temp_buf, addr + total_read);
+				WRITE32_LE(io->temp_buf + 4, chunk);
+				encode_msg_nocpy(io, BSL_CMD_E_READ_MEM, 8);
+				send_msg(io);
+				int ret = recv_msg(io);
+				if (!ret) ERR_EXIT("timeout reached\n");
+				if ((ret = recv_type(io)) != BSL_REP_E_READ_MEM) {
+					DBG_LOG("unexpected response (0x%04x)\n", ret);
+					break;
+				}
+				uint16_t nread = READ16_BE(io->raw_buf + 2);
+				if (nread > chunk) { DBG_LOG("unexpected length\n"); break; }
+				if (fwrite(io->raw_buf + 4, 1, nread, fo) != nread)
+					ERR_EXIT("fwrite(e_readmem) failed\n");
+				total_read += nread;
+				if (nread != chunk) break;
+			}
+			fclose(fo);
+			DBG_LOG("e_readmem Done: addr=0x%llx, target=0x%llx, read=0x%llx\n",
+				(unsigned long long)addr, (unsigned long long)length, (unsigned long long)total_read);
+			argc -= 4; argv += 4;
+		}
+		else if (!strcmp(str2[1], "e_bl")) {
+			encode_msg_nocpy(io, BSL_CMD_E_BL, 0);
+			send_msg(io);
+			if (recv_msg(io)) {
+				uint16_t n = READ16_BE(io->raw_buf + 2);
+				if (recv_type(io) == BSL_REP_E_BL) {
+					uint8_t *out = malloc(n);
+					if (!out) ERR_EXIT("malloc failed\n");
+					for (uint16_t i = 0; i < n; i++)
+						out[i] = (io->raw_buf + 4)[i] ^ (0x55 + i);
+					print_mem(stderr, io->raw_buf + 4, n);
+					DBG_LOG("XOR(0x55+i):\n");
+					print_mem(stderr, out, n);
+					free(out);
+				}
+				else {
+					print_mem(stderr, io->raw_buf + 4, n);
+				}
+			}
+			else ERR_EXIT("timeout reached\n");
+			argc -= 1; argv += 1;
+		}
+		else if (!strcmp(str2[1], "e_rpmb_pagecount")) {
+			encode_msg_nocpy(io, BSL_CMD_E_RPMB_PAGECOUNT, 0);
+			send_msg(io);
+			if (recv_msg(io)) DBG_LOG("0x%x\n", *(uint32_t *)(io->raw_buf + 4));
+			else ERR_EXIT("timeout reached\n");
+			argc -= 1; argv += 1;
+		}
+		else if (!strcmp(str2[1], "e_rpmb_counter")) {
+			encode_msg_nocpy(io, BSL_CMD_E_RPMB_COUNTER, 0);
+			send_msg(io);
+			if (recv_msg(io)) DBG_LOG("0x%x\n", *(uint32_t *)(io->raw_buf + 4));
+			else ERR_EXIT("timeout reached\n");
+			argc -= 1; argv += 1;
+		}
+		else if (!strcmp(str2[1], "e_rpmb_read")) {
+			if (argcount <= 4) { DBG_LOG("e_rpmb_read page_start page_count FILE\n"); argc = 1; continue; }
+			uint32_t page_start = strtoul(str2[2], NULL, 0);
+			uint32_t page_count = strtoul(str2[3], NULL, 0);
+			const char *fn = str2[4];
+			uint32_t pages_per_chunk = (blk_size ? blk_size : DEFAULT_BLK_SIZE) >> 8;
+			if (pages_per_chunk < 1) pages_per_chunk = 1;
+			uint32_t pages_read = 0;
+			FILE *fo = my_fopen(fn, "wb");
+			if (!fo) ERR_EXIT("fopen(e_rpmb_read) failed\n");
+			while (pages_read < page_count) {
+				uint32_t chunk = page_count - pages_read;
+				if (chunk > pages_per_chunk) chunk = pages_per_chunk;
+				uint8_t *data = (uint8_t *)io->temp_buf;
+				WRITE16_LE(data, page_start + pages_read);
+				WRITE16_LE(data + 2, chunk);
+				encode_msg_nocpy(io, BSL_CMD_E_RPMB_READ, 4);
+				send_msg(io);
+				ret = recv_msg(io);
+				if (!ret) ERR_EXIT("timeout reached\n");
+				if (recv_type(io) != BSL_REP_E_RPMB_READ) {
+					DBG_LOG("unexpected response (0x%04x)\n", recv_type(io));
+					break;
+				}
+				uint16_t n = READ16_BE(io->raw_buf + 2);
+				if (fwrite(io->raw_buf + 4, 1, n, fo) != n)
+					ERR_EXIT("fwrite(e_rpmb_read) failed\n");
+				pages_read += chunk;
+				if (n < chunk << 8) { DBG_LOG("short read\n"); break; }
+			}
+			fclose(fo);
+			DBG_LOG("e_rpmb_read Done: start=0x%x, count=0x%x, read=%u pages\n",
+				page_start, page_count, pages_read);
+			argc -= 4; argv += 4;
+		}
+		else if (!strcmp(str2[1], "e_rpmb_read_auto")) {
+			encode_msg_nocpy(io, BSL_CMD_E_RPMB_PAGECOUNT, 0);
+			send_msg(io);
+			if (!recv_msg(io)) ERR_EXIT("timeout reached\n");
+			if (recv_type(io) != BSL_REP_E_RPMB_PAGECOUNT) {
+				DBG_LOG("unexpected response (0x%04x)\n", recv_type(io));
+				argc -= 1; argv += 1;
+				continue;
+			}
+			uint32_t page_count = *(uint32_t *)(io->raw_buf + 4);
+			uint32_t page_start = 0;
+			const char *fn = "rpmb_dump";
+			uint32_t pages_per_chunk = (blk_size ? blk_size : DEFAULT_BLK_SIZE) >> 8;
+			if (pages_per_chunk < 1) pages_per_chunk = 1;
+			uint32_t pages_read = 0;
+			FILE *fo = my_fopen(fn, "wb");
+			if (!fo) ERR_EXIT("fopen(e_rpmb_read_auto) failed\n");
+			while (pages_read < page_count) {
+				uint32_t chunk = page_count - pages_read;
+				if (chunk > pages_per_chunk) chunk = pages_per_chunk;
+				uint8_t *data = (uint8_t *)io->temp_buf;
+				WRITE16_LE(data, page_start + pages_read);
+				WRITE16_LE(data + 2, chunk);
+				encode_msg_nocpy(io, BSL_CMD_E_RPMB_READ, 4);
+				send_msg(io);
+				ret = recv_msg(io);
+				if (!ret) ERR_EXIT("timeout reached\n");
+				if (recv_type(io) != BSL_REP_E_RPMB_READ) {
+					DBG_LOG("unexpected response (0x%04x)\n", recv_type(io));
+					break;
+				}
+				uint16_t n = READ16_BE(io->raw_buf + 2);
+				if (fwrite(io->raw_buf + 4, 1, n, fo) != n)
+					ERR_EXIT("fwrite(e_rpmb_read_auto) failed\n");
+				pages_read += chunk;
+				if (n < chunk << 8) { DBG_LOG("short read\n"); break; }
+			}
+			fclose(fo);
+			DBG_LOG("e_rpmb_read_auto Done: start=0x%x, count=0x%x, read=%u pages\n",
+				page_start, page_count, pages_read);
+			argc -= 1; argv += 1;
+		}
+		else if (!strcmp(str2[1], "e_rpmb_write")) {
+			if (argcount <= 3) { DBG_LOG("e_rpmb_write page_start FILE\n"); argc = 1; continue; }
+			encode_msg_nocpy(io, BSL_CMD_E_RPMB_PAGECOUNT, 0);
+			send_msg(io);
+			if (!recv_msg(io)) ERR_EXIT("timeout reached\n");
+			if (recv_type(io) != BSL_REP_E_RPMB_PAGECOUNT) {
+				DBG_LOG("unexpected response (0x%04x)\n", recv_type(io));
+				argc -= 3; argv += 3;
+				continue;
+			}
+			uint32_t page_count_max = *(uint32_t *)(io->raw_buf + 4);
+			uint32_t page_start = strtoul(str2[2], NULL, 0);
+			const char *fn = str2[3];
+			size_t file_size = 0;
+			uint8_t *file_buf = loadfile(fn, &file_size, 0);
+			if (!file_buf || !file_size) ERR_EXIT("loadfile failed\n");
+			if (file_size & 0xFF) ERR_EXIT("file size must be multiple of 256\n");
+			uint32_t page_count = file_size >> 8;
+			if (page_start >= page_count_max) {
+				page_count = 0;
+			}
+			else if (page_start + page_count > page_count_max || page_start + page_count < page_start) {
+				page_count = page_count_max - page_start;
+			}
+			uint32_t pages_per_chunk = (blk_size ? blk_size : DEFAULT_BLK_SIZE) >> 8;
+			if (pages_per_chunk < 1) pages_per_chunk = 1;
+			uint32_t pages_done = 0;
+			while (pages_done < page_count) {
+				uint32_t chunk = page_count - pages_done;
+				if (chunk > pages_per_chunk) chunk = pages_per_chunk;
+				uint8_t *data = (uint8_t *)io->temp_buf;
+				WRITE16_LE(data, 0);
+				WRITE16_LE(data + 2, page_start + pages_done);
+				WRITE16_LE(data + 4, chunk);
+				encode_msg_nocpy(io, BSL_CMD_E_RPMB_WRITE, 6);
+				if (send_and_check(io)) {
+					DBG_LOG("e_rpmb_write init_config failed\n");
+					break;
+				}
+				WRITE16_LE(data, 1);
+				memcpy(data + 2, file_buf + (pages_done << 8), chunk << 8);
+				encode_msg_nocpy(io, BSL_CMD_E_RPMB_WRITE, (chunk << 8) + 2);
+				if (send_and_check(io)) {
+					DBG_LOG("e_rpmb_write send_data failed\n");
+					break;
+				}
+				WRITE16_LE(data, 2);
+				encode_msg_nocpy(io, BSL_CMD_E_RPMB_WRITE, 2);
+				if (send_and_check(io)) print_mem(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+				pages_done += chunk;
+			}
+			free(file_buf);
+			DBG_LOG("e_rpmb_write Done: start=0x%x, count=0x%x pages\n", page_start, page_count);
+			argc -= 3; argv += 3;
+		}
+		else if (!strcmp(str2[1], "e_pwn")) {
+			uint8_t *data = (uint8_t *)io->temp_buf;
+			memset(data, 0, 32);
+			if (selected_ab > 0) {
+				char name_ab[16];
+				snprintf(name_ab, sizeof(name_ab), "trustos_%c", 96 + selected_ab);
+				memcpy(data, name_ab, strlen(name_ab));
+			}
+			else {
+				memcpy(data, "trustos", 7);
+			}
+			for (int i = 0; i < 32; i++)
+				data[i] ^= (0x65 + i);
+			encode_msg_nocpy(io, BSL_CMD_E_CHECKPWN, 32);
+			if (send_and_check(io) && *(uint32_t *)(io->raw_buf + 4) == 7) {
+				encode_msg_nocpy(io, BSL_CMD_E_PWN, 32);
+				if (send_and_check(io))
+					print_mem(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+			}
+			else print_mem(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+			argc -= 1; argv += 1;
+		}
+		else if (!strcmp(str2[1], "e_checkpwn")) {
+			uint8_t *data = (uint8_t *)io->temp_buf;
+			memset(data, 0, 32);
+			if (selected_ab > 0) {
+				char name_ab[16];
+				snprintf(name_ab, sizeof(name_ab), "trustos_%c", 96 + selected_ab);
+				memcpy(data, name_ab, strlen(name_ab));
+			}
+			else {
+				memcpy(data, "trustos", 7);
+			}
+			for (int i = 0; i < 32; i++)
+				data[i] ^= (0x65 + i);
+			encode_msg_nocpy(io, BSL_CMD_E_CHECKPWN, 32);
+			if (send_and_check(io))
+				print_mem(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+			argc -= 1; argv += 1;
 		}
 		else if (!strcmp(str2[1], "sendpack")) { //this is pack (7e type length data crc 7e)
 			if (argcount <= 2) { DBG_LOG("sendpack file\n"); argc = 1; continue; }
@@ -1095,7 +1426,7 @@ int main(int argc, char **argv) {
 			}
 			else {
 				if (!strcmp(name, "preset_resign")) {
-					loop_count = 7; name = list[loop_count]; in_loop = 1;
+					loop_count = sizeof(list) / sizeof(list[0]); name = list[--loop_count]; in_loop = 1;
 				}
 rloop:
 				get_partition_info(io, name, 1);
@@ -1111,7 +1442,7 @@ rloop:
 			else if (in_loop) snprintf(dfile, sizeof(dfile), "%s", list[loop_count]);
 			else snprintf(dfile, sizeof(dfile), "%s", name);
 			dump_partition(io, gPartInfo.name, 0, gPartInfo.size, dfile, blk_size ? blk_size : DEFAULT_BLK_SIZE);
-			if (loop_count--) { name = list[loop_count]; goto rloop; }
+			if (loop_count) { name = list[--loop_count]; goto rloop; }
 			argc -= 2; argv += 2;
 
 		}
@@ -1221,8 +1552,10 @@ rloop:
 
 		}
 		else if (!strcmp(str2[1], "g_w_force")) {
-			if (argcount <= 2) { DBG_LOG("g_w_force {0,1}\n"); argc = 1; continue; }
+			if (argcount <= 2) { DBG_LOG("g_w_force {0,1,2}\n"); argc = 1; continue; }
 			g_w_force = atoi(str2[2]);
+			if (g_w_force < 0) g_w_force = 0;
+			if (g_w_force > 2) g_w_force = 2;
 			argc -= 2; argv += 2;
 
 		}
@@ -1238,8 +1571,10 @@ rloop:
 			else fclose(fi);
 			get_partition_info(io, name, 0);
 			if (!gPartInfo.size) { DBG_LOG("part not exist\n"); argc -= 3; argv += 3; continue; }
+			int g_force_backup = g_w_force;
+			g_w_force = 2;
 
-			if (!strncmp(gPartInfo.name, "splloader", 9)) { DBG_LOG("blacklist!\n"); argc -= 3; argv += 3; continue; }
+			if (!strncmp(gPartInfo.name, "splloader", 9)) { DBG_LOG("blacklist!\n"); g_w_force = g_force_backup; argc -= 3; argv += 3; continue; }
 			else if (isdigit(str2[2][0])) load_partition_force(io, atoi(str2[2]) - 1, fn, blk_size ? blk_size : DEFAULT_BLK_SIZE);
 			else {
 				for (i = 0; i < io->part_count; i++)
@@ -1248,6 +1583,7 @@ rloop:
 						break;
 					}
 			}
+			g_w_force = g_force_backup;
 			argc -= 3; argv += 3;
 
 		}
@@ -1586,7 +1922,7 @@ rloop:
 			DBG_LOG("[main] device removed, exiting...\n");
 			break;
 		}
-		}
+	}
 	spdio_free(io);
 	return 0;
-	}
+}

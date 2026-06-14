@@ -1,9 +1,13 @@
 ## Spreadtrum firmware dumper
+
 ### [中文文档](https://github.com/TomKing062/spreadtrum_flash/blob/main/README_zh.md)
 
 work with Official SPRD U2S Diag Driver or LibUSB Driver.
 
-### Prebuilt program for windows [Release](https://github.com/TomKing062/spreadtrum_flash/releases)|[Dev](https://nightly.link/TomKing062/spreadtrum_flash/workflows/build/main)
+
+### [Prebuilt Program for Windows](https://nightly.link/TomKing062/action_spd_dump_it/workflows/build/main)
+
+### [Prebuilt Program for Linux](https://nightly.link/TomKing062/action_spd_dump_it/workflows/build-musl/main)
 
 ### [Original information of ilyakurdyukov version](https://github.com/ilyakurdyukov/spreadtrum_flash)
 
@@ -40,7 +44,7 @@ Then the prompt should display `FDL2>`.
   Try to reconnect device in brom/fdl1/fdl2 stage. Any number behaves the same way.
 
   (unstable, a device in brom/fdl1 stage can be reconnected infinite times, but only once in fdl2 stage)
-  
+
 - `--verbose <level>`
 
   Sets the verbosity level of the output (supports 0, 1, or 2).
@@ -122,6 +126,7 @@ Then the prompt should display `FDL2>`.
     - all/all_lite is not usable on NAND
 
   When the partition table is unavailable:
+
     - `r` will auto-calculate part size (supports emmc/ufs and NAND).
 
 - `read_part part_name|part_id offset size FILE`
@@ -138,9 +143,20 @@ Then the prompt should display `FDL2>`.
 
   Writes the specified file to a partition.
 
-- `write_parts save_location`
+- `write_parts|write_parts_a|write_parts_b save_location`
 
-  Writes all partitions dumped by `read_parts`. Use `write_parts_a` or `write_parts_b` to flash slot forcely.
+  Writes all partitions dumped by `read_parts`.
+
+- `w_force part_name|part_id FILE`
+
+  Force-writes a partition file bypassing size/name checks.
+
+- `g_w_force {0,1,2}`
+
+  Sets the global write-force flag.
+  0 = disable force write feature
+  1 = non-AB partitions written normally, AB-slot partitions force-written
+  2 = Force all partitions
 
 - `wof part_name offset FILE`
 
@@ -190,6 +206,156 @@ Then the prompt should display `FDL2>`.
 
   Sets the mode the device will enter after reboot.
 
+- `skip_confirm {0,1}`
+
+  Sets whether to skip confirmation prompts.
+
+- `keep_charge {0,1}`
+
+  Sets whether to send keep-charge command during FDL1 init.
+
+- `dis_avb`
+
+  Disables Android Verified Boot (AVB) via CVE.
+
+- `dis_avb_ex sml_or_teecfg tos`
+
+  Disables AVB externally by patching partition images.
+
+- `mergenv-xml xml new_nv`
+
+  Merges NV changes from XML list and writes back to device.
+
+- `mergenv-cfg cfg new_nv`
+
+  Merges NV changes from CFG list and writes back to device.
+
+- `mergenv-xml-ex xml old_nv new_nv`
+
+  Merges NV from XML list on two files externally (no device write).
+
+- `mergenv-cfg-ex cfg old_nv new_nv`
+
+  Merges NV from CFG list on two files externally (no device write).
+
+#### Legacy Commands
+
+- `send|write_flash FILE addr`
+
+  Sends a file to flash at the given address.
+
+- `read_flash addr offset size FILE`
+
+  Reads a region of flash memory to a file.
+
+- `erase_flash addr size`
+
+  Erases a region of flash.
+
+- `read_mem addr size FILE`
+
+  Reads device memory to a file.
+
+- `read_pactime`
+
+  Reads and prints packet timing information.
+
+- `chip_uid`
+
+  Reads and prints the chip UID.
+
+- `disable_transcode`
+
+  Sends command to disable HDLC transcoding on the device.
+
+#### Debug Commands
+
+- `sendloop addr`
+
+  Debug: repeatedly sends 4 zero bytes to decrementing addresses.
+
+- `sendloopadd addr`
+
+  Debug: repeatedly sends zero-byte packets to incrementing addresses.
+
+- `sendcmd type file`
+
+  Sends raw command with given type from file.
+
+- `sendcmdv type value`
+
+  Sends raw command with given type and 8-byte value (max 0xFFFFFFFF).
+
+- `sendcmdvl type value`
+
+  Sends looped raw command from value to 0x100000000, saves each response.
+
+- `sendpack file`
+
+  Sends a pre-formatted 7E-packed packet from file.
+
+- `rawpack file`
+
+  Sends raw file as a packet (CRC and transcode added automatically).
+
+- `write_word addr VALUE`
+
+  Writes a 32-bit value to a memory address.
+
+- `transcode {0,1}`
+
+  Locally enables or disables HDLC transcoding.
+
+- `end_data {0,1}`
+
+  Sets whether to append end-of-data markers when writing to flash.
+
+- `fblk_size|fbs mb`
+
+  Sets the flash block size in megabytes.
+
+- `slot {0,1,2}`
+
+  Sets the A/B slot selection (0=auto, 1=a, 2=b).
+
+#### EXTENDED Commands
+
+- `e_readmem addr length FILE`
+
+  Reads memory at `addr` for `length` bytes and saves to `FILE`.
+
+- `e_bl`
+
+  Sends e_bl command.
+
+- `e_rpmb_pagecount`
+
+  Queries RPMB page count.
+
+- `e_rpmb_counter`
+
+  Queries RPMB write counter.
+
+- `e_rpmb_read page_start page_count FILE`
+
+  Reads RPMB pages starting at `page_start` and saves to `FILE`.
+
+- `e_rpmb_write page_start FILE`
+
+  Writes `FILE` data to RPMB starting at `page_start`.
+
+- `e_rpmb_read_auto`
+
+  Automatically reads all RPMB pages to file `rpmb_dump`.
+
+- `e_pwn`
+
+  PWN trustos (bypass verification in modem).
+
+- `e_checkpwn`
+
+  Checks if device's trustos is pwned.
+
 #### Exit Commands
 
 - `reboot-recovery`
@@ -230,6 +396,7 @@ cd spreadtrum_flash
 ```
 make
 ```
+
 Produce executable files: spd_dump
 
 5. Search OTG Device
@@ -246,6 +413,7 @@ termux-usb -l
 ```
 termux-usb -r /dev/bus/usb/xxx/xxx
 ```
+
 Allow access to the target device
 
 7. Run SPD_SUMP
@@ -253,3 +421,4 @@ Allow access to the target device
 ```
 termux-usb -e './spd_dump --usb-fd' /dev/bus/usb/xxx/xxx
 ```
+

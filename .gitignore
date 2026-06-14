@@ -4,3 +4,4 @@ Debug/
 Release/
 x64/
 GITVER.h
+.codegraph/

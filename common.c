@@ -1560,7 +1560,7 @@ void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned st
 	const char *part_name = (*(io->ptable + id)).name;
 	if (strstr(part_name, "calinv") || strstr(part_name, "factorynv")) { return; } //skip calinv and factorynv
 
-	if (selected_ab > 0) {
+	if (g_w_force == 1 && selected_ab > 0) {
 		size_t namelen = strlen(part_name);
 		int has_ab = (namelen > 2 && (0 == strcmp(part_name + namelen - 2, "_a") || 0 == strcmp(part_name + namelen - 2, "_b")));
 		if (!has_ab) {
