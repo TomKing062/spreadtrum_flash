@@ -261,10 +261,6 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
   读取并打印芯片 UID。
 
-- `disable_transcode`
-
-  发送指令在设备端禁用 HDLC 转码。
-
 #### 调试命令
 
 - `sendloop addr`
@@ -299,6 +295,10 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
   向内存地址写入 32 位数值。
 
+- `disable_transcode`
+
+  发送指令在设备端禁用 HDLC 转码。
+
 - `transcode {0,1}`
 
   在本地启用或禁用 HDLC 转码。
@@ -323,7 +323,7 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
 - `e_bl`
 
-  发送 e_bl 指令。
+  解锁BL。
 
 - `e_rpmb_pagecount`
 
@@ -337,13 +337,17 @@ spd_dump --wait 300 fdl /path/to/fdl1 fdl1_addr fdl /path/to/fdl2 fdl2_addr exec
 
   从 `page_start` 开始读取 RPMB 页并保存到 `FILE`。
 
+- `e_rpmb_read_auto`
+
+  自动读取所有 RPMB 页到文件 `rpmb_dump`。
+
 - `e_rpmb_write page_start FILE`
 
   将 `FILE` 数据写入 RPMB，起始页为 `page_start`。
 
-- `e_rpmb_read_auto`
+- `e_efuse_read block_id`
 
-  自动读取所有 RPMB 页到文件 `rpmb_dump`。
+  读取指定位置的efuse（以双字节形式）.
 
 - `e_pwn`
 

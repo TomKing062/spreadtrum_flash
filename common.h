@@ -343,3 +343,13 @@ void merge_nv(spdio_t *io, const uint8_t *a, size_t a_size, const uint8_t *b, si
 int my_mkdir(const char *path);
 void clean_tmpdir(void);
 void signal_exit(int sig);
+void do_e_readmem(spdio_t *io, uint32_t addr, uint32_t length, const char *fn, unsigned step);
+int  do_e_bl(spdio_t *io, unsigned step);
+int  do_e_rpmb_pagecount(spdio_t *io);
+int  do_e_rpmb_counter(spdio_t *io);
+void do_e_rpmb_read(spdio_t *io, uint32_t page_start, uint32_t page_count, const char *fn, unsigned step);
+int  do_e_rpmb_read_auto(spdio_t *io, unsigned step);
+void do_e_rpmb_write(spdio_t *io, uint32_t page_start, const char *fn, unsigned step);
+void do_e_efuse_read(spdio_t *io, uint32_t block_id);
+void  do_e_pwn(spdio_t *io, int selected_ab);
+void  do_e_checkpwn(spdio_t *io, int selected_ab);

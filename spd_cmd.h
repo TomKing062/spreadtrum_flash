@@ -222,11 +222,13 @@ enum {
 	BSL_CMD_E_RPMB_WRITE = 0x76, /* RPMB write */
 	BSL_CMD_E_PWN = 0x79, /* e_pwn command */
 	BSL_CMD_E_CHECKPWN = 0x7A, /* e_checkpwn command */
+	BSL_CMD_E_EFUSE_READ = 0x78, /* Read eFuse block */
 	BSL_REP_E_READ_MEM = 0xE0, /* Read memory data response */
 	BSL_REP_E_BL = 0xE1, /* BL response */
 	BSL_REP_E_RPMB_PAGECOUNT = 0xE3, /* RPMB page count response */
 	BSL_REP_E_RPMB_COUNTER = 0xE4, /* RPMB counter response */
 	BSL_REP_E_RPMB_READ = 0xE5, /* RPMB read response */
+	BSL_REP_E_EFUSE_READ = 0xE8, /* Read eFuse response */
 
 	BSL_REP_UNSUPPORTED_COMMAND = 0xFE, /* Software has not supported this feature */
 	BSL_REP_LOG = 0xFF /* FDL can output some log info use this type */

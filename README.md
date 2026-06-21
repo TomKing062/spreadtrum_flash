@@ -264,10 +264,6 @@ Then the prompt should display `FDL2>`.
 
   Reads and prints the chip UID.
 
-- `disable_transcode`
-
-  Sends command to disable HDLC transcoding on the device.
-
 #### Debug Commands
 
 - `sendloop addr`
@@ -302,6 +298,10 @@ Then the prompt should display `FDL2>`.
 
   Writes a 32-bit value to a memory address.
 
+- `disable_transcode`
+
+  Sends command to disable HDLC transcoding on the device.
+
 - `transcode {0,1}`
 
   Locally enables or disables HDLC transcoding.
@@ -326,7 +326,7 @@ Then the prompt should display `FDL2>`.
 
 - `e_bl`
 
-  Sends e_bl command.
+  Unlock bootloader.
 
 - `e_rpmb_pagecount`
 
@@ -340,13 +340,17 @@ Then the prompt should display `FDL2>`.
 
   Reads RPMB pages starting at `page_start` and saves to `FILE`.
 
+- `e_rpmb_read_auto`
+
+  Automatically reads all RPMB pages to file `rpmb_dump`.
+
 - `e_rpmb_write page_start FILE`
 
   Writes `FILE` data to RPMB starting at `page_start`.
 
-- `e_rpmb_read_auto`
+- `e_efuse_read block_id`
 
-  Automatically reads all RPMB pages to file `rpmb_dump`.
+  Reads eFuse block at given index, returns 4 bytes.
 
 - `e_pwn`
 
