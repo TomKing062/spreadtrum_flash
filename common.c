@@ -2238,6 +2238,7 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 		}
 	}
 	int metadata_in_dump = 0, super_in_dump = 0, metadata_id = -1, super_id = -1;
+	int nv_in_dump = 0, nv_id = -1;
 	for (int i = 0; i < partition_count; i++) {
 		if (!partitions[i].written_flag) {
 			fn = partitions[i].name;
@@ -2245,6 +2246,7 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 			if (!gPartInfo.size) continue;
 			if (!strcmp(gPartInfo.name, "metadata")) { metadata_in_dump = 1; metadata_id = i; continue; }
 			if (!strcmp(gPartInfo.name, "super")) { super_in_dump = 1; super_id = i; continue; }
+			if (strstr(fn, "downloadnv")) { nv_in_dump = 1; nv_id = i; continue; }
 			load_partition_unify(io, gPartInfo.name, partitions[i].file_path, step);
 		}
 	}
@@ -2253,6 +2255,7 @@ void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab)
 		if (metadata_in_dump) load_partition(io, "metadata", partitions[metadata_id].file_path, step);
 		else erase_partition(io, "metadata");
 	}
+	if (nv_in_dump) load_partition_unify(io, partitions[nv_id].name, partitions[nv_id].file_path, step);
 	free(partitions);
 	if (selected_ab == 1) set_active(io, "a");
 	else if (selected_ab == 2) set_active(io, "b");
