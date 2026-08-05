@@ -224,6 +224,7 @@ uint64_t fblk_size = 0;
 int g_spl_size = 0;
 int g_rpmb_pagecnt = 0;
 int g_w_force = 0;
+int w_force_repart = 0; //set when w_force_repair_prev fixed the table in-memory, needs REPARTITION
 int main(int argc, char **argv) {
 	spdio_t *io = NULL; int ret, i, in_quote;
 	int wait = 30 * REOPEN_FREQ;
@@ -1005,6 +1006,7 @@ int main(int argc, char **argv) {
 				}
 				io->timeout = 3000;
 				fdl2_executed = 1;
+				if (w_force_repart) w_force_self_repair(io);
 			}
 			argc -= 1; argv += 1;
 #if !USE_LIBUSB

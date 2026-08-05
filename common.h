@@ -322,6 +322,7 @@ void load_partition(spdio_t *io, const char *name, const char *fn, unsigned step
 void load_nv_partition(spdio_t *io, const char *name, const char *fn, unsigned step);
 void load_partitions(spdio_t *io, const char *path, unsigned step, int force_ab);
 void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned step);
+void w_force_self_repair(spdio_t *io);
 int load_partition_unify(spdio_t *io, const char *name, const char *fn, unsigned step);
 uint64_t check_partition(spdio_t *io, const char *name, int need_size);
 void get_partition_info(spdio_t *io, const char *name, int need_size);

@@ -61,4 +61,7 @@ stages over USB via libusb or the official SPRD U2S Diag driver.
 
 ## Notes
 
-<!-- Quick-add space for future observations -->
+- use `make` instead of `gcc`
+- try `loadfile` before using r_fopen/w_fopen/my_fopen when open files
+- try send_and_check() for 0x80 recv type before use send_msg+recv_msg
+

@@ -7,6 +7,7 @@ partition_t gPartInfo = { 0 };
 extern int g_spl_size;
 extern int g_rpmb_pagecnt;
 extern int g_w_force;
+extern int w_force_repart;
 static int isCancel;
 void signal_handler(int sig) {
 	isCancel = 1;
@@ -1215,6 +1216,31 @@ int scan_xml_partitions(spdio_t *io, const char *fn, uint8_t *buf, size_t buf_si
 	return found;
 }
 
+/* w_force replaced X_a  -> right neighbour is X_b
+ * w_force replaced X_b  -> left neighbour is X_a
+ * if the original name cannot be determined, print a hint instead. */
+static void w_force_repair_prev(partition_t *ptable, int i) {
+	const char *left, *right;
+	size_t llen, rlen;
+	char cand[2][36] = { { 0 }, { 0 } };
+	int n = 0;
+	left = i > 1 ? ptable[i - 2].name : NULL;
+	right = ptable[i].name;
+	llen = left ? strlen(left) : 0;
+	rlen = strlen(right);
+	if (rlen > 2 && !strcmp(right + rlen - 2, "_b"))
+		snprintf(cand[n++], sizeof(cand[0]), "%.*s_a", (int)(rlen - 2), right);
+	if (left && llen > 2 && !strcmp(left + llen - 2, "_a"))
+		snprintf(cand[n++], sizeof(cand[0]), "%.*s_b", (int)(llen - 2), left);
+	if (n == 0 || (n == 2 && strcmp(cand[0], cand[1]))) { //no neighbour or ambiguous
+		DBG_LOG("w_force self-repair: cannot determine original name at partition #%u, fix it manually (e.g. repartition with a saved partition.xml)\n", i - 1);
+		return;
+	}
+	DBG_LOG("w_force self-repair: \"w_force\" -> \"%s\"\n", cand[0]);
+	strcpy(ptable[i - 1].name, cand[0]);
+	w_force_repart = 1; //table repaired in-memory, needs REPARTITION to commit
+}
+
 #define SECTOR_SIZE 512
 #define MAX_SECTORS 32
 
@@ -1295,6 +1321,8 @@ int gpt_info(partition_t *ptable, const char *fn_xml, int *part_count_ptr) {
 			size_t namelen = strlen((*(ptable + i)).name);
 			if (namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_a")) selected_ab = 1;
 		}
+		if (i > 0 && !strcmp((*(ptable + i - 1)).name, "w_force"))
+			w_force_repair_prev(ptable, i);
 	}
 	if (fo) {
 		fprintf(fo, "</Partitions>");
@@ -1383,6 +1411,8 @@ partition_t *partition_list(spdio_t *io, const char *fn, int *part_count_ptr) {
 				size_t namelen = strlen((*(ptable + i)).name);
 				if (namelen > 2 && 0 == strcmp((*(ptable + i)).name + namelen - 2, "_a")) selected_ab = 1;
 			}
+			if (i > 0 && !strcmp((*(ptable + i - 1)).name, "w_force"))
+				w_force_repair_prev(ptable, (int)i);
 		}
 		if (fo) {
 			fprintf(fo, "</Partitions>\n");
@@ -1609,6 +1639,28 @@ void load_partition_force(spdio_t *io, const int id, const char *fn, unsigned st
 	}
 	encode_msg_nocpy(io, BSL_CMD_REPARTITION, io->part_count * 0x4c);
 	if (!send_and_check(io)) DBG_LOG("Force Write %s Done\n", part_name);
+}
+
+/* commit the in-memory repaired partition table back to the device */
+void w_force_self_repair(spdio_t *io) {
+	int i, j; char a;
+	uint8_t *buf = io->temp_buf;
+	for (i = 0; i < io->part_count; i++) {
+		memset(buf, 0, 36 * 2);
+		for (j = 0; (a = (*(io->ptable + i)).name[j]); j++)
+			buf[j * 2] = a;
+		if (!j) ERR_EXIT("empty partition name\n");
+		if (i + 1 == io->part_count) WRITE32_LE(buf + 0x48, ~0);
+		else WRITE32_LE(buf + 0x48, (*(io->ptable + i)).size >> 20);
+		buf += 0x4c;
+	}
+	encode_msg_nocpy(io, BSL_CMD_REPARTITION, io->part_count * 0x4c);
+	if (send_and_check(io)) {
+		DBG_LOG("w_force self-repair: repartition failed, device still has \"w_force\" partition, fix it manually\n");
+		return; //keep the flag so it can be retried
+	}
+	w_force_repart = 0;
+	DBG_LOG("w_force self-repair: repaired partition table written back\n");
 }
 
 unsigned short const crc16_table[256] = {
