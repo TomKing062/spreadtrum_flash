@@ -182,6 +182,7 @@ void usleep(unsigned int us) {
 #endif
 
 extern int bListenLibusb;
+extern int bToolMode;
 extern int m_bOpened;
 
 void print_mem(FILE *f, uint8_t *buf, size_t len) {
@@ -316,23 +317,25 @@ spdio_t *spdio_init(int flags) {
 
 void spdio_free(spdio_t *io) {
 	if (!io) return;
+	if (!bToolMode) {
 #if _WIN32
-	if (!bListenLibusb) {
-		PostThreadMessage(io->iThread, WM_QUIT, 0, 0);
-		WaitForSingleObject(io->hThread, INFINITE);
-		CloseHandle(io->hThread);
-	}
+		if (!bListenLibusb) {
+			PostThreadMessage(io->iThread, WM_QUIT, 0, 0);
+			WaitForSingleObject(io->hThread, INFINITE);
+			CloseHandle(io->hThread);
+		}
 #endif
 #if USE_LIBUSB
-	if (bListenLibusb) stopUsbEventHandle();
-	libusb_close(io->dev_handle);
-	libusb_exit(NULL);
+		if (bListenLibusb) stopUsbEventHandle();
+		libusb_close(io->dev_handle);
+		libusb_exit(NULL);
 #else
-	call_DisconnectChannel(io->handle);
-	if (io->m_dwRecvThreadID) DestroyRecvThread(io);
-	call_Uninitialize(io->handle);
-	destroyClass(io->handle);
+		call_DisconnectChannel(io->handle);
+		if (io->m_dwRecvThreadID) DestroyRecvThread(io);
+		call_Uninitialize(io->handle);
+		destroyClass(io->handle);
 #endif
+	}
 	free(io->ptable);
 	free(io);
 }

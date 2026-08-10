@@ -35,6 +35,9 @@ void print_help(void) {
 		"\t--kickto <mode>\n"
 		"\t\tConnects the device using a custom route boot_diag -> custom_diag. Supported modes are 0-127.\n"
 		"\t\t(mode 0 is `kickto 2` on ums9621, mode 1 = cali_diag, mode 2 = dl_diag; not all devices support mode 2).\n"
+		"\t-t|--tool\n"
+		"\t\tTool mode: does not connect to any device, enters the command loop directly.\n"
+		"\t\tFor offline commands only (e.g. mergenv-xml-ex, mergenv-cfg-ex, dis_avb_ex).\n"
 		"\t-?|-h|--help\n"
 		"\t\tShow help and usage information\n"
 	);
@@ -42,6 +45,9 @@ void print_help(void) {
 		"\nRuntime Commands\n"
 		"\tverbose level\n"
 		"\t\tSets the verbosity level of the output (supports 0, 1, or 2).\n"
+		"\texit\n"
+		"\t\t(tool mode only, requires -t|--tool)\n"
+		"\t\tExits the command loop.\n"
 		"\ttimeout ms\n"
 		"\t\tSets the command timeout in milliseconds.\n"
 		"\tbaudrate [rate]\n\t\t(Windows SPRD driver only, and brom/fdl2 stage only)\n"
@@ -215,6 +221,7 @@ extern char savepath[ARGV_LEN];
 extern DA_INFO_T Da_Info;
 extern partition_t gPartInfo;
 int bListenLibusb = -1;
+int bToolMode = 0;
 int gpt_failed = 1;
 int m_bOpened = 0;
 int fdl1_loaded = 0;
@@ -243,26 +250,30 @@ int main(int argc, char **argv) {
 #else
 	extern libusb_device *curPort;
 	libusb_device **ports;
-#endif
-	execfile = malloc(ARGV_LEN);
-	if (!execfile) ERR_EXIT("malloc failed\n");
-
-	io = spdio_init(0);
-#if USE_LIBUSB
 #ifdef __ANDROID__
 	int xfd = -1; // This store termux gived fd
 	//libusb_device_handle *handle; // Use spdio_t.dev_handle
 	//libusb_device* device; //use curPort
 	struct libusb_device_descriptor desc;
-	libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
 #endif
-	ret = libusb_init(NULL);
-	if (ret < 0)
-		ERR_EXIT("libusb_init failed: %s\n", libusb_error_name(ret));
+#endif
+	execfile = malloc(ARGV_LEN);
+	if (!execfile) ERR_EXIT("malloc failed\n");
+
+	io = spdio_init(0);
+	if (!bToolMode) {
+#if USE_LIBUSB
+#ifdef __ANDROID__
+		libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
+#endif
+		ret = libusb_init(NULL);
+		if (ret < 0)
+			ERR_EXIT("libusb_init failed: %s\n", libusb_error_name(ret));
 #else
-	io->handle = createClass();
-	call_Initialize(io->handle);
+		io->handle = createClass();
+		call_Initialize(io->handle);
 #endif
+	}
 	DBG_LOG("ver:%s, sha1:%s\n", GIT_VER, GIT_SHA1);
 	sprintf(fn_partlist, "partition_%lld.xml", (long long)time(NULL));
 	if (atexit(clean_tmpdir)) ERR_EXIT("Failed to register cleanup function.\n");
@@ -315,183 +326,189 @@ int main(int argc, char **argv) {
 			async = 0;
 			argc -= 1; argv += 1;
 		}
+		else if (!strcmp(argv[1], "-t") || !strcmp(argv[1], "--tool")) {
+			bToolMode = 1;
+			argc -= 1; argv += 1;
+		}
 		else break;
 	}
 #if defined(_MYDEBUG) && defined(USE_LIBUSB)
 	io->verbose = 2;
 #endif
 	if (stage == 99) bootmode = -1;
+	if (!bToolMode) {
 #ifdef __ANDROID__
-	bListenLibusb = 0;
-	DBG_LOG("Try to convert termux transfered usb port fd.\n");
-	// handle
-	if (xfd < 0)
-		ERR_EXIT("Example: termux-usb -e \"./spd_dump --usb-fd\" /dev/bus/usb/xxx/xxx\n"
-			"run on android need provide --usb-fd\n");
+		bListenLibusb = 0;
+		DBG_LOG("Try to convert termux transfered usb port fd.\n");
+		// handle
+		if (xfd < 0)
+			ERR_EXIT("Example: termux-usb -e \"./spd_dump --usb-fd\" /dev/bus/usb/xxx/xxx\n"
+				"run on android need provide --usb-fd\n");
 
-	if (libusb_wrap_sys_device(NULL, (intptr_t)xfd, &io->dev_handle))
-		ERR_EXIT("libusb_wrap_sys_device exit unconditionally!\n");
+		if (libusb_wrap_sys_device(NULL, (intptr_t)xfd, &io->dev_handle))
+			ERR_EXIT("libusb_wrap_sys_device exit unconditionally!\n");
 
-	curPort = libusb_get_device(io->dev_handle);
-	if (libusb_get_device_descriptor(curPort, &desc))
-		ERR_EXIT("libusb_get_device exit unconditionally!");
+		curPort = libusb_get_device(io->dev_handle);
+		if (libusb_get_device_descriptor(curPort, &desc))
+			ERR_EXIT("libusb_get_device exit unconditionally!");
 
-	DBG_LOG("Vendor ID: %04x\nProduct ID: %04x\n", desc.idVendor, desc.idProduct);
-	if (desc.idVendor != 0x1782 || desc.idProduct != 0x4d00) {
-		ERR_EXIT("It seems spec device not a spd device!\n");
-	}
-	call_Initialize_libusb(io);
+		DBG_LOG("Vendor ID: %04x\nProduct ID: %04x\n", desc.idVendor, desc.idProduct);
+		if (desc.idVendor != 0x1782 || desc.idProduct != 0x4d00) {
+			ERR_EXIT("It seems spec device not a spd device!\n");
+		}
+		call_Initialize_libusb(io);
 #else
 #if !USE_LIBUSB
-	bListenLibusb = 0;
-	if (async) {
-		if (FALSE == CreateRecvThread(io)) {
-			io->m_dwRecvThreadID = 0;
-			DBG_LOG("Create Receive Thread Fail.\n");
+		bListenLibusb = 0;
+		if (async) {
+			if (FALSE == CreateRecvThread(io)) {
+				io->m_dwRecvThreadID = 0;
+				DBG_LOG("Create Receive Thread Fail.\n");
+			}
 		}
-	}
-	if (bootmode >= 0) {
-		io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
-		if (io->hThread == NULL) return -1;
-		ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode);
-		wait = 30 * REOPEN_FREQ;
-		stage = -1;
-	}
+		if (bootmode >= 0) {
+			io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
+			if (io->hThread == NULL) return -1;
+			ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode);
+			wait = 30 * REOPEN_FREQ;
+			stage = -1;
+		}
 #else
-	if (!libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) { DBG_LOG("hotplug unsupported on this platform\n"); bListenLibusb = 0; bootmode = -1; }
-	if (bootmode >= 0) {
-		startUsbEventHandle();
-		ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode);
-		wait = 30 * REOPEN_FREQ;
-		stage = -1;
-	}
-	if (bListenLibusb < 0) startUsbEventHandle();
+		if (!libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) { DBG_LOG("hotplug unsupported on this platform\n"); bListenLibusb = 0; bootmode = -1; }
+		if (bootmode >= 0) {
+			startUsbEventHandle();
+			ChangeMode(io, wait / REOPEN_FREQ * 1000, bootmode);
+			wait = 30 * REOPEN_FREQ;
+			stage = -1;
+		}
+		if (bListenLibusb < 0) startUsbEventHandle();
 #endif
 #if _WIN32
-	if (!bListenLibusb) {
-		if (io->hThread == NULL) io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
-		if (io->hThread == NULL) return -1;
-	}
+		if (!bListenLibusb) {
+			if (io->hThread == NULL) io->hThread = CreateThread(NULL, 0, ThrdFunc, NULL, 0, &io->iThread);
+			if (io->hThread == NULL) return -1;
+		}
 #endif
-	if (!m_bOpened) {
-		DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
-		for (i = 0; ; i++) {
+		if (!m_bOpened) {
+			DBG_LOG("Waiting for dl_diag connection (%ds)\n", wait / REOPEN_FREQ);
+			for (i = 0; ; i++) {
 #if USE_LIBUSB
-			if (bListenLibusb) {
+				if (bListenLibusb) {
+					if (curPort) {
+						if (libusb_open(curPort, &io->dev_handle) >= 0) call_Initialize_libusb(io);
+						else ERR_EXIT("Connection failed\n");
+						break;
+					}
+				}
+				if (!(i % 4)) {
+					if ((ports = FindPort(0x4d00))) {
+						for (libusb_device **port = ports; *port != NULL; port++) {
+							if (libusb_open(*port, &io->dev_handle) >= 0) {
+								call_Initialize_libusb(io);
+								curPort = *port;
+								break;
+							}
+						}
+						libusb_free_device_list(ports, 1);
+						ports = NULL;
+						if (m_bOpened) break;
+					}
+				}
+				if (i >= wait)
+					ERR_EXIT("libusb_open_device failed\n");
+#else
+				if (io->verbose) DBG_LOG("CurTime: %.1f, CurPort: %d\n", (float)i / REOPEN_FREQ, curPort);
 				if (curPort) {
-					if (libusb_open(curPort, &io->dev_handle) >= 0) call_Initialize_libusb(io);
-					else ERR_EXIT("Connection failed\n");
+					if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
 					break;
 				}
-			}
-			if (!(i % 4)) {
-				if ((ports = FindPort(0x4d00))) {
-					for (libusb_device **port = ports; *port != NULL; port++) {
-						if (libusb_open(*port, &io->dev_handle) >= 0) {
-							call_Initialize_libusb(io);
-							curPort = *port;
-							break;
+				if (!(i % 4)) {
+					if ((ports = FindPort("SPRD U2S Diag"))) {
+						for (DWORD *port = ports; *port != 0; port++) {
+							if (call_ConnectChannel(io->handle, *port, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) {
+								curPort = *port;
+								break;
+							}
 						}
+						free(ports);
+						ports = NULL;
+						if (m_bOpened) break;
 					}
-					libusb_free_device_list(ports, 1);
-					ports = NULL;
-					if (m_bOpened) break;
 				}
-			}
-			if (i >= wait)
-				ERR_EXIT("libusb_open_device failed\n");
-#else
-			if (io->verbose) DBG_LOG("CurTime: %.1f, CurPort: %d\n", (float)i / REOPEN_FREQ, curPort);
-			if (curPort) {
-				if (!call_ConnectChannel(io->handle, curPort, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) ERR_EXIT("Connection failed\n");
-				break;
-			}
-			if (!(i % 4)) {
-				if ((ports = FindPort("SPRD U2S Diag"))) {
-					for (DWORD *port = ports; *port != 0; port++) {
-						if (call_ConnectChannel(io->handle, *port, WM_RCV_CHANNEL_DATA, io->m_dwRecvThreadID)) {
-							curPort = *port;
-							break;
-						}
-					}
-					free(ports);
-					ports = NULL;
-					if (m_bOpened) break;
-				}
-			}
-			if (i >= wait)
-				ERR_EXIT("find port failed\n");
+				if (i >= wait)
+					ERR_EXIT("find port failed\n");
 #endif
-			usleep(1000000 / REOPEN_FREQ);
+				usleep(1000000 / REOPEN_FREQ);
+			}
 		}
-	}
 #endif
-	io->flags |= FLAGS_TRANSCODE;
-	if (stage != -1) {
-		io->flags &= ~FLAGS_CRC16;
-		encode_msg_nocpy(io, BSL_CMD_CONNECT, 0);
-	}
-	else encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
-	for (i = 0; ; i++) {
-		ret = recv_type(io);
-		if (ret == BSL_REP_VER) {}
-		else if (ret == BSL_REP_VERIFY_ERROR ||
-			ret == BSL_REP_UNSUPPORTED_COMMAND) {
-			if (fdl1_loaded) ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n"); // when fdl1/fdl2 recv kick_msg, device won't reply next packet.
+		io->flags |= FLAGS_TRANSCODE;
+		if (stage != -1) {
+			io->flags &= ~FLAGS_CRC16;
+			encode_msg_nocpy(io, BSL_CMD_CONNECT, 0);
 		}
-		else {
-			send_msg(io);
-			recv_msg(io);
+		else encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
+		for (i = 0; ; i++) {
 			ret = recv_type(io);
-		}
-		if (ret == BSL_REP_ACK || ret == BSL_REP_VER || ret == BSL_REP_VERIFY_ERROR) {
-			if (ret == BSL_REP_VER) {
-				if (fdl1_loaded == 1) {
-					DBG_LOG("CHECK_BAUD FDL1\n");
-					if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) fdl2_executed = -1;
-				}
-				else {
-					DBG_LOG("CHECK_BAUD bootrom\n");
-					if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) fdl1_loaded = -1;
-				}
-				DBG_LOG("BSL_REP_VER: ");
-				print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
-
-				encode_msg_nocpy(io, BSL_CMD_CONNECT, 0);
-				if (send_and_check(io)) exit(1);
+			if (ret == BSL_REP_VER) {}
+			else if (ret == BSL_REP_VERIFY_ERROR ||
+				ret == BSL_REP_UNSUPPORTED_COMMAND) {
+				if (fdl1_loaded) ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n"); // when fdl1/fdl2 recv kick_msg, device won't reply next packet.
 			}
-			else if (ret == BSL_REP_VERIFY_ERROR) {
-				encode_msg_nocpy(io, BSL_CMD_CONNECT, 0);
-				if (fdl1_loaded != 1) {
+			else {
+				send_msg(io);
+				recv_msg(io);
+				ret = recv_type(io);
+			}
+			if (ret == BSL_REP_ACK || ret == BSL_REP_VER || ret == BSL_REP_VERIFY_ERROR) {
+				if (ret == BSL_REP_VER) {
+					if (fdl1_loaded == 1) {
+						DBG_LOG("CHECK_BAUD FDL1\n");
+						if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) fdl2_executed = -1;
+					}
+					else {
+						DBG_LOG("CHECK_BAUD bootrom\n");
+						if (!memcmp(io->raw_buf + 4, "SPRD4", 5)) fdl1_loaded = -1;
+					}
+					DBG_LOG("BSL_REP_VER: ");
+					print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+
+					encode_msg_nocpy(io, BSL_CMD_CONNECT, 0);
 					if (send_and_check(io)) exit(1);
 				}
-				else { i = -1; continue; }
-			}
-
-			if (fdl1_loaded == 1) {
-				DBG_LOG("CMD_CONNECT FDL1\n");
-				if (keep_charge) {
-					encode_msg_nocpy(io, BSL_CMD_KEEP_CHARGE, 0);
-					if (!send_and_check(io)) DBG_LOG("KEEP_CHARGE FDL1\n");
+				else if (ret == BSL_REP_VERIFY_ERROR) {
+					encode_msg_nocpy(io, BSL_CMD_CONNECT, 0);
+					if (fdl1_loaded != 1) {
+						if (send_and_check(io)) exit(1);
+					}
+					else { i = -1; continue; }
 				}
+
+				if (fdl1_loaded == 1) {
+					DBG_LOG("CMD_CONNECT FDL1\n");
+					if (keep_charge) {
+						encode_msg_nocpy(io, BSL_CMD_KEEP_CHARGE, 0);
+						if (!send_and_check(io)) DBG_LOG("KEEP_CHARGE FDL1\n");
+					}
+				}
+				else DBG_LOG("CMD_CONNECT bootrom\n");
+				break;
 			}
-			else DBG_LOG("CMD_CONNECT bootrom\n");
-			break;
-		}
-		else if (ret == BSL_REP_UNSUPPORTED_COMMAND) {
-			encode_msg_nocpy(io, BSL_CMD_DISABLE_TRANSCODE, 0);
-			if (!send_and_check(io)) {
-				io->flags &= ~FLAGS_TRANSCODE;
-				DBG_LOG("DISABLE_TRANSCODE\n");
+			else if (ret == BSL_REP_UNSUPPORTED_COMMAND) {
+				encode_msg_nocpy(io, BSL_CMD_DISABLE_TRANSCODE, 0);
+				if (!send_and_check(io)) {
+					io->flags &= ~FLAGS_TRANSCODE;
+					DBG_LOG("DISABLE_TRANSCODE\n");
+				}
+				g_spl_size = check_partition(io, "splloader", 1);
+				g_rpmb_pagecnt = do_e_rpmb_pagecount(io);
+				fdl2_executed = 1;
+				break;
 			}
-			g_spl_size = check_partition(io, "splloader", 1);
-			g_rpmb_pagecnt = do_e_rpmb_pagecount(io);
-			fdl2_executed = 1;
-			break;
-		}
-		else if (i == 4) {
-			if (stage != -1) ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
-			else { encode_msg_nocpy(io, BSL_CMD_CONNECT, 0); stage++; i = -1; }
+			else if (i == 4) {
+				if (stage != -1) ERR_EXIT("wrong command or wrong mode detected, reboot your phone by pressing POWER and VOL_UP for 7-10 seconds.\n");
+				else { encode_msg_nocpy(io, BSL_CMD_CONNECT, 0); stage++; i = -1; }
+			}
 		}
 	}
 
@@ -532,6 +549,8 @@ int main(int argc, char **argv) {
 				DBG_LOG("FDL2 >");
 			else if (fdl1_loaded > 0)
 				DBG_LOG("FDL1 >");
+			else if (bToolMode)
+				DBG_LOG("TOOL >");
 			else
 				DBG_LOG("BROM >");
 			ret = scanf("%[^\n]", str1);
@@ -1727,6 +1746,12 @@ rloop:
 			io->verbose = atoi(str2[2]);
 			argc -= 2; argv += 2;
 
+		}
+		else if (!strcmp(str2[1], "exit")) {
+			if (bToolMode)
+				break;
+			print_help();
+			argc = 1;
 		}
 		else if (strlen(str2[1])) {
 			print_help();
