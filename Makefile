@@ -25,8 +25,14 @@ ifeq ($(MYDEBUG), 1)
 CFLAGS += -D_MYDEBUG
 endif
 
-.PHONY: all clean
+STRIP := -s
+
+.PHONY: all clean nostrip
 all: clean GITVER.h $(APPNAME)
+
+# Build without the -s (strip) linker flag, keeping debug symbols
+nostrip: STRIP :=
+nostrip: all
 
 clean:
 	$(RM) GITVER.h $(APPNAME)
@@ -36,4 +42,4 @@ GITVER.h:
 	echo "#define GIT_SHA1 \"$(shell git rev-parse HEAD)\"" >> GITVER.h
 
 $(APPNAME): $(APPNAME).c common.c
-	$(CC) -s $(CFLAGS) $^ $(LIBS) -o $@
+	$(CC) $(STRIP) $(CFLAGS) $^ $(LIBS) -o $@
