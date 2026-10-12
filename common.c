@@ -87,7 +87,7 @@ BOOL WINAPI ConsoleHandler(DWORD dwCtrlType) {
 #if !USE_LIBUSB
 DWORD curPort = 0;
 DWORD *FindPort(const char *USB_DL) {
-	const GUID GUID_DEVCLASS_PORTS = { 0x4d36e978, 0xe325, 0x11ce,{0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18} };
+	const GUID GUID_DEVCLASS_PORTS = { 0x4d36e978, 0xe325, 0x11ce,{ 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } };
 	HDEVINFO DeviceInfoSet;
 	SP_DEVINFO_DATA DeviceInfoData;
 	DWORD dwIndex = 0;
@@ -834,7 +834,13 @@ void send_buf(spdio_t *io,
 		// n = spd_transcode_max(mem + i, size - i, 2048 - 2 - 6);
 		if (n > step) n = step;
 		encode_msg(io, BSL_CMD_MIDST_DATA, mem + i, n);
-		if (send_and_check(io)) exit(1);
+		send_msg(io);
+		int ret = recv_msg(io);
+		if (ret) {
+			if ((ret = recv_type(io)) != BSL_REP_ACK) DBG_LOG("unexpected response (0x%04x)\n", ret);
+		}
+		else if (i + n == size) return;
+		else ERR_EXIT("timeout reached\n");
 	}
 	if (end_data) {
 		encode_msg_nocpy(io, BSL_CMD_END_DATA, 0);
@@ -1225,7 +1231,7 @@ int scan_xml_partitions(spdio_t *io, const char *fn, uint8_t *buf, size_t buf_si
 static void w_force_repair_prev(partition_t *ptable, int i) {
 	const char *left, *right;
 	size_t llen, rlen;
-	char cand[2][36] = { { 0 }, { 0 } };
+	char cand[2][36] = { { 0 },{ 0 } };
 	int n = 0;
 	left = i > 1 ? ptable[i - 2].name : NULL;
 	right = ptable[i].name;
@@ -3060,9 +3066,9 @@ DWORD WINAPI ThrdFunc(LPVOID lpParam) {
 
 	DEV_BROADCAST_DEVICEINTERFACE NotificationFilter;
 #if USE_LIBUSB
-	const GUID GUID_DEVINTERFACE = { 0xa5dcbf10, 0x6530, 0x11d2, { 0x90, 0x1f, 0x00, 0xc0, 0x4f, 0xb9, 0x51, 0xed } };
+	const GUID GUID_DEVINTERFACE = { 0xa5dcbf10, 0x6530, 0x11d2,{ 0x90, 0x1f, 0x00, 0xc0, 0x4f, 0xb9, 0x51, 0xed } };
 #else
-	const GUID GUID_DEVINTERFACE = { 0x86e0d1e0, 0x8089, 0x11d0, { 0x9c, 0xe4, 0x08, 0x00, 0x3e, 0x30, 0x1f, 0x73 } };
+	const GUID GUID_DEVINTERFACE = { 0x86e0d1e0, 0x8089, 0x11d0,{ 0x9c, 0xe4, 0x08, 0x00, 0x3e, 0x30, 0x1f, 0x73 } };
 #endif
 	ZeroMemory(&NotificationFilter, sizeof(NotificationFilter));
 	NotificationFilter.dbcc_size = sizeof(DEV_BROADCAST_DEVICEINTERFACE);
