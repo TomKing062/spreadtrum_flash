@@ -354,3 +354,4 @@ void do_e_rpmb_write(spdio_t *io, uint32_t page_start, const char *fn, unsigned 
 void do_e_efuse_read(spdio_t *io, uint32_t block_id);
 void  do_e_pwn(spdio_t *io, int selected_ab);
 void  do_e_checkpwn(spdio_t *io, int selected_ab);
+int hijack_fdl1(spdio_t *io, const char *img_fn, const char *platform);
