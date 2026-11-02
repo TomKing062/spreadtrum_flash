@@ -2614,10 +2614,89 @@ size_t bsp_chsize(const char *filename) {
 	return size;
 }
 
+/* The TOS payload starts right after the 0x200-byte DHTB header, so the
+ * in-image virtual address of a byte is (file offset - DHTB_HDR_SIZE). */
+#define DHTB_HDR_SIZE 0x200u
+
+static size_t find_bytes(const uint8_t *mem, size_t size, const char *pat) {
+	size_t plen = strlen(pat);
+	if (size < plen)
+		return (size_t)-1;
+	for (size_t i = 0; i + plen <= size; i++)
+		if (!memcmp(&mem[i], pat, plen))
+			return i;
+	return (size_t)-1;
+}
+
+static int is_func_prologue(uint32_t insn) {
+	if ((insn & 0xFFC07FFFu) == 0xA9807BFDu) /* stp x29, x30, [sp, #-imm]! */
+		return 1;
+	if ((insn & 0xFFC003FFu) == 0xD10003FFu) /* sub sp, sp, #imm */
+		return 1;
+	return 0;
+}
+
+/* Find the instruction that loads the address of the marker string.
+ * libavb code uses adrp/add pairs for string literals; the adrp page is
+ * computed from the in-image virtual address. */
+static size_t find_marker_ref(const uint8_t *mem, size_t size, size_t marker_off) {
+	uint64_t target = (uint64_t)marker_off - DHTB_HDR_SIZE;
+	uint64_t page[32] = { 0 };
+	int valid[32] = { 0 };
+
+	for (size_t i = DHTB_HDR_SIZE; i + 4 <= size; i += 4) {
+		uint32_t insn = *(const uint32_t *)&mem[i];
+		if ((insn & 0x9F000000u) == 0x90000000u) { /* ADRP */
+			int rd = insn & 31;
+			int64_t imm = ((int64_t)((insn >> 5) & 0x7FFFF) << 2) | ((insn >> 29) & 3);
+			if (imm & (1 << 20))
+				imm -= 1 << 21;
+			page[rd] = (((uint64_t)i - DHTB_HDR_SIZE) & ~0xFFFULL) + ((uint64_t)imm << 12);
+			valid[rd] = 1;
+		}
+		else if ((insn & 0xFF800000u) == 0x91000000u) { /* ADD (immediate, 64-bit) */
+			int rn = (insn >> 5) & 31;
+			uint64_t imm12 = (insn >> 10) & 0xFFF;
+			if (insn & (1u << 22))
+				imm12 <<= 12;
+			if (valid[rn] && page[rn] + imm12 == target)
+				return i;
+		}
+	}
+	return (size_t)-1;
+}
+
+/* Walk back from the xref to the enclosing function entry. */
+static size_t find_func_start(const uint8_t *mem, size_t ref) {
+	size_t lo = DHTB_HDR_SIZE;
+	for (size_t i = ref; i >= DHTB_HDR_SIZE + 4; i -= 4) {
+		if (*(const uint32_t *)&mem[i - 4] == 0xD65F03C0u) { /* ret */
+			lo = i;
+			break;
+		}
+	}
+	for (size_t i = lo; i < ref; i += 4)
+		if (is_func_prologue(*(const uint32_t *)&mem[i]))
+			return i;
+	return lo;
+}
+
+/* Next function entry after the current one (a prologue following a ret). */
+static size_t find_func_end(const uint8_t *mem, size_t size, size_t start) {
+	int seen_ret = 0;
+	for (size_t i = start + 4; i + 4 <= size; i += 4) {
+		uint32_t insn = *(const uint32_t *)&mem[i];
+		if (insn == 0xD65F03C0u)
+			seen_ret = 1;
+		else if (seen_ret && is_func_prologue(insn))
+			return i;
+	}
+	return size;
+}
+
 int dis_avb(const char *filename) {
 	uint8_t *mem;
 	size_t size = 0;
-	int mov_count = 0;
 	mem = loadfile(filename, &size, 0);
 	if (!mem)
 		ERR_EXIT("loadfile(\"%s\") failed\n", filename);
@@ -2630,18 +2709,36 @@ int dis_avb(const char *filename) {
 		return 0;
 	}
 	//need x32 x64 check here
-	size_t pmov[3] = { 0 };
-	size_t last_start_pos = 0, start_pos = 0;
+	size_t start_pos = 0;
+	size_t patch_pos = 0;
 
-	for (size_t i = 0x200; i < size; i += 4) {
+	/* Locate the "enter avb_slot_verify" wrapper by its log string, then
+	 * restrict the mov/epilogue scan to the function that references it. */
+	size_t marker = find_bytes(mem, size, "### enter avb_slot_verify. ###");
+	if (marker == (size_t)-1)
+		marker = find_bytes(mem, size, "enter avb_slot_verify");
+	if (marker == (size_t)-1) {
+		DBG_LOG("avb marker not found, skip saving!!!\n");
+		free(mem);
+		return 0;
+	}
+	size_t ref = find_marker_ref(mem, size, marker);
+	if (ref == (size_t)-1) {
+		DBG_LOG("avb marker at 0x%zx has no xref (not an AArch64 TOS?), skip saving!!!\n", marker);
+		free(mem);
+		return 0;
+	}
+	size_t scan_lo = find_func_start(mem, ref);
+	size_t scan_hi = find_func_end(mem, size, scan_lo);
+	DBG_LOG("avb marker at 0x%zx, xref at 0x%zx, function 0x%zx-0x%zx\n",
+		marker, ref, scan_lo, scan_hi);
+
+	for (size_t i = scan_lo; i + 32 <= scan_hi; i += 4) {
 		uint32_t current = *(uint32_t *)&mem[i];
 		if (current == 0xD65F03C0 || (current & 0xFF00FFFF) == 0xA8007BFD) {
-			last_start_pos = 0;
 			start_pos = 0;
 		}
 		else if ((current & 0xFF00FFFF) == 0xA9007BFD) {
-			if (start_pos)
-				last_start_pos = start_pos;
 			start_pos = i;
 		}
 		else if (start_pos) {
@@ -2659,8 +2756,6 @@ int dis_avb(const char *filename) {
 				}
 				if (ret_flag) {
 					if (*(uint16_t *)&mem[i - 4] == 0x3E0 && *(uint8_t *)&mem[i - 7] == 0x3) {
-						if (start_pos > i && last_start_pos)
-							start_pos = last_start_pos;
 						for (size_t m = start_pos; m < i; m += 4) {
 							if (*(uint32_t *)&mem[m] >> 16 == 0x9400) {
 								count1++;
@@ -2671,30 +2766,20 @@ int dis_avb(const char *filename) {
 						}
 						if (count1 && count2 && count1 + count2 > 2) {
 							DBG_LOG("detected mov at 0x%zx\n", i - 4);
-							if (mov_count < 3) {
-								pmov[mov_count] = i - 4;
-								mov_count++;
-							}
-							else {
-								pmov[0] = pmov[1];
-								pmov[1] = pmov[2];
-								pmov[2] = i - 4;
-							}
+							patch_pos = i - 4;
 						}
 					}
 				}
 			}
 		}
 	}
-	if (mov_count < 2) {
+	if (!patch_pos) {
 		DBG_LOG("dis_avb: skip saving!!!\n");
 		free(mem);
 		return 0;
 	}
-	if (mov_count > 2) mov_count = (pmov[2] - 2 * pmov[1] + pmov[0] > 0) ? 1 : 2;
-	else mov_count--;
-	DBG_LOG("patch mov at 0x%zx\n", pmov[mov_count]);
-	*(uint32_t *)&mem[pmov[mov_count]] = 0x52800000;
+	DBG_LOG("patch mov at 0x%zx\n", patch_pos);
+	*(uint32_t *)&mem[patch_pos] = 0x52800000;
 	FILE *file = fopen("tos-noavb", "wb");
 	if (file == NULL) {
 		DBG_LOG("Failed to create the file.\n");
@@ -2711,7 +2796,7 @@ int dis_avb(const char *filename) {
 	fclose(file);
 	free(mem);
 
-	return mov_count;
+	return 1;
 }
 
 #define MULTI_HEADER 0
